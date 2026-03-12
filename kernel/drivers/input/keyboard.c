@@ -3,40 +3,131 @@
 #include <kernel/interrupt.h>
 
 #define KBD_QUEUE_SIZE 128
+#define PS2_STATUS_PORT 0x64u
+#define PS2_DATA_PORT 0x60u
+#define PS2_STATUS_OUTPUT_FULL 0x01u
+#define PS2_STATUS_INPUT_FULL 0x02u
+
+#define KBD_MARK_IRQ 176
+#define KBD_MARK_QUEUE 177
+#define KBD_MARK_READ 178
+#define KBD_MARK_INIT 179
+#define KBD_MARK_SCAN_HI 180
+#define KBD_MARK_SCAN_LO 181
+#define KBD_MARK_DISCARD 182
 
 static volatile char g_kernel_kbd_queue[KBD_QUEUE_SIZE];
 static volatile uint8_t g_kernel_kbd_head = 0u;
 static volatile uint8_t g_kernel_kbd_tail = 0u;
 static volatile uint8_t g_kernel_kbd_shift = 0u;
 static volatile uint8_t g_kernel_kbd_extended = 0u;
+static volatile uint8_t g_kernel_kbd_ready = 0u;
+static char g_kernel_kbd_map[128];
+static char g_kernel_kbd_shift_map[128];
 
-static const char kbd_map[128] = {
-    [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '4', [0x06] = '5',
-    [0x07] = '6', [0x08] = '7', [0x09] = '8', [0x0A] = '9', [0x0B] = '0',
-    [0x0C] = '-', [0x0D] = '=', [0x0E] = '\b', [0x0F] = '\t', [0x10] = 'q',
-    [0x11] = 'w', [0x12] = 'e', [0x13] = 'r', [0x14] = 't', [0x15] = 'y',
-    [0x16] = 'u', [0x17] = 'i', [0x18] = 'o', [0x19] = 'p', [0x1A] = '[',
-    [0x1B] = ']', [0x1C] = '\n', [0x1E] = 'a', [0x1F] = 's', [0x20] = 'd',
-    [0x21] = 'f', [0x22] = 'g', [0x23] = 'h', [0x24] = 'j', [0x25] = 'k',
-    [0x26] = 'l', [0x27] = ';', [0x28] = '\'', [0x29] = '`', [0x2B] = '\\',
-    [0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v', [0x30] = 'b',
-    [0x31] = 'n', [0x32] = 'm', [0x33] = ',', [0x34] = '.', [0x35] = '/',
-    [0x39] = ' '
-};
+static void kbd_mark(int pos, char c) {
+    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
+    vga[pos] = (0x0F << 8) | (uint8_t)c;
+}
 
-static const char kbd_shift_map[128] = {
-    [0x02] = '!', [0x03] = '@', [0x04] = '#', [0x05] = '$', [0x06] = '%',
-    [0x07] = '^', [0x08] = '&', [0x09] = '*', [0x0A] = '(', [0x0B] = ')',
-    [0x0C] = '_', [0x0D] = '+', [0x0E] = '\b', [0x0F] = '\t', [0x10] = 'Q',
-    [0x11] = 'W', [0x12] = 'E', [0x13] = 'R', [0x14] = 'T', [0x15] = 'Y',
-    [0x16] = 'U', [0x17] = 'I', [0x18] = 'O', [0x19] = 'P', [0x1A] = '{',
-    [0x1B] = '}', [0x1C] = '\n', [0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D',
-    [0x21] = 'F', [0x22] = 'G', [0x23] = 'H', [0x24] = 'J', [0x25] = 'K',
-    [0x26] = 'L', [0x27] = ':', [0x28] = '"', [0x29] = '~', [0x2B] = '|',
-    [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B',
-    [0x31] = 'N', [0x32] = 'M', [0x33] = '<', [0x34] = '>', [0x35] = '?',
-    [0x39] = ' '
-};
+static char hex_digit(uint8_t value) {
+    value &= 0x0Fu;
+    if (value < 10u) {
+        return (char)('0' + (char)value);
+    }
+    return (char)('A' + (char)(value - 10u));
+}
+
+static void ps2_wait_write(void) {
+    while ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) != 0u) {
+    }
+}
+
+static int ps2_wait_read_timeout(void) {
+    for (uint32_t i = 0u; i < 1000000u; ++i) {
+        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0u) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ps2_drain_output(void) {
+    while ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0u) {
+        (void)inb(PS2_DATA_PORT);
+    }
+}
+
+static void kbd_write_cmd(uint8_t value) {
+    ps2_wait_write();
+    outb(PS2_DATA_PORT, value);
+}
+
+static int kbd_expect_ack(void) {
+    if (!ps2_wait_read_timeout()) {
+        return 0;
+    }
+    return inb(PS2_DATA_PORT) == 0xFAu;
+}
+
+static void kbd_init_maps(void) {
+    for (int i = 0; i < 128; ++i) {
+        g_kernel_kbd_map[i] = '\0';
+        g_kernel_kbd_shift_map[i] = '\0';
+    }
+
+    g_kernel_kbd_map[0x02] = '1'; g_kernel_kbd_shift_map[0x02] = '!';
+    g_kernel_kbd_map[0x03] = '2'; g_kernel_kbd_shift_map[0x03] = '@';
+    g_kernel_kbd_map[0x04] = '3'; g_kernel_kbd_shift_map[0x04] = '#';
+    g_kernel_kbd_map[0x05] = '4'; g_kernel_kbd_shift_map[0x05] = '$';
+    g_kernel_kbd_map[0x06] = '5'; g_kernel_kbd_shift_map[0x06] = '%';
+    g_kernel_kbd_map[0x07] = '6'; g_kernel_kbd_shift_map[0x07] = '^';
+    g_kernel_kbd_map[0x08] = '7'; g_kernel_kbd_shift_map[0x08] = '&';
+    g_kernel_kbd_map[0x09] = '8'; g_kernel_kbd_shift_map[0x09] = '*';
+    g_kernel_kbd_map[0x0A] = '9'; g_kernel_kbd_shift_map[0x0A] = '(';
+    g_kernel_kbd_map[0x0B] = '0'; g_kernel_kbd_shift_map[0x0B] = ')';
+    g_kernel_kbd_map[0x0C] = '-'; g_kernel_kbd_shift_map[0x0C] = '_';
+    g_kernel_kbd_map[0x0D] = '='; g_kernel_kbd_shift_map[0x0D] = '+';
+    g_kernel_kbd_map[0x0E] = '\b'; g_kernel_kbd_shift_map[0x0E] = '\b';
+    g_kernel_kbd_map[0x0F] = '\t'; g_kernel_kbd_shift_map[0x0F] = '\t';
+    g_kernel_kbd_map[0x10] = 'q'; g_kernel_kbd_shift_map[0x10] = 'Q';
+    g_kernel_kbd_map[0x11] = 'w'; g_kernel_kbd_shift_map[0x11] = 'W';
+    g_kernel_kbd_map[0x12] = 'e'; g_kernel_kbd_shift_map[0x12] = 'E';
+    g_kernel_kbd_map[0x13] = 'r'; g_kernel_kbd_shift_map[0x13] = 'R';
+    g_kernel_kbd_map[0x14] = 't'; g_kernel_kbd_shift_map[0x14] = 'T';
+    g_kernel_kbd_map[0x15] = 'y'; g_kernel_kbd_shift_map[0x15] = 'Y';
+    g_kernel_kbd_map[0x16] = 'u'; g_kernel_kbd_shift_map[0x16] = 'U';
+    g_kernel_kbd_map[0x17] = 'i'; g_kernel_kbd_shift_map[0x17] = 'I';
+    g_kernel_kbd_map[0x18] = 'o'; g_kernel_kbd_shift_map[0x18] = 'O';
+    g_kernel_kbd_map[0x19] = 'p'; g_kernel_kbd_shift_map[0x19] = 'P';
+    g_kernel_kbd_map[0x1A] = '['; g_kernel_kbd_shift_map[0x1A] = '{';
+    g_kernel_kbd_map[0x1B] = ']'; g_kernel_kbd_shift_map[0x1B] = '}';
+    g_kernel_kbd_map[0x1C] = '\n'; g_kernel_kbd_shift_map[0x1C] = '\n';
+    g_kernel_kbd_map[0x1E] = 'a'; g_kernel_kbd_shift_map[0x1E] = 'A';
+    g_kernel_kbd_map[0x1F] = 's'; g_kernel_kbd_shift_map[0x1F] = 'S';
+    g_kernel_kbd_map[0x20] = 'd'; g_kernel_kbd_shift_map[0x20] = 'D';
+    g_kernel_kbd_map[0x21] = 'f'; g_kernel_kbd_shift_map[0x21] = 'F';
+    g_kernel_kbd_map[0x22] = 'g'; g_kernel_kbd_shift_map[0x22] = 'G';
+    g_kernel_kbd_map[0x23] = 'h'; g_kernel_kbd_shift_map[0x23] = 'H';
+    g_kernel_kbd_map[0x24] = 'j'; g_kernel_kbd_shift_map[0x24] = 'J';
+    g_kernel_kbd_map[0x25] = 'k'; g_kernel_kbd_shift_map[0x25] = 'K';
+    g_kernel_kbd_map[0x26] = 'l'; g_kernel_kbd_shift_map[0x26] = 'L';
+    g_kernel_kbd_map[0x27] = ';'; g_kernel_kbd_shift_map[0x27] = ':';
+    g_kernel_kbd_map[0x28] = '\''; g_kernel_kbd_shift_map[0x28] = '"';
+    g_kernel_kbd_map[0x29] = '`'; g_kernel_kbd_shift_map[0x29] = '~';
+    g_kernel_kbd_map[0x2B] = '\\'; g_kernel_kbd_shift_map[0x2B] = '|';
+    g_kernel_kbd_map[0x2C] = 'z'; g_kernel_kbd_shift_map[0x2C] = 'Z';
+    g_kernel_kbd_map[0x2D] = 'x'; g_kernel_kbd_shift_map[0x2D] = 'X';
+    g_kernel_kbd_map[0x2E] = 'c'; g_kernel_kbd_shift_map[0x2E] = 'C';
+    g_kernel_kbd_map[0x2F] = 'v'; g_kernel_kbd_shift_map[0x2F] = 'V';
+    g_kernel_kbd_map[0x30] = 'b'; g_kernel_kbd_shift_map[0x30] = 'B';
+    g_kernel_kbd_map[0x31] = 'n'; g_kernel_kbd_shift_map[0x31] = 'N';
+    g_kernel_kbd_map[0x32] = 'm'; g_kernel_kbd_shift_map[0x32] = 'M';
+    g_kernel_kbd_map[0x33] = ','; g_kernel_kbd_shift_map[0x33] = '<';
+    g_kernel_kbd_map[0x34] = '.'; g_kernel_kbd_shift_map[0x34] = '>';
+    g_kernel_kbd_map[0x35] = '/'; g_kernel_kbd_shift_map[0x35] = '?';
+    g_kernel_kbd_map[0x39] = ' '; g_kernel_kbd_shift_map[0x39] = ' ';
+}
 
 static void kbd_push_char(char c) {
     const uint8_t next = (uint8_t)((g_kernel_kbd_head + 1u) % KBD_QUEUE_SIZE);
@@ -45,10 +136,10 @@ static void kbd_push_char(char c) {
     }
     g_kernel_kbd_queue[g_kernel_kbd_head] = c;
     g_kernel_kbd_head = next;
+    kbd_mark(KBD_MARK_QUEUE, 'Q');
 }
 
 int kernel_keyboard_read(void) {
-    uint32_t flags = kernel_irq_save();
     int value = 0;
 
     if (g_kernel_kbd_tail != g_kernel_kbd_head) {
@@ -56,50 +147,116 @@ int kernel_keyboard_read(void) {
         g_kernel_kbd_tail = (uint8_t)((g_kernel_kbd_tail + 1u) % KBD_QUEUE_SIZE);
     }
 
-    kernel_irq_restore(flags);
     return value;
 }
 
 void kernel_keyboard_irq_handler(void) {
-    const uint8_t scancode = inb(0x60);
+    const uint8_t scancode = inb(PS2_DATA_PORT);
+    kbd_mark(KBD_MARK_IRQ, 'I');
+    kbd_mark(KBD_MARK_SCAN_HI, hex_digit((uint8_t)(scancode >> 4)));
+    kbd_mark(KBD_MARK_SCAN_LO, hex_digit(scancode));
+
+    if (!g_kernel_kbd_ready) {
+        kbd_mark(KBD_MARK_DISCARD, 'N');
+        kernel_pic_send_eoi(1);
+        return;
+    }
 
     if (scancode == 0xE0u) {
         g_kernel_kbd_extended = 1u;
+        kbd_mark(KBD_MARK_DISCARD, 'X');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (g_kernel_kbd_extended) {
         g_kernel_kbd_extended = 0u;
+        kbd_mark(KBD_MARK_DISCARD, 'x');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (scancode == 0x2Au || scancode == 0x36u) {
         g_kernel_kbd_shift = 1u;
+        kbd_mark(KBD_MARK_DISCARD, 'S');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (scancode == 0xAAu || scancode == 0xB6u) {
         g_kernel_kbd_shift = 0u;
+        kbd_mark(KBD_MARK_DISCARD, 's');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if ((scancode & 0x80u) != 0u) {
+        kbd_mark(KBD_MARK_DISCARD, 'B');
         kernel_pic_send_eoi(1);
         return;
     }
 
-    const char c = g_kernel_kbd_shift ? kbd_shift_map[scancode] : kbd_map[scancode];
+    if (scancode == 0xFAu || scancode == 0xFEu) {
+        kbd_mark(KBD_MARK_DISCARD, 'A');
+        kernel_pic_send_eoi(1);
+        return;
+    }
+
+    const char c = g_kernel_kbd_shift ? g_kernel_kbd_shift_map[scancode] : g_kernel_kbd_map[scancode];
     if (c != '\0') {
         kbd_push_char(c);
+        kbd_mark(KBD_MARK_DISCARD, 'P');
+    } else {
+        kbd_mark(KBD_MARK_DISCARD, '?');
     }
 
     kernel_pic_send_eoi(1);
 }
 
 void kernel_keyboard_init(void) {
-    /* Keyboard already initialized by BIOS */
+    uint8_t config;
+
+    g_kernel_kbd_head = 0u;
+    g_kernel_kbd_tail = 0u;
+    g_kernel_kbd_shift = 0u;
+    g_kernel_kbd_extended = 0u;
+    g_kernel_kbd_ready = 0u;
+    kbd_init_maps();
+    kbd_mark(KBD_MARK_INIT, 'i');
+
+    ps2_drain_output();
+
+    ps2_wait_write();
+    outb(PS2_STATUS_PORT, 0xAEu);
+
+    ps2_wait_write();
+    outb(PS2_STATUS_PORT, 0x20u);
+    if (!ps2_wait_read_timeout()) {
+        kbd_mark(KBD_MARK_INIT, '!');
+        return;
+    }
+
+    config = inb(PS2_DATA_PORT);
+    config |= 0x01u;
+    config &= (uint8_t)~0x10u;
+
+    ps2_wait_write();
+    outb(PS2_STATUS_PORT, 0x60u);
+    ps2_wait_write();
+    outb(PS2_DATA_PORT, config);
+
+    kbd_write_cmd(0xF6u);
+    if (!kbd_expect_ack()) {
+        kbd_mark(KBD_MARK_INIT, 'F');
+        return;
+    }
+
+    kbd_write_cmd(0xF4u);
+    if (!kbd_expect_ack()) {
+        kbd_mark(KBD_MARK_INIT, 'S');
+        return;
+    }
+
+    g_kernel_kbd_ready = 1u;
+    kbd_mark(KBD_MARK_INIT, 'K');
 }

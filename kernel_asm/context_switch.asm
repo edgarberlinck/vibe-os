@@ -17,28 +17,27 @@ context_switch:
     cmp ebx, 0
     je .load_new        ; nothing to save if old==NULL
 
-    ; save user registers into *ebx
-    mov eax, [esp]      ; caller's eip (return address)
-    pushad              ; push eax,ecx,edx,ebx,esp,ebp,esi,edi
-    ; esp now points to saved EAX
-    mov [ebx + 0], eax  ; regs.eip
-    mov ecx, [esp+16]   ; original ESP saved by pushad
-    mov [ebx + 4], ecx  ; regs.esp
-    mov ecx, [esp+20]   ; EBP
-    mov [ebx + 8], ecx  ; regs.ebp
-    mov ecx, [esp]      ; EAX
-    mov [ebx +12], ecx  ; regs.eax
-    mov ecx, [esp+12]   ; EBX
-    mov [ebx +16], ecx  ; regs.ebx
-    mov ecx, [esp+4]    ; ECX
-    mov [ebx +20], ecx  ; regs.ecx
-    mov ecx, [esp+8]    ; EDX
-    mov [ebx +24], ecx  ; regs.edx
-    mov ecx, [esp+24]   ; ESI
-    mov [ebx +28], ecx  ; regs.esi
-    mov ecx, [esp+28]   ; EDI
-    mov [ebx +32], ecx  ; regs.edi
-    popad               ; restore registers to original state
+    ; save caller register state into *ebx
+    pusha                      ; saves eax..edi (esp value before pusha)
+    mov eax, [esp + 32]        ; return address pushed by CALL
+    mov [ebx + 0], eax         ; regs.eip
+    mov eax, [esp + 16]        ; original ESP value
+    mov [ebx + 4], eax         ; regs.esp
+    mov eax, [esp + 20]
+    mov [ebx + 8], eax         ; regs.ebp
+    mov eax, [esp + 0]
+    mov [ebx +12], eax         ; regs.eax
+    mov eax, [esp + 12]
+    mov [ebx +16], eax         ; regs.ebx
+    mov eax, [esp + 4]
+    mov [ebx +20], eax         ; regs.ecx
+    mov eax, [esp + 8]
+    mov [ebx +24], eax         ; regs.edx
+    mov eax, [esp + 24]
+    mov [ebx +28], eax         ; regs.esi
+    mov eax, [esp + 28]
+    mov [ebx +32], eax         ; regs.edi
+    popa                        ; restore caller registers
 
 .load_new:
     ; load new context pointed to by esi

@@ -12,5 +12,8 @@ void sys_text(int x, int y, uint8_t color, const char *text);
 void sys_sleep(void);
 uint32_t sys_ticks(void);
 int sys_gfx_info(struct video_mode *mode);
+int sys_getpid(void);
+void sys_yield(void);
+void sys_write_debug(const char *msg);
 
 #endif // SYSCALLS_H

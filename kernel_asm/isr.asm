@@ -62,7 +62,7 @@ syscall_stub:
     push ebx
     push eax
     call syscall_dispatch_internal
-    add esp, 24    ; pop 6 args (4 bytes each)
+    add esp, 24    ; remove pushed args; esp back to CPU-saved frame
     iretd
 
 ; exception stubs - invoke C handler and halt (via iretd)

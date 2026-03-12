@@ -14,6 +14,9 @@ void shell_history_add(const char *line) { (void)line; }
 void shell_history_print(void) { /* no-op */ }
 
 static int cur_x = 0, cur_y = 0;
+static volatile uint32_t shell_state = 0;
+static volatile uint32_t shell_last_len = 0;
+static volatile uint32_t shell_last_cmd0 = 0;
 
 static void vga_putc(char c) {
     if (c == 0) return;
@@ -42,50 +45,119 @@ static void vga_putc(char c) {
 
 static void vga_write(const char *s) { while (*s) vga_putc(*s++); }
 
-static int strcmp(const char *a, const char *b) {
-    while (*a && *b && *a == *b) { ++a; ++b; }
-    return (unsigned char)*a - (unsigned char)*b;
+static void prompt_print(void) {
+    vga_putc('u');
+    vga_putc('s');
+    vga_putc('e');
+    vga_putc('r');
+    vga_putc('@');
+    vga_putc('v');
+    vga_putc('i');
+    vga_putc('b');
+    vga_putc('e');
+    vga_putc('-');
+    vga_putc('o');
+    vga_putc('s');
+    vga_putc(':');
+    vga_putc('/');
+    vga_putc(' ');
+    vga_putc('%');
+    vga_putc(' ');
+}
+
+static void echo_backspace(void) {
+    vga_putc('\b');
+    vga_putc(' ');
+    vga_putc('\b');
+}
+
+static int is_help(const char *cmd) {
+    return cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p' && cmd[4] == '\0';
+}
+
+static int is_echo(const char *cmd) {
+    return cmd[0] == 'e' && cmd[1] == 'c' && cmd[2] == 'h' && cmd[3] == 'o' && cmd[4] == '\0';
+}
+
+static int is_clear(const char *cmd) {
+    return cmd[0] == 'c' && cmd[1] == 'l' && cmd[2] == 'e' && cmd[3] == 'a' && cmd[4] == 'r' && cmd[5] == '\0';
+}
+
+static int is_exit(const char *cmd) {
+    return cmd[0] == 'e' && cmd[1] == 'x' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == '\0';
+}
+
+static void print_help(void) {
+    vga_putc('h');
+    vga_putc('e');
+    vga_putc('l');
+    vga_putc('p');
+    vga_putc(',');
+    vga_putc(' ');
+    vga_putc('e');
+    vga_putc('c');
+    vga_putc('h');
+    vga_putc('o');
+    vga_putc(',');
+    vga_putc(' ');
+    vga_putc('c');
+    vga_putc('l');
+    vga_putc('e');
+    vga_putc('a');
+    vga_putc('r');
+    vga_putc(',');
+    vga_putc(' ');
+    vga_putc('e');
+    vga_putc('x');
+    vga_putc('i');
+    vga_putc('t');
+    vga_putc('\n');
+}
+
+static void print_unknown(void) {
+    vga_putc('u');
+    vga_putc('n');
+    vga_putc('k');
+    vga_putc('n');
+    vga_putc('o');
+    vga_putc('w');
+    vga_putc('n');
+    vga_putc('\n');
+}
+
+static void print_bye(void) {
+    vga_putc('b');
+    vga_putc('y');
+    vga_putc('e');
+    vga_putc('\n');
 }
 
 static int read_line(char *buf, int maxlen) {
     int len = 0;
-    int idle_spins = 0;
     
     for (;;) {
-        int c = kernel_keyboard_read();
-        
-        if (c == 0) { 
-            /* Polling with progressive backoff */
-            idle_spins++;
-            
-            /* Every 1000 spins with no input, update debug indicator and yield */
-            if (idle_spins % 1000 == 0) {
-                /* Show idle counter in top-right */
-                int indicator = 48 + ((idle_spins / 1000) % 10); /* 0-9 cycle */
-                VGA_MEM[79] = (0x08 << 8) | (uint8_t)indicator;  /* dark gray */
-                
-                /* Yield to let other tasks/interrupts run */
-                yield();
-            }
-            
-            continue; 
+        int c;
+
+        __asm__ volatile("cli" : : : "memory");
+        c = kernel_keyboard_read();
+        __asm__ volatile("sti" : : : "memory");
+
+        if (c == 0) {
+            yield();
+            continue;
         }
-        
-        /* Got character, reset idle counter */
-        idle_spins = 0;
-        
-        /* Clear the idle indicator */
-        VGA_MEM[79] = (0x0F << 8) | ' ';
         
         if (c == '\r') c = '\n';
         if (c == '\n') {
             vga_putc('\n');
             buf[len] = '\0';
+            shell_state = 3;
+            shell_last_len = (uint32_t)len;
             return len;
         }
         if ((c == '\b' || c == 127) && len > 0) {
             --len;
-            vga_write("\b \b");
+            echo_backspace();
             continue;
         }
         if (c >= 32 && c < 127 && len < maxlen - 1) {
@@ -96,59 +168,50 @@ static int read_line(char *buf, int maxlen) {
 }
 
 void shell_start(void) {
-    /* breadcrumb even if text helpers fail */
-    VGA_MEM[5] = (0x0E << 8) | 'S';
-    VGA_MEM[6] = (0x0E << 8) | 'H';
-
-    /* clear screen for predictable layout */
     for (int i = 0; i < VGA_COLS * VGA_ROWS; ++i)
         VGA_MEM[i] = (VGA_ATTR << 8) | ' ';
     cur_x = cur_y = 0;
+    shell_state = 1;
 
-    /* DEBUG: Check EFLAGS interrupt flag */
-    uint32_t eflags;
-    __asm__ volatile("pushf; pop %0" : "=r"(eflags));
-    
-    /* Show interrupt enable status: ! = enabled, ? = disabled */
-    char irq_status = (eflags & 0x200) ? '!' : '?';
-    VGA_MEM[78] = (0x0F << 8) | (uint8_t)irq_status;
-    
-    /* Read initial keyboard state to show activity */
-    int test_key = kernel_keyboard_read();
-    VGA_MEM[77] = (0x0F << 8) | (test_key ? 'K' : '-');
-
-    vga_write("Simple shell. Commands: help, echo, clear, exit\n");
-    vga_write("DEBUG: Check top-right corner for IRQ status\n\n");
     char line[LINE_MAX];
 
     for (;;) {
-        vga_write("user@vibe-os:/ % ");
+        prompt_print();
+        shell_state = 2;
         int len = read_line(line, LINE_MAX);
+        shell_state = 4;
         if (len == 0) continue;
 
         /* split into cmd + arg remainder */
         char *p = line;
         while (*p == ' ') ++p;
         char *cmd = p;
+        shell_last_cmd0 = (uint32_t)(uint8_t)cmd[0];
         while (*p && *p != ' ') ++p;
         if (*p) *p++ = '\0';
         while (*p == ' ') ++p;
         char *arg = p;
 
-        if (strcmp(cmd, "help") == 0) {
-            vga_write("help, echo, clear, exit\n");
-        } else if (strcmp(cmd, "echo") == 0) {
+        if (is_help(cmd)) {
+            shell_state = 5;
+            print_help();
+        } else if (is_echo(cmd)) {
+            shell_state = 6;
             vga_write(arg);
             vga_putc('\n');
-        } else if (strcmp(cmd, "clear") == 0) {
+        } else if (is_clear(cmd)) {
+            shell_state = 7;
             for (int i = 0; i < VGA_COLS * VGA_ROWS; ++i)
                 VGA_MEM[i] = (VGA_ATTR << 8) | ' ';
             cur_x = cur_y = 0;
-        } else if (strcmp(cmd, "exit") == 0) {
+        } else if (is_exit(cmd)) {
+            shell_state = 8;
             break;
         } else {
-            vga_write("unknown\n");
+            shell_state = 9;
+            print_unknown();
         }
     }
-    vga_write("bye\n");
+    shell_state = 10;
+    print_bye();
 }

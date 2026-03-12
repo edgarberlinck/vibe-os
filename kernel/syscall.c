@@ -83,8 +83,13 @@ static uint32_t sys_write_debug(uint32_t a, uint32_t b, uint32_t c,
 
 static uint32_t sys_input_key(uint32_t a, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
+    uint32_t value;
+
     (void)a; (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)kernel_keyboard_read();
+    __asm__ volatile("cli" : : : "memory");
+    value = (uint32_t)kernel_keyboard_read();
+    __asm__ volatile("sti" : : : "memory");
+    return value;
 }
 
 static uint32_t sys_text_clear(uint32_t a, uint32_t b, uint32_t c,

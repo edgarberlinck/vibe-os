@@ -18,7 +18,10 @@ KERNEL_OBJS := $(patsubst kernel/%.c,$(BUILD_DIR)/kernel_%.o,$(KERNEL_SRCS))
 KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
 KERNEL_ASM_OBJS := $(patsubst kernel_asm/%.asm,$(BUILD_DIR)/kernel_asm_%.o,$(KERNEL_ASM_SRCS))
 
-USERLAND_SRCS := $(shell find $(USERLAND_DIR) -name '*.c')
+# Minimal userland linked into the kernel image.
+USERLAND_SRCS := \
+	$(USERLAND_DIR)/userland.c \
+	$(USERLAND_DIR)/modules/shell.c
 USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 
 BOOT_BIN := $(BUILD_DIR)/boot.bin
