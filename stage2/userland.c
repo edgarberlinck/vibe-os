@@ -9,21 +9,23 @@ typedef void (*userland_entry_t)(void);
 extern const uint8_t _binary_userland_bin_start[];
 extern const uint8_t _binary_userland_bin_end[];
 
-static void memory_copy(uint8_t *dst, const uint8_t *src, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        dst[i] = src[i];
-    }
-}
-
 void userland_run(void) {
-    const size_t userland_size =
-        (size_t)(_binary_userland_bin_end - _binary_userland_bin_start);
-    uint8_t *const load_addr = (uint8_t *)USERLAND_LOAD_ADDR;
-
-    if (userland_size == 0) {
+    /* Calculate size */
+    const uint8_t *start = _binary_userland_bin_start;
+    const uint8_t *end = _binary_userland_bin_end;
+    size_t size = end - start;
+    
+    if (size == 0) {
         return;
     }
-
-    memory_copy(load_addr, _binary_userland_bin_start, userland_size);
-    ((userland_entry_t)load_addr)();
+    
+    /* Copy to 0x20000 */
+    uint8_t *dest = (uint8_t *)USERLAND_LOAD_ADDR;
+    for (size_t i = 0; i < size; i++) {
+        dest[i] = start[i];
+    }
+    
+    /* Jump to entry point */
+    userland_entry_t entry = (userland_entry_t)dest;
+    entry();
 }
