@@ -11,37 +11,28 @@ BOOT_DIR := boot
 STAGE2_DIR := stage2
 USERLAND_DIR := userland
 LINKER_DIR := linker
-INCLUDE_DIR := include
 
-# keep a generous sector allocation for growing kernel modules
-STAGE2_SECTORS := 50  # increased to accommodate expanded kernel
-SECTOR_SIZE := 512
+# Kernel sources include both kernel/ and stage2/ directories
+KERNEL_SRCS := $(shell find kernel -name '*.c') $(shell find $(STAGE2_DIR) -maxdepth 1 -name '*.c')
+KERNEL_OBJS := $(patsubst kernel/%.c,$(BUILD_DIR)/kernel_%.o,$(shell find kernel -name '*.c')) \
+               $(patsubst $(STAGE2_DIR)/%.c,$(BUILD_DIR)/stage2_%.o,$(shell find $(STAGE2_DIR) -maxdepth 1 -name '*.c'))
 
-BOOT_BIN := $(BUILD_DIR)/boot.bin
-STAGE2_SRCS := $(shell find $(STAGE2_DIR) -maxdepth 1 -name '*.c')
-# gather all C files in kernel directory recursively
-KERNEL_SRCS := $(shell find kernel -name '*.c')
-# additional directories compiled by the kernel build
-# (find already covers new paths under kernel/ so no further change required)
-
-STAGE2_OBJS := $(patsubst $(STAGE2_DIR)/%.c,$(BUILD_DIR)/stage2_%.o,$(STAGE2_SRCS))
-KERNEL_OBJS := $(patsubst kernel/%.c,$(BUILD_DIR)/kernel_%.o,$(KERNEL_SRCS))
-# legacy stage2 interrupt stubs are now provided by kernel_asm/isr.asm
-# keep the file for reference but do not compile it into the final image
-STAGE2_ISR_OBJ :=
 KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
 KERNEL_ASM_OBJS := $(patsubst kernel_asm/%.asm,$(BUILD_DIR)/kernel_asm_%.o,$(KERNEL_ASM_SRCS))
+
 USERLAND_SRCS := $(shell find $(USERLAND_DIR) -name '*.c')
 USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
+
+BOOT_BIN := $(BUILD_DIR)/boot.bin
 USERLAND_ELF := $(BUILD_DIR)/userland.elf
 USERLAND_BIN := $(BUILD_DIR)/userland.bin
 USERLAND_BLOB_OBJ := $(BUILD_DIR)/userland_blob.o
-STAGE2_ELF := $(BUILD_DIR)/stage2.elf
-STAGE2_BIN := $(BUILD_DIR)/stage2.bin
+KERNEL_ELF := $(BUILD_DIR)/kernel.elf
+KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
 CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -Iheaders -Iuserland
-LDFLAGS_STAGE2 := -m elf_i386 -T $(LINKER_DIR)/stage2.ld -nostdlib
+LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib
 
 all: $(IMAGE)
@@ -59,31 +50,27 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
-	$(AS) -f bin -DSTAGE2_SECTORS=$(STAGE2_SECTORS) $< -o $@
+	$(AS) -f bin $< -o $@
 	@boot_size=$$(wc -c < $@); \
 	if [ "$$boot_size" -ne 512 ]; then \
 		echo "Erro: boot sector precisa ter 512 bytes (atual: $$boot_size)."; \
 		exit 1; \
 	fi
 
-$(STAGE2_OBJS): $(BUILD_DIR)/stage2_%.o: $(STAGE2_DIR)/%.c headers/include/userland_api.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(KERNEL_OBJS): $(BUILD_DIR)/kernel_%.o: kernel/%.c headers/include/userland_api.h | $(BUILD_DIR)
+$(BUILD_DIR)/kernel_%.o: kernel/%.c headers/include/userland_api.h | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# no longer building stage2/isr.asm; kernel_asm/isr.asm supplies IRQ/exn stubs
-#$(STAGE2_ISR_OBJ): $(STAGE2_DIR)/isr.asm | $(BUILD_DIR)
-#	$(AS) -f elf32 $< -o $@
+$(BUILD_DIR)/stage2_%.o: $(STAGE2_DIR)/%.c headers/include/userland_api.h | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(KERNEL_ASM_OBJS): $(BUILD_DIR)/kernel_asm_%.o: kernel_asm/%.asm | $(BUILD_DIR)
+$(BUILD_DIR)/kernel_asm_%.o: kernel_asm/%.asm | $(BUILD_DIR)
 	$(AS) -f elf32 $< -o $@
 
-$(USERLAND_OBJS): headers/include/userland_api.h | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(USERLAND_DIR)/%.c headers/include/userland_api.h | $(BUILD_DIR)
 	mkdir -p $(dir $@)
-	# compile any C source under userland directory matching the object path
-	$(CC) $(CFLAGS) -c $(USERLAND_DIR)/$(patsubst $(BUILD_DIR)/%,%,$(subst .o,.c,$@)) -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(USERLAND_ELF): $(USERLAND_OBJS) $(LINKER_DIR)/userland.ld
 	$(LD) $(LDFLAGS_USERLAND) $(USERLAND_OBJS) -o $@
@@ -94,27 +81,15 @@ $(USERLAND_BIN): $(USERLAND_ELF)
 $(USERLAND_BLOB_OBJ): $(USERLAND_BIN)
 	cd $(BUILD_DIR) && $(LD) -m elf_i386 -r -b binary userland.bin -o userland_blob.o
 
-$(STAGE2_ELF): $(STAGE2_OBJS) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_BLOB_OBJ) $(LINKER_DIR)/stage2.ld
-	$(LD) $(LDFLAGS_STAGE2) $(STAGE2_OBJS) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_BLOB_OBJ) -o $@
+$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_BLOB_OBJ) $(LINKER_DIR)/kernel.ld
+	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_BLOB_OBJ) -o $@
 
-$(STAGE2_BIN): $(STAGE2_ELF)
+$(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
-	@stage2_size=$$(wc -c < $@); \
-	limit=$$(( $(STAGE2_SECTORS) * $(SECTOR_SIZE) )); \
-	if [ "$$stage2_size" -gt "$$limit" ]; then \
-		echo "Erro: stage2.bin ($$stage2_size bytes) excede $$limit bytes."; \
-		exit 1; \
-	fi
 
-$(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) | check-tools
+$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN)
 	cp $(BOOT_BIN) $@
-	cat $(STAGE2_BIN) >> $@
-	@target_size=$$(( (1 + $(STAGE2_SECTORS)) * $(SECTOR_SIZE) )); \
-	current_size=$$(wc -c < $@); \
-	if [ "$$current_size" -lt "$$target_size" ]; then \
-		padding=$$(( $$target_size - $$current_size )); \
-		dd if=/dev/zero bs=1 count=$$padding >> $@ 2>/dev/null; \
-	fi
+	cat $(KERNEL_BIN) >> $@
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
@@ -128,6 +103,18 @@ run: $(IMAGE)
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a -serial stdio; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE),if=floppy -boot a -serial stdio; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
 		fi; \
 	fi

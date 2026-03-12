@@ -14,16 +14,54 @@
 #include <stage2/include/mouse.h>
 #include <stage2/include/userland.h>
 
+/* simple VGA text mode output for boot debugging */
+static void vga_text_putc(char c) {
+    static int x = 0, y = 0;
+    volatile uint16_t *video_mem = (uint16_t *)0xB8000;
+    
+    if (c == '\n') {
+        y++;
+        x = 0;
+        if (y >= 25) y = 0;
+        return;
+    }
+    
+    if (x >= 80) {
+        x = 0;
+        y++;
+    }
+    if (y >= 25) y = 0;
+    
+    int offset = y * 80 + x;
+    video_mem[offset] = (0x0F << 8) | (uint8_t)c;
+    x++;
+}
+
+static void vga_text_puts(const char *str) {
+    for (const char *p = str; *p; p++) {
+        vga_text_putc(*p);
+    }
+}
+
 __attribute__((noreturn)) void kernel_entry(void) {
+    /* clear screen first */
+    volatile uint16_t *video_mem = (uint16_t *)0xB8000;
+    for (int i = 0; i < 80 * 25; i++) {
+        video_mem[i] = (0x0F << 8) | ' ';
+    }
+    
+    vga_text_puts("VIBE OS Booting...\nInitializing video...\n");
+    
     /* initialize the screen (vesa or vga) */
     video_init();
 
-    /* show startup message */
-    kernel_debug_puts("VIBE OS Booting...\r\n");
+    vga_text_puts("Video OK\n");
 
     /* setup interrupt subsystem */
     kernel_idt_init();
     kernel_pic_init();
+
+    vga_text_puts("Interrupts OK\n");
 
     /* continue using legacy timer/keyboard for now */
     timer_init(100u);
@@ -34,14 +72,18 @@ __attribute__((noreturn)) void kernel_entry(void) {
 
     kernel_irq_enable();  /* unmask lines via new pic code */
 
+    vga_text_puts("IRQ OK\n");
+
     /* initialize memory subsystem before anything that might need allocation */
     memory_subsystem_init();
+
+    vga_text_puts("Memory OK\n");
 
     /* setup new subsystems */
     scheduler_init();
     driver_manager_init();
 
-    kernel_debug_puts("Starting userland...\r\n");
+    vga_text_puts("Starting userland...\n");
 
     /* hand off to userland blob */
     userland_run();

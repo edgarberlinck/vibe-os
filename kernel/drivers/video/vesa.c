@@ -14,6 +14,7 @@ int vesa_init(struct video_mode *mode) {
         return -1;
     }
 
+    // PhysicalBasePointer is a 32-bit value stored at offset 2
     mode->fb_addr = (((uint32_t)vesa_bytes[5]) << 24) |
                     (((uint32_t)vesa_bytes[4]) << 16) |
                     (((uint32_t)vesa_bytes[3]) << 8)  |
