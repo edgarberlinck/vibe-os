@@ -3,6 +3,7 @@
 #include <userland/modules/include/syscalls.h>
 
 static const struct rect DEFAULT_TASKMGR_WINDOW = {30, 30, 260, 160};
+static const int TASKMGR_ROW_HEIGHT = 16;
 
 static void append_uint(char *buf, unsigned v) {
     /* append decimal representation to end of buf */
@@ -33,20 +34,45 @@ void taskmgr_init_state(struct taskmgr_state *tm) {
     tm->window = DEFAULT_TASKMGR_WINDOW;
 }
 
+static struct rect taskmgr_row_rect(const struct taskmgr_state *tm, int visible_index) {
+    struct rect r = {tm->window.x + 6, tm->window.y + 24 + (visible_index * TASKMGR_ROW_HEIGHT),
+                     tm->window.w - 12, TASKMGR_ROW_HEIGHT - 2};
+    return r;
+}
+
+static struct rect taskmgr_close_button_rect(const struct taskmgr_state *tm, int visible_index) {
+    struct rect row = taskmgr_row_rect(tm, visible_index);
+    struct rect r = {row.x + row.w - 64, row.y + 1, 58, row.h - 2};
+    return r;
+}
+
 void taskmgr_draw_window(struct taskmgr_state *tm,
                           struct window *wins,
                           int win_count,
-                          uint32_t ticks) {
-    draw_window_frame(&tm->window, "TASKS", 0);
-    sys_rect(tm->window.x + 4, tm->window.y + 18,
-             tm->window.w - 8, tm->window.h - 22, 0);
+                          uint32_t ticks,
+                          int active,
+                          int min_hover,
+                          int max_hover,
+                          int close_hover) {
+    const struct desktop_theme *theme = ui_theme_get();
+    struct rect body = {tm->window.x + 4, tm->window.y + 18, tm->window.w - 8, tm->window.h - 22};
 
-    int y = tm->window.y + 24;
+    draw_window_frame(&tm->window, "TASKS", active, min_hover, max_hover, close_hover);
+    ui_draw_surface(&body, ui_color_panel());
+
+    int visible_index = 0;
     for (int i = 0; i < win_count; ++i) {
+        struct rect row;
+        struct rect close_button;
         if (!wins[i].active) continue;
+
+        row = taskmgr_row_rect(tm, visible_index);
+        close_button = taskmgr_close_button_rect(tm, visible_index);
+        ui_draw_inset(&row, ui_color_canvas());
+        ui_draw_button(&close_button, "Finalizar", UI_BUTTON_DANGER, 0);
+
         char line[64];
         int len = 0;
-        /* index */
         line[len++] = '0' + (i % 10);
         line[len++] = ':';
         line[len++] = ' ';
@@ -55,7 +81,13 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
         case APP_TERMINAL: name = "TERM"; break;
         case APP_CLOCK: name = "CLK"; break;
         case APP_FILEMANAGER: name = "FM"; break;
+        case APP_EDITOR: name = "EDIT"; break;
         case APP_TASKMANAGER: name = "TM"; break;
+        case APP_CALCULATOR: name = "CALC"; break;
+        case APP_SKETCHPAD: name = "DRAW"; break;
+        case APP_SNAKE: name = "SNAKE"; break;
+        case APP_TETRIS: name = "TETRIS"; break;
+        case APP_PERSONALIZE: name = "PERS"; break;
         default: name = "???"; break;
         }
         while (*name && len < (int)sizeof(line) - 1) {
@@ -70,7 +102,31 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
             line[len++] = numbuf[j];
         }
         line[len] = '\0';
-        sys_text(tm->window.x + 6, y, 15, line);
-        y += 8;
+        sys_text(row.x + 4, row.y + 4, theme->text, line);
+        ++visible_index;
     }
+}
+
+int taskmgr_hit_test_close(const struct taskmgr_state *tm,
+                           const struct window *wins,
+                           int win_count,
+                           int x,
+                           int y) {
+    int visible_index = 0;
+
+    for (int i = 0; i < win_count; ++i) {
+        struct rect close_button;
+
+        if (!wins[i].active) {
+            continue;
+        }
+
+        close_button = taskmgr_close_button_rect(tm, visible_index);
+        if (point_in_rect(&close_button, x, y)) {
+            return i;
+        }
+        ++visible_index;
+    }
+
+    return -1;
 }

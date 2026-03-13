@@ -1,4 +1,6 @@
 #include <kernel/drivers/video/video.h>
+#include <kernel/drivers/input/input.h>
+#include <kernel/memory/heap.h>
 #include <kernel/hal/io.h>
 #include <stddef.h>
 
@@ -7,9 +9,17 @@ static struct video_mode g_mode;
 static volatile uint8_t *g_fb = NULL;
 static uint8_t *g_backbuf = NULL;
 static size_t g_buf_size = 0;
-static uint8_t g_graphics_backbuf[320 * 200];
+static uint8_t *g_graphics_backbuf = NULL;
 static int g_graphics_enabled = 0;
 static int g_graphics_bga = 0;
+
+#define GRAPHICS_DEFAULT_WIDTH 640u
+#define GRAPHICS_DEFAULT_HEIGHT 480u
+#define GRAPHICS_MAX_WIDTH 1920u
+#define GRAPHICS_MAX_HEIGHT 1080u
+#define GRAPHICS_BPP 8u
+#define GRAPHICS_BANK_SIZE 65536u
+#define GRAPHICS_MAX_PIXELS ((size_t)GRAPHICS_MAX_WIDTH * (size_t)GRAPHICS_MAX_HEIGHT)
 
 #define BGA_INDEX_PORT 0x01CEu
 #define BGA_DATA_PORT 0x01CFu
@@ -23,16 +33,6 @@ static int g_graphics_bga = 0;
 #define BGA_ID5 0xB0C5u
 #define BGA_DISABLED 0x0000u
 #define BGA_ENABLED 0x0001u
-
-static inline void outw(uint16_t port, uint16_t value) {
-    __asm__ volatile("outw %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static inline uint16_t inw(uint16_t port) {
-    uint16_t value;
-    __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
 
 static void bga_write(uint16_t index, uint16_t value) {
     outw(BGA_INDEX_PORT, index);
@@ -49,120 +49,79 @@ static int bga_available(void) {
     return id >= BGA_ID0 && id <= BGA_ID5;
 }
 
-static int bga_enter_320x200x8(void) {
+static int bga_enter_mode(uint16_t width, uint16_t height, uint16_t bpp) {
     if (!bga_available()) {
         return 0;
     }
 
     bga_write(BGA_INDEX_ENABLE, BGA_DISABLED);
-    bga_write(BGA_INDEX_XRES, 320u);
-    bga_write(BGA_INDEX_YRES, 200u);
-    bga_write(BGA_INDEX_BPP, 8u);
+    bga_write(BGA_INDEX_XRES, width);
+    bga_write(BGA_INDEX_YRES, height);
+    bga_write(BGA_INDEX_BPP, bpp);
     bga_write(BGA_INDEX_BANK, 0u);
     bga_write(BGA_INDEX_ENABLE, BGA_ENABLED);
     return 1;
 }
 
-static const uint8_t g_vga_mode_13_regs[] = {
-    0x63,
-    0x03, 0x01, 0x0F, 0x00, 0x0E,
-    0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F,
-    0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x8E,
-    0x8F, 0x28, 0x40, 0x96, 0xB9, 0xA3, 0xFF,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F,
-    0xFF,
-    0x41, 0x00, 0x0F, 0x00, 0x00,
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
-    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
-    0x0C, 0x00, 0x0F, 0x08, 0x00
-};
+static int kernel_video_mode_supported(uint16_t width, uint16_t height) {
+    return (width == 640u && height == 480u) ||
+           (width == 800u && height == 600u) ||
+           (width == 1024u && height == 768u) ||
+           (width == 1366u && height == 768u) ||
+           (width == 1920u && height == 1080u);
+}
 
-static void vga_write_regs(const uint8_t *regs) {
-    uint8_t values[sizeof(g_vga_mode_13_regs)];
-    uint8_t *seq;
-    uint8_t *crtc;
-    uint8_t *gc;
-    uint8_t *ac;
+static int kernel_video_apply_graphics_mode(uint16_t width, uint16_t height) {
+    int use_bga = 0;
 
-    for (size_t i = 0; i < sizeof(values); ++i) {
-        values[i] = regs[i];
+    if (!kernel_video_mode_supported(width, height)) {
+        return -1;
     }
 
-    seq = &values[1];
-    crtc = &values[1 + 5];
-    gc = &values[1 + 5 + 25];
-    ac = &values[1 + 5 + 25 + 9];
-
-    /* Disable video output while the timing registers are changing. */
-    outb(0x3C4, 0x01u);
-    outb(0x3C5, (uint8_t)(seq[1] | 0x20u));
-
-    /* Hold the sequencer in synchronous reset while programming the mode. */
-    outb(0x3C4, 0x00u);
-    outb(0x3C5, 0x01u);
-
-    outb(0x3C2, values[0]);
-
-    for (uint8_t i = 0; i < 5; ++i) {
-        outb(0x3C4, i);
-        outb(0x3C5, (i == 1u) ? (uint8_t)(seq[i] | 0x20u) : seq[i]);
+    if (g_graphics_backbuf == NULL) {
+        g_graphics_backbuf = (uint8_t *)kernel_malloc(GRAPHICS_MAX_PIXELS);
+        if (g_graphics_backbuf == NULL) {
+            return -1;
+        }
     }
 
-    outb(0x3C4, 0x00u);
-    outb(0x3C5, 0x03u);
-
-    outb(0x3D4, 0x03);
-    outb(0x3D5, (uint8_t)(crtc[0x03] | 0x80u));
-    outb(0x3D4, 0x11);
-    outb(0x3D5, (uint8_t)(crtc[0x11] & (uint8_t)~0x80u));
-
-    for (uint8_t i = 0; i < 25; ++i) {
-        outb(0x3D4, i);
-        outb(0x3D5, crtc[i]);
+    if (bga_available()) {
+        use_bga = bga_enter_mode(width, height, (uint16_t)GRAPHICS_BPP);
+        if (!use_bga) {
+            return -1;
+        }
     }
 
-    for (uint8_t i = 0; i < 9; ++i) {
-        outb(0x3CE, i);
-        outb(0x3CF, gc[i]);
+    if (!use_bga) {
+        return -1;
     }
 
-    for (uint8_t i = 0; i < 21; ++i) {
-        (void)inb(0x3DA);
-        outb(0x3C0, i);
-        outb(0x3C0, ac[i]);
+    g_graphics_bga = use_bga;
+    g_mode.width = width;
+    g_mode.height = height;
+    g_mode.pitch = width;
+    g_mode.bpp = GRAPHICS_BPP;
+    g_mode.fb_addr = 0xA0000u;
+    g_fb = (volatile uint8_t *)(uintptr_t)g_mode.fb_addr;
+    g_backbuf = g_graphics_backbuf;
+    g_buf_size = (size_t)g_mode.pitch * (size_t)g_mode.height;
+    g_graphics_enabled = 1;
+
+    for (size_t i = 0; i < g_buf_size; ++i) {
+        g_backbuf[i] = 0u;
     }
 
-    (void)inb(0x3DA);
-    outb(0x3C0, 0x20);
-
-    outb(0x3C4, 0x01u);
-    outb(0x3C5, seq[1]);
+    kernel_mouse_sync_to_video();
+    kernel_video_flip();
+    return 0;
 }
 
 static void kernel_video_enter_graphics(void) {
     if (g_graphics_enabled) {
         return;
     }
-
-    g_graphics_bga = bga_enter_320x200x8();
-    if (!g_graphics_bga) {
-        vga_write_regs(g_vga_mode_13_regs);
-    }
-
-    g_mode.fb_addr = 0xA0000u;
-    g_mode.width = 320u;
-    g_mode.height = 200u;
-    g_mode.pitch = 320u;
-    g_mode.bpp = 8u;
-    g_fb = (volatile uint8_t *)(uintptr_t)g_mode.fb_addr;
-    g_backbuf = g_graphics_backbuf;
-    g_buf_size = sizeof(g_graphics_backbuf);
-    g_graphics_enabled = 1;
-
-    for (size_t i = 0; i < g_buf_size; ++i) {
-        g_backbuf[i] = 0u;
-        g_fb[i] = 0u;
-    }
+    (void)kernel_video_apply_graphics_mode((uint16_t)GRAPHICS_DEFAULT_WIDTH,
+                                           (uint16_t)GRAPHICS_DEFAULT_HEIGHT);
 }
 
 /* prototypes for driver implementations */
@@ -213,9 +172,55 @@ void kernel_video_flip(void) {
         return;
     }
 
+    if (g_graphics_bga && g_buf_size > GRAPHICS_BANK_SIZE) {
+        size_t offset = 0u;
+        uint16_t bank = 0u;
+
+        while (offset < g_buf_size) {
+            size_t count = g_buf_size - offset;
+            if (count > GRAPHICS_BANK_SIZE) {
+                count = GRAPHICS_BANK_SIZE;
+            }
+
+            bga_write(BGA_INDEX_BANK, bank);
+            for (size_t i = 0; i < count; ++i) {
+                g_fb[i] = g_backbuf[offset + i];
+            }
+
+            offset += count;
+            bank = (uint16_t)(bank + 1u);
+        }
+
+        bga_write(BGA_INDEX_BANK, 0u);
+        return;
+    }
+
     for (size_t i = 0; i < g_buf_size; ++i) {
         g_fb[i] = g_backbuf[i];
     }
+}
+
+void kernel_video_leave_graphics(void) {
+    if (g_graphics_bga) {
+        bga_write(BGA_INDEX_ENABLE, BGA_DISABLED);
+        bga_write(BGA_INDEX_BANK, 0u);
+    }
+
+    g_graphics_enabled = 0;
+    g_graphics_bga = 0;
+    g_mode.fb_addr = 0xB8000u;
+    g_mode.width = 80u;
+    g_mode.height = 25u;
+    g_mode.pitch = 160u;
+    g_mode.bpp = 16u;
+    g_fb = (volatile uint8_t *)(uintptr_t)g_mode.fb_addr;
+    g_backbuf = NULL;
+    g_buf_size = 0u;
+    kernel_text_init();
+}
+
+int kernel_video_set_mode(uint32_t width, uint32_t height) {
+    return kernel_video_apply_graphics_mode((uint16_t)width, (uint16_t)height);
 }
 
 /* graphics helper internal font & routines copied from stage2 */

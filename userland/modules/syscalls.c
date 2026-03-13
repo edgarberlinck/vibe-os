@@ -29,6 +29,26 @@ void sys_text(int x, int y, uint8_t color, const char *text) {
     (void)syscall5(SYSCALL_GFX_TEXT, x, y, (int)(uintptr_t)text, color, 0);
 }
 
+void sys_present(void) {
+    (void)syscall5(SYSCALL_GFX_FLIP, 0, 0, 0, 0, 0);
+}
+
+void sys_leave_graphics(void) {
+    (void)syscall5(SYSCALL_GFX_LEAVE, 0, 0, 0, 0, 0);
+}
+
+int sys_gfx_set_mode(uint32_t width, uint32_t height) {
+    return syscall5(SYSCALL_GFX_SET_MODE, (int)width, (int)height, 0, 0, 0);
+}
+
+int sys_storage_load(void *dst, uint32_t size) {
+    return syscall5(SYSCALL_STORAGE_LOAD, (int)(uintptr_t)dst, (int)size, 0, 0, 0);
+}
+
+int sys_storage_save(const void *src, uint32_t size) {
+    return syscall5(SYSCALL_STORAGE_SAVE, (int)(uintptr_t)src, (int)size, 0, 0, 0);
+}
+
 void sys_sleep(void) {
     (void)syscall5(SYSCALL_SLEEP, 0, 0, 0, 0, 0);
 }
