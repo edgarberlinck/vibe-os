@@ -168,9 +168,17 @@ PYTHON_APP_OBJS := \
 PYTHON_APP_ELF := $(BUILD_DIR)/lang/python.elf
 PYTHON_APP_BIN := $(BUILD_DIR)/lang/python.app
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN)
-# Ruby and Python: Build requires full mruby/micropython vendor builds
-# Use: make app-ruby, make app-python (requires build artifacts)
+ECHO_APP_BIN := $(BUILD_DIR)/ported/echo.app
+CAT_APP_BIN := $(BUILD_DIR)/ported/cat.app
+WC_APP_BIN := $(BUILD_DIR)/ported/wc.app
+HEAD_APP_BIN := $(BUILD_DIR)/ported/head.app
+TAIL_APP_BIN := $(BUILD_DIR)/ported/tail.app
+GREP_APP_BIN := $(BUILD_DIR)/ported/grep.app
+
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN)
+
+# Include compatibility layer build rules
+include Build.compat.mk
 
 all: $(IMAGE) $(USERLAND_MAIN_BIN)
 # Note: glibc separate build available via: make -f Build.glibc.mk glibc-build
@@ -311,6 +319,11 @@ $(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
 	mkdir -p $(dir $@)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+# Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
+# Built via Build.ported.mk
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN): $(COMPAT_LIB)
+	@make -f Build.ported.mk ported-echo ported-cat ported-wc ported-head ported-tail ported-grep 2>&1 | grep -v "^make\|Leaving\|Entering"
 
 $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS)
 	dd if=/dev/zero of=$@ bs=1474560 count=1
