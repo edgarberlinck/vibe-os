@@ -455,7 +455,7 @@ void ui_theme_create_classic(void) {
     g_theme.menu_button = 7;     /* Light gray active buttons */
     g_theme.menu_button_inactive = 8;  /* Dark gray inactive buttons */
     g_theme.taskbar = 7;         /* Light gray taskbar */
-    g_theme.window = 8;          /* Dark blue window title bar */
+    g_theme.window = 7;          /* Light gray window title bar */
     g_theme.window_bg = 15;      /* White window background */
     g_theme.text = 0;            /* Black text */
     ui_theme_save_named("classic");

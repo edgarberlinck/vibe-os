@@ -1051,12 +1051,12 @@ static struct rect personalize_window_palette_rect(const struct rect *w, int ind
 }
 
 static struct rect personalize_window_wallpaper_button_rect(const struct rect *w, int index) {
-    struct rect r = {w->x + 242, w->y + 92 + (index * 14), 160, 12};
+    struct rect r = {w->x + 242, w->y + 132 + (index * 14), 160, 12};
     return r;
 }
 
 static struct rect personalize_window_resolution_button_rect(const struct rect *w, int index) {
-    struct rect r = {w->x + 242, w->y + 176 + (index * 14), 160, 12};
+    struct rect r = {w->x + 242, w->y + 216 + (index * 14), 160, 12};
     return r;
 }
 
@@ -1107,8 +1107,8 @@ static void draw_personalize_window(struct personalize_state *state,
     struct rect theme_panel = {body.x + 8, body.y + 8, 216, 190};
     struct rect preview_panel = {body.x + 232, body.y + 8, body.w - 240, 62};
     struct rect wallpaper_panel = {body.x + 232, body.y + 78, body.w - 240, 74};
-    struct rect resolution_panel = {body.x + 232, body.y + 160, body.w - 240, body.h - 168};
-    struct rect palette_panel = {body.x + 8, body.y + 206, 216, body.h - 214};
+    struct rect resolution_panel = {body.x + 232, body.y + 160, body.w - 240, 100};
+    struct rect palette_panel = {body.x + 8, body.y + body.h - 98, 216, 88};
     struct rect preview = {preview_panel.x + 12, preview_panel.y + 20, preview_panel.w - 24, 34};
     struct rect preview_chip = {preview.x + 8, preview.y + 8, 48, 16};
     struct rect preview_strip = {preview.x + 8, preview.y + 26, preview.w - 16, 3};
@@ -1117,7 +1117,7 @@ static void draw_personalize_window(struct personalize_state *state,
     ui_draw_surface(&body, ui_color_panel());
     ui_draw_surface(&theme_panel, ui_color_canvas());
     ui_draw_surface(&preview_panel, ui_color_canvas());
-    ui_draw_surface(&wallpaper_panel, ui_color_canvas());
+    sys_rect(wallpaper_panel.x, wallpaper_panel.y, wallpaper_panel.w, wallpaper_panel.h, 1);  /* Blue */
     ui_draw_surface(&palette_panel, ui_color_canvas());
     ui_draw_surface(&resolution_panel, ui_color_canvas());
 
@@ -1167,10 +1167,22 @@ static void draw_personalize_window(struct personalize_state *state,
              "Aa");
     sys_text(preview.x + 78, preview.y + 28, theme->text, ui_theme_slot_name(state->selected_slot));
     sys_text(preview_panel.x + 16, preview_panel.y + 68, theme->text, "Ajuste rapido do desktop");
+    
+    /* Draw palette grid inside palette_panel */
+    int palette_cols = 6;
+    int swatch_w = 14;
+    int swatch_h = 12;
+    int palette_start_y = palette_panel.y + 24;
+    
     for (int i = 0; i < (int)(sizeof(g_theme_palette) / sizeof(g_theme_palette[0])); ++i) {
-        struct rect swatch = personalize_window_palette_rect(&state->window, i);
+        int col = i % palette_cols;
+        int row = i / palette_cols;
+        int swatch_x = palette_panel.x + 12 + (col * 22);
+        int swatch_y = palette_start_y + (row * 18);
+        
+        struct rect swatch = {swatch_x, swatch_y, swatch_w, swatch_h};
         int hover = point_in_rect(&swatch, mouse->x, mouse->y);
-
+        
         sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, hover ? 15 : 0);
         sys_rect(swatch.x + 1, swatch.y + 1, swatch.w - 2, swatch.h - 2, g_theme_palette[i]);
     }
@@ -1178,7 +1190,7 @@ static void draw_personalize_window(struct personalize_state *state,
              "Clique em uma cor para aplicar");
 
     /* Draw "Mais cores" button */
-    struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 22, palette_panel.w - 16, 14};
+    struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 62, palette_panel.w - 16, 14};
     int mais_cores_hover = point_in_rect(&mais_cores_btn, mouse->x, mouse->y);
     ui_draw_button(&mais_cores_btn, "Mais cores (256)", 
                    state->color_picker_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
@@ -1197,7 +1209,7 @@ static void draw_personalize_window(struct personalize_state *state,
                        hover);
     }
     if (bmp_count == 0) {
-        sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + 104, theme->text, "nenhum .bmp encontrado");
+        sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + wallpaper_panel.h - 16, theme->text, "nenhum .bmp encontrado");
     }
 
     for (int i = 0; i < (int)(sizeof(g_resolution_options) / sizeof(g_resolution_options[0])); ++i) {
