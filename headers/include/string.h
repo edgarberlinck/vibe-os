@@ -1,7 +1,7 @@
 #ifndef STRING_H
 #define STRING_H
 
-#include <sys/_types.h>
+typedef unsigned int size_t;
 
 size_t strlen(const char* str);
 char* strcpy(char* dest, const char* src);
