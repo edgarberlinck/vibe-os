@@ -9,7 +9,7 @@
 
 // This is a mock implementation of the syscalls for now.
 // The real implementation will be in the kernel.
-static inline int syscall(int num, ...) {
+static inline int syscall(int num __attribute__((unused)), ...) {
     // This is just a placeholder.
     return 0;
 }
@@ -21,37 +21,29 @@ void print_help() {
     syscall(SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS, available_layouts, sizeof(available_layouts));
     syscall(SYSCALL_KEYBOARD_GET_LAYOUT, current_layout, sizeof(current_layout));
 
-    printf("Uso: loadkeys <layout>
-");
-    printf("
-");
-    printf("Layouts disponíveis:
-%s
-", available_layouts);
-    printf("Layout atual:
-%s
-", current_layout);
+    printf("Uso: loadkeys <layout>\n");
+    printf("\n");
+    printf("Layouts disponíveis: %s\n", available_layouts);
+    printf("Layout atual: %s\n", current_layout);
 }
 
-int main(int argc, char* argv[]) {
+int vibe_app_main(int argc, char* argv[]) {
     if (argc != 2) {
         print_help();
         return 1;
     }
 
-    if (strcmp(argv[1], "-help") == 0) {
+    if (strcmp(argv[1], "--help") == 0) {
         print_help();
         return 0;
     }
 
     if (syscall(SYSCALL_KEYBOARD_SET_LAYOUT, argv[1]) != 0) {
-        printf("layout desconhecido: %s
-", argv[1]);
+        printf("layout desconhecido: %s\n", argv[1]);
         return 1;
     }
 
-    printf("Layout do teclado alterado para: %s
-", argv[1]);
+    printf("Layout do teclado alterado para: %s\n", argv[1]);
 
     return 0;
 }

@@ -35,23 +35,10 @@
 #ifndef _STDLIB_H_
 #define _STDLIB_H_
 
+#include <stddef.h>
 #include <sys/cdefs.h>
 #include <sys/_null.h>
-#include <machine/_types.h>
-#if __BSD_VISIBLE	/* for quad_t, etc. (XXX - use protected types) */
-#include <sys/types.h>
-#endif
-
-#ifndef	_SIZE_T_DEFINED_
-#define	_SIZE_T_DEFINED_
-typedef	__size_t	size_t;
-#endif
-
-/* in C++, wchar_t is a built-in type */
-#if !defined(_WCHAR_T_DEFINED_) && !defined(__cplusplus)
-#define _WCHAR_T_DEFINED_
-typedef	__wchar_t	wchar_t;
-#endif
+#include <compat_defs.h>
 
 typedef struct {
 	int quot;		/* quotient */

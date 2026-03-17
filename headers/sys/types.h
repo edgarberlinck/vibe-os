@@ -32,7 +32,7 @@ typedef long ssize_t;
 
 #ifndef _SIZE_T
 #define _SIZE_T
-typedef unsigned long size_t;
+typedef unsigned int size_t;
 #endif
 
 #ifndef _MODE_T

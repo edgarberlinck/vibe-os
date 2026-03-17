@@ -1,3 +1,4 @@
+#include <compat_defs.h>
 #include "../include/compat/libc/assert.h"
 #include "../include/compat/libc/stdio.h"
 #include "../include/compat/libc/stdlib.h"

@@ -15,7 +15,7 @@
 #include <stdarg.h>
 
 /* System types */
-#include "sys/types.h"
+#include <sys/types.h>
 
 /* Standard library groups */
 #include "compat/libc/stdlib.h"

@@ -1,5 +1,5 @@
 #include "../include/compat/posix/unistd.h"
-#include "../include/sys/types.h"
+#include <sys/types.h>
 
 int errno;
 

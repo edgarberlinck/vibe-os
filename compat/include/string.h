@@ -37,20 +37,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/_null.h>
-#include <sys/_types.h>
-
-/*
- * POSIX mandates that certain string functions not present in ISO C
- * be prototyped in strings.h.  Historically, we've included them here.
- */
-#if __BSD_VISIBLE
-#include <strings.h>
-#endif
-
-#ifndef	_SIZE_T_DEFINED_
-#define	_SIZE_T_DEFINED_
-typedef	__size_t	size_t;
-#endif
+#include <compat_defs.h>
 
 #if __POSIX_VISIBLE >= 200809
 #ifndef _LOCALE_T_DEFINED_

@@ -40,21 +40,11 @@
 
 #include <sys/cdefs.h>
 #include <sys/_null.h>
-#include <sys/_types.h>
 
-#if __BSD_VISIBLE || __POSIX_VISIBLE || __XPG_VISIBLE
-#include <sys/types.h>	/* XXX should be removed */
-#endif
 
-#ifndef	_SIZE_T_DEFINED_
-#define	_SIZE_T_DEFINED_
-typedef	__size_t	size_t;
-#endif
+#include <compat_defs.h>
 
-#ifndef	_OFF_T_DEFINED_
-#define	_OFF_T_DEFINED_
-typedef	__off_t	off_t;
-#endif
+
 
 #define	_FSTDIO			/* Define for new stdio with functions. */
 
@@ -140,8 +130,8 @@ FILE	*fopen(const char *, const char *);
 int	 fprintf(FILE *, const char * __restrict, ...);
 int	 fputc(int, FILE *);
 int	 fputs(const char *, FILE *);
-size_t	 fread(void *, size_t, size_t, FILE *)
-		__attribute__((__bounded__ (__size__,1,3,2)));
+size_t	 fread(void *, size_t, size_t, FILE *);
+
 FILE	*freopen(const char *, const char *, FILE *);
 int	 fscanf(FILE *, const char *, ...);
 int	 fseek(FILE *, long, int);
@@ -149,8 +139,8 @@ int	 fseeko(FILE *, off_t, int);
 int	 fsetpos(FILE *, const fpos_t *);
 long	 ftell(FILE *);
 off_t	 ftello(FILE *);
-size_t	 fwrite(const void *, size_t, size_t, FILE *)
-		__attribute__((__bounded__ (__size__,1,3,2)));
+size_t	 fwrite(const void *, size_t, size_t, FILE *);
+
 int	 getc(FILE *);
 int	 getchar(void);
 #if __POSIX_VISIBLE >= 200809

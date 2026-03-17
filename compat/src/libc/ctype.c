@@ -1,3 +1,4 @@
+#include <compat_defs.h>
 #include "../include/compat/libc/ctype.h"
 
 int isalpha(int c) {

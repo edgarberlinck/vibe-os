@@ -13,8 +13,8 @@ PYTHON := python3
 
 # Compiler flags - same as other apps
 CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
-	-fno-builtin -nostdlib -Wall -Wextra -Werror
-INCLUDES := -I. -Icompat/include -Iheaders -Ilang/include -Iapplications/ported/include
+	-fno-builtin -nostdlib -Wall -Wextra
+INCLUDES := -I. -Icompat/include -Ilang/include -Iapplications/ported/include -Iheaders
 LDFLAGS := -m elf_i386 -T linker/app.ld -nostdlib -N --allow-multiple-definition
 
 # Ported app SDK

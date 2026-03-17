@@ -46,7 +46,7 @@ GLIBC_CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
 # Generic pattern rule for deep directory structures
 $(GLIBC_BUILD_DIR)/%.o: $(GLIBC_DIR)/%.c
 	@mkdir -p "$(dir $@)"
-	@$(CC) $(GLIBC_CFLAGS) -c $< -o $@ 2>/dev/null || true
+	$(CC) $(GLIBC_CFLAGS) -c $< -o $@ || true
 
 # CORE library - fast to build (essential functionality)
 $(GLIBC_LIB_CORE): $(GLIBC_CORE_OBJS)
