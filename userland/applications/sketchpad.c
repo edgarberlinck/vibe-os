@@ -5,7 +5,7 @@
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
 
-static const struct rect DEFAULT_SKETCHPAD_WINDOW = {22, 18, 286, 240};
+static const struct rect DEFAULT_SKETCHPAD_WINDOW = {22, 18, 320, 280};
 /* RPG 8-bit palette - 32 colors */
 static const uint8_t g_sketch_colors[SKETCHPAD_COLOR_COUNT] = {
     /* Row 0: Darks & Grays */
@@ -102,7 +102,7 @@ void sketchpad_init_state(struct sketchpad_state *sketch) {
 
 struct rect sketchpad_canvas_rect(const struct sketchpad_state *sketch) {
     /* Canvas grows dynamically with window */
-    int canvas_max_w = sketch->window.w - 90;  /* Leave space for right panel */
+    int canvas_max_w = sketch->window.w - 100;  /* Leave space for right panel */
     int canvas_max_h = sketch->window.h - 72;  /* Leave space for top/bottom */
     
     /* Max pixel scale that fits */
@@ -144,10 +144,10 @@ struct rect sketchpad_brush_button_rect(const struct sketchpad_state *sketch, in
 struct rect sketchpad_color_rect(const struct sketchpad_state *sketch, int index) {
     struct rect canvas = sketchpad_canvas_rect(sketch);
     struct rect r = {
-        sketch->window.x + 10 + ((index % 5) * 24),
-        canvas.y + canvas.h + 12 + ((index / 5) * 18),
-        18,
-        14
+        sketch->window.x + 10 + ((index % 8) * 20),
+        canvas.y + canvas.h + 24 + ((index / 8) * 16),
+        16,
+        12
     };
     return r;
 }
@@ -281,7 +281,7 @@ void sketchpad_draw_window(struct sketchpad_state *sketch, int active,
     /* Draw color palette */
     for (int i = 0; i < SKETCHPAD_COLOR_COUNT; ++i) {
         struct rect swatch = sketchpad_color_rect(sketch, i);
-        uint8_t border = (i == sketch->current_color) ? 15 : 0;
+        uint8_t border = (i == sketch->current_color) ? theme->window : 0;
 
         sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, border);
         sys_rect(swatch.x + 1, swatch.y + 1, swatch.w - 2, swatch.h - 2, g_sketch_colors[i]);
