@@ -1097,7 +1097,7 @@ static void draw_personalize_window(struct personalize_state *state,
     struct rect theme_panel = {body.x + 8, body.y + 8, 216, 190};
     struct rect preview_panel = {body.x + 232, body.y + 8, body.w - 240, 62};
     struct rect wallpaper_panel = {body.x + 232, body.y + 78, body.w - 240, 74};
-    struct rect resolution_panel = {body.x + 232, body.y + 160, body.w - 240, 100};
+    struct rect resolution_panel = {body.x + 232, body.y + 160, body.w - 240, 132};
     struct rect palette_panel = {body.x + 8, body.y + body.h - 98, 216, 88};
     struct rect preview = {preview_panel.x + 12, preview_panel.y + 20, preview_panel.w - 24, 34};
     struct rect preview_chip = {preview.x + 8, preview.y + 8, 48, 16};
@@ -1196,8 +1196,11 @@ static void draw_personalize_window(struct personalize_state *state,
                        selected ? UI_BUTTON_ACTIVE : UI_BUTTON_PRIMARY,
                        hover);
     }
-    sys_text(resolution_panel.x + 8, resolution_panel.y + resolution_panel.h - 18, theme->text,
-             "Aplicacao imediata");
+    const char *res_text = "Aplicacao imediata";
+    int res_text_w = str_len(res_text) * 6;
+    sys_text(resolution_panel.x + (resolution_panel.w - res_text_w) / 2,
+             resolution_panel.y + resolution_panel.h - 14, theme->text,
+             res_text);
 
     /* Draw 256-color picker popup */
     if (state->color_picker_open) {

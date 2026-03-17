@@ -12,7 +12,7 @@ uint32_t SCREEN_WIDTH = 640;
 uint32_t SCREEN_HEIGHT = 480;
 uint32_t SCREEN_PITCH = 640;
 struct video_mode g_screen_mode = {0};
-static struct desktop_theme g_theme = {11, 7, 7, 8, 7, 8, 15, 0}; /* Classic Win95: teal desktop(11), light gray menu(7), light gray button(7), dark gray inactive(8), light gray taskbar(7), dark gray window(8), white bg(15), black text(0) */
+static struct desktop_theme g_theme = {1, 7, 3, 14, 7, 3, 15, 0}; /* Classic Win95: teal desktop(11), light gray menu(7), light gray button(7), dark gray inactive(8), light gray taskbar(7), dark gray window(8), white bg(15), black text(0) */
 static int g_ui_loading_settings = 0;
 static struct {
     int active;
@@ -449,15 +449,15 @@ void ui_theme_import(const char *import_path) {
 }
 
 void ui_theme_create_classic(void) {
-    /* Classic - Windows 95/98 Style: teal and gray */
-    g_theme.background = 11;     /* Cyan/Teal desktop - iconic Win95 color */
-    g_theme.menu = 7;            /* Light gray menu bar */
-    g_theme.menu_button = 7;     /* Light gray active buttons */
-    g_theme.menu_button_inactive = 8;  /* Dark gray inactive buttons */
-    g_theme.taskbar = 7;         /* Light gray taskbar */
-    g_theme.window = 7;          /* Light gray window title bar */
-    g_theme.window_bg = 15;      /* White window background */
-    g_theme.text = 0;            /* Black text */
+    /* Classic - VibeOS default theme */
+    g_theme.background = 1;
+    g_theme.menu = 7;
+    g_theme.menu_button = 3;
+    g_theme.menu_button_inactive = 14;
+    g_theme.taskbar = 7;
+    g_theme.window = 3;
+    g_theme.window_bg = 15;
+    g_theme.text = 0;
     ui_theme_save_named("classic");
 }
 
