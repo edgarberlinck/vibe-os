@@ -168,6 +168,80 @@ make run
 
 Se faltar alguma dependência, o `make` falha com mensagem direta sugerindo o comando do Homebrew.
 
+## Execução no Linux (passo a passo)
+
+As instruções abaixo replicam o fluxo do macOS para distros Linux comuns.
+
+### 1. Debian/Ubuntu e derivados
+
+```bash
+sudo apt update
+sudo apt install -y build-essential make python3 nasm qemu-system-x86 binutils gcc-multilib
+```
+
+### 2. Fedora e derivados
+
+```bash
+sudo dnf install -y @development-tools make python3 nasm qemu-system-x86 binutils gcc glibc-devel.i686
+```
+
+### 3. Arch Linux e derivados
+
+```bash
+sudo pacman -S --needed base-devel make python nasm qemu-system-x86 binutils gcc lib32-glibc
+```
+
+### 4. Gentoo e derivados
+
+```bash
+sudo emerge --ask sys-devel/gcc sys-devel/binutils dev-lang/python dev-lang/nasm app-emulation/qemu
+```
+
+### 5. openSUSE (Leap/Tumbleweed)
+
+```bash
+sudo zypper refresh
+sudo zypper install -y -t pattern devel_basis
+sudo zypper install -y make python3 nasm qemu-x86 qemu-tools binutils gcc gcc-32bit
+```
+
+### 6. Build no Linux
+
+Opção A (toolchain `i686-elf-*` instalada no sistema):
+
+```bash
+make
+```
+
+Opção B (sem `i686-elf-*`, usando toolchain host GNU):
+
+```bash
+make CC=gcc LD=ld OBJCOPY=objcopy NM=nm AR=ar RANLIB=ranlib
+```
+
+### 7. Rodar no QEMU
+
+```bash
+make run
+```
+
+ou direto:
+
+```bash
+qemu-system-i386 -drive format=raw,file=build/boot.img -boot c
+```
+
+### 8. Checklist rápido para Ubuntu host
+
+```bash
+cat /etc/os-release
+command -v nasm
+command -v qemu-system-i386
+command -v gcc
+```
+
+Se `i686-elf-gcc` não existir, use o override com `CC=gcc LD=ld ...` mostrado acima.
+
 ## Build
 
 ```bash

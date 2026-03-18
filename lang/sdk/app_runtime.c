@@ -100,6 +100,10 @@ void vibe_app_runtime_init(const struct vibe_app_context *ctx) {
 }
 
 void vibe_app_console_putc(char c) {
+    if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->console_putc) {
+        g_app_ctx->host->console_putc(c);
+        return;
+    }
     (void)vibe_app_syscall5(VIBE_APP_SYSCALL_TEXT_PUTC, (int)(unsigned char)c, 0, 0, 0, 0);
 }
 
@@ -113,10 +117,17 @@ void vibe_app_console_write(const char *text) {
 }
 
 int vibe_app_poll_key(void) {
+    if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->poll_key) {
+        return g_app_ctx->host->poll_key();
+    }
     return vibe_app_syscall5(VIBE_APP_SYSCALL_INPUT_KEY, 0, 0, 0, 0, 0);
 }
 
 void vibe_app_yield(void) {
+    if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->yield) {
+        g_app_ctx->host->yield();
+        return;
+    }
     (void)vibe_app_syscall5(VIBE_APP_SYSCALL_YIELD, 0, 0, 0, 0, 0);
 }
 
@@ -125,6 +136,56 @@ int vibe_app_read_file(const char *path, const char **data_out, int *size_out) {
         return -1;
     }
     return g_app_ctx->host->read_file(path, data_out, size_out);
+}
+
+int vibe_app_getcwd(char *buf, int max_len) {
+    if (!buf || max_len <= 0) {
+        return -1;
+    }
+    if (!g_app_ctx || !g_app_ctx->host || !g_app_ctx->host->getcwd) {
+        return -1;
+    }
+    return g_app_ctx->host->getcwd(buf, max_len);
+}
+
+int vibe_app_remove_dir(const char *path) {
+    if (!path) {
+        return -1;
+    }
+    if (!g_app_ctx || !g_app_ctx->host || !g_app_ctx->host->remove_dir) {
+        return -1;
+    }
+    return g_app_ctx->host->remove_dir(path);
+}
+
+int vibe_app_keyboard_set_layout(const char *name) {
+    if (!name) {
+        return -1;
+    }
+    if (!g_app_ctx || !g_app_ctx->host || !g_app_ctx->host->keyboard_set_layout) {
+        return -1;
+    }
+    return g_app_ctx->host->keyboard_set_layout(name);
+}
+
+int vibe_app_keyboard_get_layout(char *buf, int max_len) {
+    if (!buf || max_len <= 0) {
+        return -1;
+    }
+    if (!g_app_ctx || !g_app_ctx->host || !g_app_ctx->host->keyboard_get_layout) {
+        return -1;
+    }
+    return g_app_ctx->host->keyboard_get_layout(buf, max_len);
+}
+
+int vibe_app_keyboard_get_available_layouts(char *buf, int max_len) {
+    if (!buf || max_len <= 0) {
+        return -1;
+    }
+    if (!g_app_ctx || !g_app_ctx->host || !g_app_ctx->host->keyboard_get_available_layouts) {
+        return -1;
+    }
+    return g_app_ctx->host->keyboard_get_available_layouts(buf, max_len);
 }
 
 int vibe_app_read_line(char *buf, int max_len, const char *prompt) {

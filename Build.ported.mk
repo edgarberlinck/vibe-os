@@ -5,11 +5,60 @@
 #        make -f Build.ported.mk ported-cat
 #        etc
 
-CC := i686-elf-gcc
-LD := i686-elf-ld
-OBJCOPY := i686-elf-objcopy
-NM := i686-elf-nm
-PYTHON := python3
+TOOLCHAIN_PREFIX ?= i686-elf-
+HAS_CROSS_TOOLCHAIN := $(shell command -v $(TOOLCHAIN_PREFIX)gcc >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)ld >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)objcopy >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)nm >/dev/null 2>&1 && echo 1 || echo 0)
+
+CC_ORIGIN := $(origin CC)
+LD_ORIGIN := $(origin LD)
+OBJCOPY_ORIGIN := $(origin OBJCOPY)
+NM_ORIGIN := $(origin NM)
+
+ifeq ($(CC_ORIGIN),default)
+CC :=
+endif
+ifeq ($(LD_ORIGIN),default)
+LD :=
+endif
+ifeq ($(OBJCOPY_ORIGIN),default)
+OBJCOPY :=
+endif
+ifeq ($(NM_ORIGIN),default)
+NM :=
+endif
+
+ifeq ($(strip $(CC)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+CC := $(TOOLCHAIN_PREFIX)gcc
+else
+CC := gcc
+endif
+endif
+
+ifeq ($(strip $(LD)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+LD := $(TOOLCHAIN_PREFIX)ld
+else
+LD := ld
+endif
+endif
+
+ifeq ($(strip $(OBJCOPY)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+OBJCOPY := $(TOOLCHAIN_PREFIX)objcopy
+else
+OBJCOPY := objcopy
+endif
+endif
+
+ifeq ($(strip $(NM)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+NM := $(TOOLCHAIN_PREFIX)nm
+else
+NM := nm
+endif
+endif
+
+PYTHON ?= python3
 
 # Compiler flags - same as other apps
 CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
@@ -23,6 +72,7 @@ APP_RUNTIME := lang/sdk/app_runtime.c
 
 # Compat library (built via Build.compat.mk)
 COMPAT_LIB := build/libcompat.a
+include Build.compat.mk
 
 # === ECHO APP ===
 
@@ -135,6 +185,43 @@ $(WC_APP): $(WC_ELF)
 
 ported-wc: $(WC_APP)
 
+# === PWD APP ===
+
+PWD_SRCS := applications/ported/pwd/pwd.c
+PWD_OBJS := build/ported/pwd.o \
+	build/app_entry_pwd.o \
+	build/app_runtime_pwd.o
+
+PWD_ELF := build/ported/pwd.elf
+PWD_APP := build/ported/pwd.app
+
+build/app_entry_pwd.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"pwd\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_pwd.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/pwd.o: $(PWD_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(PWD_ELF): $(PWD_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(PWD_OBJS) $(COMPAT_LIB) -o $@
+
+$(PWD_APP): $(PWD_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Pwd app: $@"
+
+ported-pwd: $(PWD_APP)
+
 # === HEAD APP ===
 
 HEAD_SRCS := applications/ported/head/head.c
@@ -171,6 +258,80 @@ $(HEAD_APP): $(HEAD_ELF)
 	@echo "✓ Head app: $@"
 
 ported-head: $(HEAD_APP)
+
+# === SLEEP APP ===
+
+SLEEP_SRCS := applications/ported/sleep/sleep.c
+SLEEP_OBJS := build/ported/sleep.o \
+	build/app_entry_sleep.o \
+	build/app_runtime_sleep.o
+
+SLEEP_ELF := build/ported/sleep.elf
+SLEEP_APP := build/ported/sleep.app
+
+build/app_entry_sleep.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"sleep\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_sleep.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/sleep.o: $(SLEEP_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(SLEEP_ELF): $(SLEEP_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(SLEEP_OBJS) $(COMPAT_LIB) -o $@
+
+$(SLEEP_APP): $(SLEEP_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Sleep app: $@"
+
+ported-sleep: $(SLEEP_APP)
+
+# === RMDIR APP ===
+
+RMDIR_SRCS := applications/ported/rmdir/rmdir.c
+RMDIR_OBJS := build/ported/rmdir.o \
+	build/app_entry_rmdir.o \
+	build/app_runtime_rmdir.o
+
+RMDIR_ELF := build/ported/rmdir.elf
+RMDIR_APP := build/ported/rmdir.app
+
+build/app_entry_rmdir.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"rmdir\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_rmdir.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/rmdir.o: $(RMDIR_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(RMDIR_ELF): $(RMDIR_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(RMDIR_OBJS) $(COMPAT_LIB) -o $@
+
+$(RMDIR_APP): $(RMDIR_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Rmdir app: $@"
+
+ported-rmdir: $(RMDIR_APP)
 
 # === TAIL APP ===
 
@@ -333,8 +494,17 @@ ported-cat-clean:
 ported-wc-clean:
 	rm -f $(WC_OBJS) $(WC_ELF) $(WC_APP)
 
+ported-pwd-clean:
+	rm -f $(PWD_OBJS) $(PWD_ELF) $(PWD_APP)
+
 ported-head-clean:
 	rm -f $(HEAD_OBJS) $(HEAD_ELF) $(HEAD_APP)
+
+ported-sleep-clean:
+	rm -f $(SLEEP_OBJS) $(SLEEP_ELF) $(SLEEP_APP)
+
+ported-rmdir-clean:
+	rm -f $(RMDIR_OBJS) $(RMDIR_ELF) $(RMDIR_APP)
 
 ported-tail-clean:
 	rm -f $(TAIL_OBJS) $(TAIL_ELF) $(TAIL_APP)
@@ -348,6 +518,6 @@ ported-sed-clean:
 ported-loadkeys-clean:
 	rm -f $(LOADKEYS_OBJS) $(LOADKEYS_ELF) $(LOADKEYS_APP)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-head-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean
 
-.PHONY: ported-echo ported-cat ported-wc ported-head ported-tail ported-grep ported-sed ported-loadkeys ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-head-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean
+.PHONY: ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean

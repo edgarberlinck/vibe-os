@@ -51,6 +51,8 @@ struct mouse_state {
     uint8_t buttons;
 };
 
+#ifndef VIBE_VIDEO_MODE_DEFINED
+#define VIBE_VIDEO_MODE_DEFINED
 struct video_mode {
     uint32_t fb_addr;
     uint32_t width;
@@ -58,6 +60,7 @@ struct video_mode {
     uint32_t pitch;
     uint8_t bpp;
 };
+#endif
 
 typedef void (*userland_entry_t)(void);
 

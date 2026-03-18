@@ -1,9 +1,5 @@
-/* stdio.c - minimal stubs */
-#include "../include/compat/libc/stdio.h"
-#include <stdarg.h>
-
-FILE *stdout = NULL;
-FILE *stdin = NULL;  
-FILE *stderr = NULL;
-
-/* These are provided by app_runtime.h */
+/*
+ * stdio symbols are provided by lang/sdk/app_runtime.c.
+ * Keep this translation unit empty to avoid conflicting definitions when
+ * linking apps with --allow-multiple-definition.
+ */

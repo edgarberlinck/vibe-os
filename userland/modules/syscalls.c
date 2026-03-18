@@ -80,3 +80,15 @@ void sys_yield(void) {
 void sys_write_debug(const char *msg) {
     (void)syscall5(SYSCALL_WRITE_DEBUG, (int)(uintptr_t)msg, 0, 0, 0, 0);
 }
+
+int sys_keyboard_set_layout(const char *name) {
+    return syscall5(SYSCALL_KEYBOARD_SET_LAYOUT, (int)(uintptr_t)name, 0, 0, 0, 0);
+}
+
+int sys_keyboard_get_layout(char *buffer, int size) {
+    return syscall5(SYSCALL_KEYBOARD_GET_LAYOUT, (int)(uintptr_t)buffer, size, 0, 0, 0);
+}
+
+int sys_keyboard_get_available_layouts(char *buffer, int size) {
+    return syscall5(SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS, (int)(uintptr_t)buffer, size, 0, 0, 0);
+}

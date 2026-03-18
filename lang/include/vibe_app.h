@@ -32,6 +32,11 @@ struct vibe_app_host_api {
     void (*yield)(void);
     int (*read_file)(const char *path, const char **data_out, int *size_out);
     void (*write_debug)(const char *msg);
+    int (*getcwd)(char *buf, int max_len);
+    int (*remove_dir)(const char *path);
+    int (*keyboard_set_layout)(const char *name);
+    int (*keyboard_get_layout)(char *buf, int max_len);
+    int (*keyboard_get_available_layouts)(char *buf, int max_len);
 };
 
 struct vibe_app_context {

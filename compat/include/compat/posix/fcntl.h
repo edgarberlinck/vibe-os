@@ -17,6 +17,7 @@
 #define O_TRUNC    0x0200
 #define O_APPEND   0x0400
 #define O_NONBLOCK 0x0800
+#define O_ACCMODE  0x0003
 
 int open(const char *path, int oflag, ...);
 int fcntl(int fd, int cmd, ...);

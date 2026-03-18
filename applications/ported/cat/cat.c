@@ -1,61 +1,63 @@
 /*
- * Cat - VibeOS Ported Application
- * GNU coreutils cat implementation
- * 
- * Print FILE(s) to standard output.
- * 
- * Usage: cat [FILE]...
- * 
- * Concatenate FILE(s) to standard output.
- * With no FILE, or when FILE is -, read from standard input.
+ * Port adapted from OpenBSD compat/bin/cat/cat.c for VibeOS app runtime.
  */
 
 #include "compat/include/compat.h"
 
-/* Read and print a file by name */
-static int cat_file(const char *filename) {
-    int rc;
-    const char *data;
-    int size;
-    
-    if (!filename || filename[0] == '\0' || 
-        (filename[0] == '-' && filename[1] == '\0')) {
-        /* Read from stdin - stub for now */
-        printf("cat: stdin not supported yet\n");
-        return 0;
+#define CAT_BUFSIZE 256
+
+static int cat_fd(int fd) {
+    char buf[CAT_BUFSIZE];
+
+    for (;;) {
+        ssize_t nread = read(fd, buf, sizeof(buf));
+        if (nread < 0) {
+            return 1;
+        }
+        if (nread == 0) {
+            return 0;
+        }
+        if (write(STDOUT_FILENO, buf, (size_t)nread) != nread) {
+            return 1;
+        }
     }
-    
-    /* Try to read file via app runtime */
-    rc = vibe_app_read_file(filename, (const char **)&data, &size);
-    if (rc != 0 || !data || size <= 0) {
-        printf("cat: %s: No such file or directory\n", filename);
+}
+
+static int cat_file(const char *path) {
+    int fd;
+    int rc;
+
+    if (!path || (path[0] == '-' && path[1] == '\0')) {
+        return cat_fd(STDIN_FILENO);
+    }
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "cat: %s: no such file\n", path);
         return 1;
     }
-    
-    /* Output file contents */
-    for (int i = 0; i < size; i++) {
-        putchar((unsigned char)data[i]);
+
+    rc = cat_fd(fd);
+    (void)close(fd);
+    if (rc != 0) {
+        fprintf(stderr, "cat: %s: read error\n", path);
+        return 1;
     }
-    
     return 0;
 }
 
 int vibe_app_main(int argc, char **argv) {
-    int exit_status = 0;
-    
+    int status = 0;
+    int i;
+
     if (argc <= 1) {
-        /* No files - read from stdin (stubbed) */
-        printf("cat: reading from stdin not yet implemented\n");
-        return 0;
+        return cat_fd(STDIN_FILENO);
     }
-    
-    /* Process each file argument */
-    for (int i = 1; i < argc; i++) {
-        int rc = cat_file(argv[i]);
-        if (rc != 0) {
-            exit_status = 1;
+
+    for (i = 1; i < argc; ++i) {
+        if (cat_file(argv[i]) != 0) {
+            status = 1;
         }
     }
-    
-    return exit_status;
+    return status;
 }

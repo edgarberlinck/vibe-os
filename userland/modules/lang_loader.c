@@ -70,6 +70,70 @@ static int host_read_file(const char *path, const char **data_out, int *size_out
     return 0;
 }
 
+static int host_getcwd(char *buf, int max_len) {
+    int i = 0;
+    char cwd[80];
+
+    if (!buf || max_len <= 0) {
+        return -1;
+    }
+
+    fs_build_path(g_fs_cwd, cwd, (int)sizeof(cwd));
+    while (cwd[i] != '\0' && i < (max_len - 1)) {
+        buf[i] = cwd[i];
+        ++i;
+    }
+    buf[i] = '\0';
+    return 0;
+}
+
+static int host_remove_dir(const char *path) {
+    int node;
+    int rc;
+
+    if (!path || path[0] == '\0') {
+        return -1;
+    }
+
+    node = fs_resolve(path);
+    if (node < 0) {
+        return -1;
+    }
+    if (!g_fs_nodes[node].is_dir) {
+        return -3;
+    }
+
+    rc = fs_remove(path);
+    if (rc == -2) {
+        return -2;
+    }
+    if (rc != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int host_keyboard_set_layout(const char *name) {
+    if (!name || name[0] == '\0') {
+        return -1;
+    }
+    return sys_keyboard_set_layout(name);
+}
+
+static int host_keyboard_get_layout(char *buf, int max_len) {
+    if (!buf || max_len <= 0) {
+        return -1;
+    }
+    return sys_keyboard_get_layout(buf, max_len);
+}
+
+static int host_keyboard_get_available_layouts(char *buf, int max_len) {
+    if (!buf || max_len <= 0) {
+        return -1;
+    }
+    return sys_keyboard_get_available_layouts(buf, max_len);
+}
+
 static const struct vibe_app_host_api g_host_api = {
     VIBE_APP_ABI_VERSION,
     console_putc,
@@ -77,7 +141,12 @@ static const struct vibe_app_host_api g_host_api = {
     sys_poll_key,
     sys_yield,
     host_read_file,
-    sys_write_debug
+    sys_write_debug,
+    host_getcwd,
+    host_remove_dir,
+    host_keyboard_set_layout,
+    host_keyboard_get_layout,
+    host_keyboard_get_available_layouts
 };
 
 static int lang_is_external_command(const char *name) {
@@ -92,6 +161,7 @@ static int lang_is_external_command(const char *name) {
 }
 
 static int lang_load_directory(struct vibe_appfs_directory *directory) {
+    static uint8_t raw_directory[VIBE_APPFS_DIRECTORY_SECTORS * 512u];
     uint32_t checksum;
 
     if (!directory) {
@@ -99,10 +169,12 @@ static int lang_load_directory(struct vibe_appfs_directory *directory) {
     }
 
     if (sys_storage_read_sectors(VIBE_APPFS_DIRECTORY_LBA,
-                                 directory,
+                                 raw_directory,
                                  VIBE_APPFS_DIRECTORY_SECTORS) != 0) {
         return -1;
     }
+
+    lang_memcpy(directory, raw_directory, (uint32_t)sizeof(*directory));
 
     if (directory->magic != VIBE_APPFS_MAGIC ||
         directory->version != VIBE_APPFS_VERSION ||
@@ -210,12 +282,8 @@ static void lang_write_load_error(const char *name) {
 }
 
 static void lang_debug_vga(int row, const char *text) {
-    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
-    int index = row * 80;
-
-    while (text && *text && index < (80 * 25)) {
-        vga[index++] = (uint16_t)(0x1F00u | (uint8_t)*text++);
-    }
+    (void)row;
+    (void)text;
 }
 
 static void lang_write_missing_runtime(const char *name) {
@@ -228,22 +296,7 @@ static int lang_call_app(vibe_app_entry_t entry,
                          const struct vibe_app_context *ctx,
                          int argc,
                          char **argv) {
-    int ret;
-
-    __asm__ volatile(
-        "push %[argv]\n\t"
-        "push %[argc]\n\t"
-        "push %[ctx]\n\t"
-        "call *%[entry]\n\t"
-        "add $12, %%esp\n\t"
-        : "=a"(ret)
-        : [ctx] "r"(ctx),
-          [argc] "r"(argc),
-          [argv] "r"(argv),
-          [entry] "r"(entry)
-        : "ecx", "edx", "memory");
-
-    return ret;
+    return entry(ctx, argc, argv);
 }
 
 int lang_try_run(int argc, char **argv) {
@@ -282,13 +335,8 @@ int lang_try_run(int argc, char **argv) {
         lang_write_load_error(entry->name);
         return 0;
     }
-
     app_entry = (vibe_app_entry_t)(uintptr_t)(VIBE_APP_LOAD_ADDR + header->entry_offset);
-    lang_debug_vga(20, "loader: before call");
-    sys_write_debug("lang: before app call\n");
     (void)lang_call_app(app_entry, &g_app_ctx, argc, argv);
-    lang_debug_vga(21, "loader: app returned");
-    sys_write_debug("lang: app returned\n");
     lang_memcpy((void *)(uintptr_t)VIBE_APP_LOAD_ADDR,
                 (const void *)(uintptr_t)VIBE_APP_LOAD_ADDR,
                 0u);

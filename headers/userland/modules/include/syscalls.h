@@ -21,5 +21,8 @@ int sys_gfx_info(struct video_mode *mode);
 int sys_getpid(void);
 void sys_yield(void);
 void sys_write_debug(const char *msg);
+int sys_keyboard_set_layout(const char *name);
+int sys_keyboard_get_layout(char *buffer, int size);
+int sys_keyboard_get_available_layouts(char *buffer, int size);
 
 #endif // SYSCALLS_H

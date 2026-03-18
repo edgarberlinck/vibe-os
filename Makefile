@@ -1,4 +1,5 @@
 SHELL := /bin/sh
+.DEFAULT_GOAL := all
 
 # ARCHITECTURE:
 # - make            : Build kernel (no glibc, uses stubs)
@@ -8,19 +9,118 @@ SHELL := /bin/sh
 # - make glibc-clean: Clean glibc
 # - make apps-clean : Clean apps
 
+UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
+TOOLCHAIN_PREFIX ?= i686-elf-
+HAS_CROSS_TOOLCHAIN := $(shell command -v $(TOOLCHAIN_PREFIX)gcc >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)ld >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)objcopy >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)nm >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)ar >/dev/null 2>&1 && command -v $(TOOLCHAIN_PREFIX)ranlib >/dev/null 2>&1 && echo 1 || echo 0)
+ALLOW_HOST_TOOLCHAIN ?= 0
+
+# Capture original origins before overriding built-in defaults.
+CC_ORIGIN := $(origin CC)
+LD_ORIGIN := $(origin LD)
+NM_ORIGIN := $(origin NM)
+OBJCOPY_ORIGIN := $(origin OBJCOPY)
+AR_ORIGIN := $(origin AR)
+RANLIB_ORIGIN := $(origin RANLIB)
+AS_ORIGIN := $(origin AS)
+
+# GNU make built-ins (cc, ld, ar...) should not block our auto-detection.
+ifeq ($(CC_ORIGIN),default)
+CC :=
+endif
+ifeq ($(LD_ORIGIN),default)
+LD :=
+endif
+ifeq ($(NM_ORIGIN),default)
+NM :=
+endif
+ifeq ($(OBJCOPY_ORIGIN),default)
+OBJCOPY :=
+endif
+ifeq ($(AR_ORIGIN),default)
+AR :=
+endif
+ifeq ($(RANLIB_ORIGIN),default)
+RANLIB :=
+endif
+ifeq ($(AS_ORIGIN),default)
+AS :=
+endif
+
+ifeq ($(strip $(AS)),)
 AS := nasm
-CC := i686-elf-gcc
-LD := i686-elf-ld
-NM := i686-elf-nm
-OBJCOPY := i686-elf-objcopy
+endif
+ifeq ($(strip $(QEMU)),)
 QEMU := qemu-system-i386
+endif
+ifeq ($(strip $(PYTHON)),)
+PYTHON := python3
+endif
+
+ifeq ($(strip $(CC)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+CC := $(TOOLCHAIN_PREFIX)gcc
+else
+CC := gcc
+endif
+endif
+
+ifeq ($(strip $(LD)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+LD := $(TOOLCHAIN_PREFIX)ld
+else
+LD := ld
+endif
+endif
+
+ifeq ($(strip $(NM)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+NM := $(TOOLCHAIN_PREFIX)nm
+else
+NM := nm
+endif
+endif
+
+ifeq ($(strip $(OBJCOPY)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+OBJCOPY := $(TOOLCHAIN_PREFIX)objcopy
+else
+OBJCOPY := objcopy
+endif
+endif
+
+ifeq ($(strip $(AR)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+AR := $(TOOLCHAIN_PREFIX)ar
+else
+AR := ar
+endif
+endif
+
+ifeq ($(strip $(RANLIB)),)
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+RANLIB := $(TOOLCHAIN_PREFIX)ranlib
+else
+RANLIB := ranlib
+endif
+endif
+
+TOOLCHAIN_MODE := host
+ifeq ($(HAS_CROSS_TOOLCHAIN),1)
+TOOLCHAIN_MODE := cross
+endif
+
+ifeq ($(UNAME_S),Darwin)
+ifneq ($(HAS_CROSS_TOOLCHAIN),1)
+ifneq ($(ALLOW_HOST_TOOLCHAIN),1)
+$(error Toolchain 'i686-elf-*' nao encontrada no macOS. Instale com 'brew install i686-elf-gcc' (ou rode com ALLOW_HOST_TOOLCHAIN=1 e toolchain host por sua conta))
+endif
+endif
+endif
 
 BUILD_DIR := build
 BOOT_DIR := boot
 USERLAND_DIR := userland
 LINKER_DIR := linker
-PYTHON := python3
-
 BOOT_KERNEL_SECTORS := 384
 APPFS_DIRECTORY_LBA := 385
 APPFS_DIRECTORY_SECTORS := 8
@@ -177,21 +277,32 @@ HEAD_APP_BIN := $(BUILD_DIR)/ported/head.app
 TAIL_APP_BIN := $(BUILD_DIR)/ported/tail.app
 GREP_APP_BIN := $(BUILD_DIR)/ported/grep.app
 LOADKEYS_APP_BIN := $(BUILD_DIR)/ported/loadkeys.app
+PWD_APP_BIN := $(BUILD_DIR)/ported/pwd.app
+SLEEP_APP_BIN := $(BUILD_DIR)/ported/sleep.app
+RMDIR_APP_BIN := $(BUILD_DIR)/ported/rmdir.app
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN)
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
 
-all: $(IMAGE) $(USERLAND_MAIN_BIN)
+REQUIRED_BUILD_TOOLS := $(AS) $(CC) $(LD) $(NM) $(OBJCOPY) $(AR) $(RANLIB) $(PYTHON)
+
+all: check-tools $(IMAGE) $(USERLAND_MAIN_BIN)
 # Note: glibc separate build available via: make -f Build.glibc.mk glibc-build
 # To link glibc instead of stubs, modify KERNEL_ELF dependencies below
 
 check-tools:
-	@for tool in $(REQUIRED_TOOLS); do \
+	@echo "Toolchain mode: $(TOOLCHAIN_MODE) ($(UNAME_S))"; \
+	for tool in $(REQUIRED_BUILD_TOOLS); do \
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
-			echo "macOS (Homebrew): brew install nasm i686-elf-gcc qemu"; \
+			if [ "$(UNAME_S)" = "Darwin" ]; then \
+				echo "macOS (Homebrew): brew install nasm i686-elf-gcc qemu"; \
+			else \
+				echo "Linux: instale binutils/gcc 32-bit + nasm + qemu-system-x86"; \
+				echo "Ou use toolchain cruzada i686-elf-*."; \
+			fi; \
 			exit 1; \
 		fi; \
 	done
@@ -310,8 +421,10 @@ $(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
 
 # Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
 # Built via Build.ported.mk
-$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN): $(COMPAT_LIB)
-	@make -f Build.ported.mk ported-echo ported-cat ported-wc ported-head ported-tail ported-grep ported-loadkeys 2>&1 | grep -v "^make\|Leaving\|Entering"
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN): $(COMPAT_LIB)
+	@$(MAKE) -f Build.ported.mk \
+		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \
+		ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-loadkeys 2>&1 | grep -v "^make\|Leaving\|Entering"
 
 $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS)
 	dd if=/dev/zero of=$@ bs=1474560 count=1

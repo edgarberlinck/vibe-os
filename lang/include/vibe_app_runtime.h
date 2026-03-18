@@ -12,6 +12,11 @@ void vibe_app_console_write(const char *text);
 int vibe_app_poll_key(void);
 void vibe_app_yield(void);
 int vibe_app_read_file(const char *path, const char **data_out, int *size_out);
+int vibe_app_getcwd(char *buf, int max_len);
+int vibe_app_remove_dir(const char *path);
+int vibe_app_keyboard_set_layout(const char *name);
+int vibe_app_keyboard_get_layout(char *buf, int max_len);
+int vibe_app_keyboard_get_available_layouts(char *buf, int max_len);
 int vibe_app_read_line(char *buf, int max_len, const char *prompt);
 
 void *vibe_app_malloc(size_t size);

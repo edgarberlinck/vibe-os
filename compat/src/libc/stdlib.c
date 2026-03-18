@@ -1,16 +1,10 @@
 #include "../include/compat/libc/stdlib.h"
 #include "../include/compat/libc/string.h"
+#include <lang/include/vibe_app_runtime.h>
 #include <stdint.h>
 
-/* Memory management */
-static uint8_t g_vibe_heap[512 * 1024];
-static size_t g_vibe_heap_ptr = 0;
-
 void *malloc(size_t size) {
-    if (g_vibe_heap_ptr + size > sizeof(g_vibe_heap)) return NULL;
-    void *p = &g_vibe_heap[g_vibe_heap_ptr];
-    g_vibe_heap_ptr += (size + 15) & ~15;
-    return p;
+    return vibe_app_malloc(size);
 }
 
 void *calloc(size_t nmemb, size_t size) {
@@ -21,12 +15,10 @@ void *calloc(size_t nmemb, size_t size) {
 }
 
 void *realloc(void *ptr, size_t size) {
-    void *newp = malloc(size);
-    if (newp && ptr) memcpy(newp, ptr, size); // TODO: This is not a correct implementation of realloc
-    return newp;
+    return vibe_app_realloc(ptr, size);
 }
 
-void free(void *ptr) { (void)ptr; }
+void free(void *ptr) { vibe_app_free(ptr); }
 
 void exit(int status) { 
     // TODO: This should terminate the process

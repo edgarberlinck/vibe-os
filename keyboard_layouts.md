@@ -286,3 +286,40 @@ Objetivo final:
 - ter `pt-br`/ABNT2 funcional com Ç
 - ter novos alvos de Make úteis para build completo e imagem bootável real
 - tudo isso sem quebrar o sistema atual
+
+====================================================================
+AUDITORIA (2026-03-18)
+====================================================================
+
+Status geral: PARCIALMENTE IMPLEMENTADO
+
+Implementado e validado em código:
+- arquitetura de keymaps em `kernel/drivers/input/keymaps/`
+- layouts: `us`, `pt-br`, `br-abnt2`, `us-intl`, `es`, `fr`, `de`
+- layout ativo mantido no kernel (`g_current_keymap`)
+- troca de layout em runtime via syscall (`SYSCALL_KEYBOARD_SET_LAYOUT`)
+- comando `loadkeys` compilável como app externo
+- alvo `make full`, `make img`, `make imb` existentes
+
+Correções aplicadas nesta auditoria:
+- `loadkeys -help` agora é aceito (antes só `--help`)
+- `make` padrão agora aponta para `all` (antes podia cair em alvo de compat)
+- loop do desktop agora sai imediatamente ao clicar em `Logout`
+  (evita ficar preso em `sys_sleep()` antes de retornar ao shell)
+- IRQ0 do timer foi desmascarada no PIC (`kernel_irq_enable`)
+  para evitar congelamento por `hlt` sem interrupção periódica
+
+Incompleto / pendente:
+- validação fim-a-fim de `make`, `make full`, `make img`, `make imb` no ambiente atual
+  (toolchain ausente: `i686-elf-gcc`; assembler ausente: `nasm`)
+- validação em hardware real de `pt-br`/Ç via digitação física
+- `make imb` gera cópia da imagem padrão; ainda não há pipeline explícito
+  diferenciado para mídia real além do artefato separado
+
+Checklist incremental:
+- [x] arquitetura de keymaps no kernel
+- [x] `loadkeys us`, `loadkeys pt-br`, `loadkeys br-abnt2`
+- [x] `loadkeys -help` e `--help`
+- [x] alvos `make full`, `make img`, `make imb`
+- [x] correção de freeze por `sys_sleep/hlt` (IRQ0 + saída imediata no logout)
+- [ ] validação em hardware real (ThinkPad T400) após correções

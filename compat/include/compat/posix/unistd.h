@@ -33,6 +33,8 @@ void _exit(int status);
 
 /* Environment */
 char *getenv(const char *name);
+char *getcwd(char *buf, size_t size);
+int rmdir(const char *path);
 
 /* Sleep/delay */
 unsigned int sleep(unsigned int seconds);
