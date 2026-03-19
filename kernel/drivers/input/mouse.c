@@ -11,12 +11,6 @@
 #define PS2_TIMEOUT_SPINS 1000000u
 #define PS2_DRAIN_LIMIT 128u
 
-struct mouse_state {
-    int x;
-    int y;
-    uint8_t buttons;
-};
-
 #define MOUSE_EVENT_QUEUE_CAPACITY 128u
 
 static volatile struct mouse_state g_kernel_mouse = {0};
