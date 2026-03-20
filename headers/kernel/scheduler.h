@@ -20,5 +20,6 @@ void yield(void);
 
 /* return currently executing process (may be NULL) */
 process_t *scheduler_current(void);
+process_t *scheduler_current_for_cpu(uint32_t cpu_index);
 
 #endif /* KERNEL_SCHEDULER_H */

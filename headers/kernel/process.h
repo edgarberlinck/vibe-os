@@ -32,6 +32,7 @@ typedef struct process {
     regs_t regs;            /* processor state (must be first field) */
     int pid;                /* process identifier */
     void *stack;            /* base pointer of allocated stack memory */
+    int current_cpu;        /* CPU que esta executando este processo, -1 se nenhuma */
     enum process_state state;
     struct process *next;   /* linked‑list pointer for scheduler */
 } process_t;

@@ -23,6 +23,7 @@ process_t *process_create(void (*entry)(void)) {
     memset(p, 0, sizeof(*p));
 
     p->pid = g_next_pid++;
+    p->current_cpu = -1;
     p->state = PROCESS_READY;
     p->next = NULL;
 

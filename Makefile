@@ -121,24 +121,33 @@ BUILD_DIR := build
 BOOT_DIR := boot
 USERLAND_DIR := userland
 LINKER_DIR := linker
-BOOT_KERNEL_SECTORS := 1024
-APPFS_DIRECTORY_LBA := 1025
+BOOT_KERNEL_SECTORS := 1280
+APPFS_DIRECTORY_LBA := 1281
 APPFS_DIRECTORY_SECTORS := 8
 APPFS_APP_AREA_SECTORS := 1536
 PERSIST_SECTOR_COUNT := 640
-IMAGE_ASSET_START_LBA := 3209
-IMAGE_TOTAL_SECTORS := 65536
+IMAGE_ASSET_START_LBA := 3465
+IMAGE_TOTAL_SECTORS := 3417969
 DOOM_WAD_SRC := userland/applications/games/DOOM/DOOM.WAD
 DOOM_WAD_IMAGE_LBA := $(IMAGE_ASSET_START_LBA)
+CRAFT_TEXTURE_SRC := userland/applications/games/craft/upstream/textures/texture.png
+CRAFT_FONT_SRC := userland/applications/games/craft/upstream/textures/font.png
+CRAFT_SKY_SRC := userland/applications/games/craft/upstream/textures/sky.png
+CRAFT_SIGN_SRC := userland/applications/games/craft/upstream/textures/sign.png
+CRAFT_TEXTURE_IMAGE_LBA := 30000
+CRAFT_FONT_IMAGE_LBA := 30128
+CRAFT_SKY_IMAGE_LBA := 30256
+CRAFT_SIGN_IMAGE_LBA := 30416
 IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
+CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
 
 # Kernel sources - kernel only, no stage2
-KERNEL_SRCS := $(shell find kernel -name '*.c')
-KEYMAP_SRCS := $(shell find kernel/drivers/input/keymaps -name '*.c')
+KERNEL_SRCS := $(shell find kernel -name '*.c' ! -name '* *')
+KEYMAP_SRCS := $(shell find kernel/drivers/input/keymaps -name '*.c' ! -name '* *')
 KERNEL_OBJS := $(addprefix $(BUILD_DIR)/,$(patsubst %.c,%.o,$(KERNEL_SRCS)))
 KEYMAP_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KEYMAP_SRCS))
 
-KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
+KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm' ! -name '* *')
 KERNEL_ASM_OBJS := $(patsubst kernel_asm/%.asm,$(BUILD_DIR)/kernel_asm/%.o,$(KERNEL_ASM_SRCS))
 
 # Userland linked into the kernel image.
@@ -207,12 +216,36 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/games/brick_race.c \
 	$(USERLAND_DIR)/applications/games/flap_birb.c \
 	$(USERLAND_DIR)/applications/games/doom.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_app.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_gl_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_glfw_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_curl_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_thread_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_auth_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_client_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_db_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/world.c \
+	$(USERLAND_DIR)/applications/games/craft/noise.c \
 	$(USERLAND_DIR)/applications/games/doom_port/doom_port_main.c \
 	$(USERLAND_DIR)/applications/games/doom_port/doom_libc_shim.c \
 	$(USERLAND_DIR)/applications/games/doom_port/i_system_vibe.c \
 	$(USERLAND_DIR)/applications/games/doom_port/i_video_vibe.c \
 	$(USERLAND_DIR)/applications/games/doom_port/i_sound_vibe.c \
 	$(USERLAND_DIR)/applications/games/doom_port/i_net_vibe.c
+
+ifeq ($(CRAFT_UPSTREAM_EXPERIMENTAL),1)
+USERLAND_SRCS += \
+	$(USERLAND_DIR)/applications/games/craft/craft_math_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_util_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/upstream/deps/lodepng/lodepng.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_map.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_matrix.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_ring.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_sign.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_item.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_cube.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_runner.c
+endif
 USERLAND_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 
 DOOM_SRC_DIR := $(USERLAND_DIR)/applications/games/DOOM/linuxdoom-1.10
@@ -304,6 +337,8 @@ DOOM_SYMBOL_REMAP = \
 	-Dfscanf=doom_fscanf \
 	-Daccess=doom_access \
 	-Dmkdir=doom_mkdir \
+	-Dopen=doom_open \
+	-Dclose=doom_close \
 	-Dread=doom_read \
 	-Dwrite=doom_write \
 	-Dlseek=doom_lseek \
@@ -353,6 +388,8 @@ $(BUILD_DIR)/lang_apps_python_%.o: lang/apps/python/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 BOOT_BIN := $(BUILD_DIR)/boot.bin
+AP_TRAMPOLINE_BIN := $(BUILD_DIR)/ap_trampoline.bin
+AP_TRAMPOLINE_OBJ := $(BUILD_DIR)/ap_trampoline_blob.o
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 USERLAND_MAIN_ELF := $(BUILD_DIR)/userland-main.elf
@@ -398,6 +435,22 @@ PYTHON_APP_OBJS := \
 PYTHON_APP_ELF := $(BUILD_DIR)/lang/python.elf
 PYTHON_APP_BIN := $(BUILD_DIR)/lang/python.app
 
+JAVA_APP_BUILD_DIR := $(BUILD_DIR)/lang/java
+JAVA_APP_OBJS := \
+	$(JAVA_APP_BUILD_DIR)/app_entry.o \
+	$(JAVA_APP_BUILD_DIR)/app_runtime.o \
+	$(JAVA_APP_BUILD_DIR)/java_main.o
+JAVA_APP_ELF := $(BUILD_DIR)/lang/java.elf
+JAVA_APP_BIN := $(BUILD_DIR)/lang/java.app
+
+JAVAC_APP_BUILD_DIR := $(BUILD_DIR)/lang/javac
+JAVAC_APP_OBJS := \
+	$(JAVAC_APP_BUILD_DIR)/app_entry.o \
+	$(JAVAC_APP_BUILD_DIR)/app_runtime.o \
+	$(JAVAC_APP_BUILD_DIR)/javac_main.o
+JAVAC_APP_ELF := $(BUILD_DIR)/lang/javac.elf
+JAVAC_APP_BIN := $(BUILD_DIR)/lang/javac.app
+
 ECHO_APP_BIN := $(BUILD_DIR)/ported/echo.app
 CAT_APP_BIN := $(BUILD_DIR)/ported/cat.app
 WC_APP_BIN := $(BUILD_DIR)/ported/wc.app
@@ -413,7 +466,7 @@ FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(JAVA_APP_BIN) $(JAVAC_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
@@ -450,9 +503,25 @@ $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
 		exit 1; \
 	fi
 
+# Prevent GNU make from applying its built-in "link a single .o into an
+# executable with the same basename" rule to build/userland/userland.
+$(BUILD_DIR)/userland/userland:
+	@true
+$(BUILD_DIR)/userland/applications/games/doom:
+	@true
+$(BUILD_DIR)/userland/applications/games/craft:
+	@true
+$(BUILD_DIR)/userland/applications/games/DOOM:
+	@true
+
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/userland/applications/games/craft/upstream/deps/lodepng/lodepng.o: userland/applications/games/craft/upstream/deps/lodepng/lodepng.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DLODEPNG_NO_COMPILE_DISK -c $< -o $@
+
 
 $(BUILD_DIR)/%.o: %.asm
 	@mkdir -p $(dir $@)
@@ -506,8 +575,38 @@ $(PYTHON_APP_BUILD_DIR)/python_main.o: lang/apps/python/python_main.c | $(BUILD_
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
+$(JAVA_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"java\" -DVIBE_APP_BUILD_HEAP_SIZE=262144u -c $< -o $@
+
+$(JAVA_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(JAVA_APP_BUILD_DIR)/java_main.o: lang/apps/java/java_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(JAVAC_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"javac\" -DVIBE_APP_BUILD_HEAP_SIZE=262144u -c $< -o $@
+
+$(JAVAC_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(JAVAC_APP_BUILD_DIR)/javac_main.o: lang/apps/javac/javac_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(AP_TRAMPOLINE_BIN): $(BOOT_DIR)/ap_trampoline.asm | $(BUILD_DIR)
+	$(AS) -f bin $< -o $@
+
+$(AP_TRAMPOLINE_OBJ): $(AP_TRAMPOLINE_BIN) | $(BUILD_DIR)
+	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
+
+$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -517,8 +616,8 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 		exit 1; \
 	fi
 
-$(USERLAND_MAIN_ELF): $(USERLAND_OBJS) $(LINKER_DIR)/userland.ld
-	$(LD) $(LDFLAGS_USERLAND) $(USERLAND_OBJS) -o $@
+$(USERLAND_MAIN_ELF): $(USERLAND_OBJS) $(LINKER_DIR)/userland.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_USERLAND) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
 
 $(USERLAND_MAIN_BIN): $(USERLAND_MAIN_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -551,6 +650,20 @@ $(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
 
+$(JAVA_APP_ELF): $(JAVA_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(JAVA_APP_OBJS) -o $@
+
+$(JAVA_APP_BIN): $(JAVA_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(JAVAC_APP_ELF): $(JAVAC_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(JAVAC_APP_OBJS) -o $@
+
+$(JAVAC_APP_BIN): $(JAVAC_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
 # Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
 # Build once via stamp to avoid parallel duplicate sub-make executions.
 $(PORTED_APPS_STAMP): $(COMPAT_LIB)
@@ -562,8 +675,16 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB)
 
 $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
-$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC)
-	dd if=/dev/zero of=$@ bs=512 count=$(IMAGE_TOTAL_SECTORS)
+$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
+	@rm -f $@
+	@bytes=$$(( $(IMAGE_TOTAL_SECTORS) * 512 )); \
+		if command -v truncate >/dev/null 2>&1; then \
+			truncate -s "$$bytes" $@; \
+		elif command -v mkfile >/dev/null 2>&1; then \
+			mkfile -n "$$bytes" $@; \
+		else \
+			dd if=/dev/zero of=$@ bs=512 count=0 seek=$(IMAGE_TOTAL_SECTORS); \
+		fi
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc
 	$(PYTHON) tools/build_appfs.py --image $@ --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
@@ -580,6 +701,25 @@ $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC)
 		dd if="$(DOOM_WAD_SRC)" of="$@" bs=512 seek=$(DOOM_WAD_IMAGE_LBA) conv=notrunc; \
 		printf "DOOM.WAD lba=%s sectors=%s bytes=%s\n" "$(DOOM_WAD_IMAGE_LBA)" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
 	fi
+	@for asset in \
+		"$(CRAFT_TEXTURE_SRC):$(CRAFT_TEXTURE_IMAGE_LBA):texture.png" \
+		"$(CRAFT_FONT_SRC):$(CRAFT_FONT_IMAGE_LBA):font.png" \
+		"$(CRAFT_SKY_SRC):$(CRAFT_SKY_IMAGE_LBA):sky.png" \
+		"$(CRAFT_SIGN_SRC):$(CRAFT_SIGN_IMAGE_LBA):sign.png"; do \
+		src=$${asset%%:*}; \
+		rest=$${asset#*:}; \
+		lba=$${rest%%:*}; \
+		name=$${rest##*:}; \
+		size=$$(wc -c < "$$src" | tr -d '[:space:]'); \
+		sectors=$$(((size + 511) / 512)); \
+		end_lba=$$(( lba + sectors )); \
+		if [ "$$end_lba" -gt "$(IMAGE_TOTAL_SECTORS)" ]; then \
+			echo "Erro: $$name excede a imagem final ($$end_lba > $(IMAGE_TOTAL_SECTORS) setores)."; \
+			exit 1; \
+		fi; \
+		dd if="$$src" of="$@" bs=512 seek="$$lba" conv=notrunc; \
+		printf "CRAFT.%s lba=%s sectors=%s bytes=%s\n" "$$name" "$$lba" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
+	done
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
@@ -647,6 +787,8 @@ apps: glibc-core | bin lib
 	@if [ -f "$(JS_APP_BIN)" ]; then cp $(JS_APP_BIN) bin/js; else echo "WARNING: js app not found"; fi
 	@if [ -f "$(RUBY_APP_BIN)" ]; then cp $(RUBY_APP_BIN) bin/ruby; else echo "WARNING: ruby app not found"; fi
 	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; else echo "WARNING: python app not found"; fi
+	@if [ -f "$(JAVA_APP_BIN)" ]; then cp $(JAVA_APP_BIN) bin/java; else echo "WARNING: java app not found"; fi
+	@if [ -f "$(JAVAC_APP_BIN)" ]; then cp $(JAVAC_APP_BIN) bin/javac; else echo "WARNING: javac app not found"; fi
 	@if [ -f "build/libglibc-full.a" ]; then cp build/libglibc-full.a lib/libglibc.a; else cp build/libglibc-core.a lib/libglibc.a; fi || true
 	@echo "Apps built to /bin"
 
@@ -667,6 +809,8 @@ apps-clean:
 	rm -f $(JS_APP_OBJS) $(JS_APP_ELF) $(JS_APP_BIN)
 	rm -f $(RUBY_APP_OBJS) $(RUBY_APP_ELF) $(RUBY_APP_BIN)
 	rm -f $(PYTHON_APP_OBJS) $(PYTHON_APP_ELF) $(PYTHON_APP_BIN)
+	rm -f $(JAVA_APP_OBJS) $(JAVA_APP_ELF) $(JAVA_APP_BIN)
+	rm -f $(JAVAC_APP_OBJS) $(JAVAC_APP_ELF) $(JAVAC_APP_BIN)
 
 # Standalone app compilation (requires vendor builds)
 # These compile each app to /bin independently
@@ -686,16 +830,27 @@ app-ruby:
 app-python:
 	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; echo "✓ /bin/python ready"; else echo "ℹ python.app not built. Requires micropython vendor. See BUILD_LANGS.md"; fi
 
+app-java: $(JAVA_APP_BIN) | bin
+	@echo "Copying java to /bin..."
+	@cp $(JAVA_APP_BIN) bin/java
+	@echo "✓ /bin/java ready"
+
+app-javac: $(JAVAC_APP_BIN) | bin
+	@echo "Copying javac to /bin..."
+	@cp $(JAVAC_APP_BIN) bin/javac
+	@echo "✓ /bin/javac ready"
+
 clean:
 	rm -rf $(BUILD_DIR)
 
 full: clean all
 
-img: all
+img: $(IMAGE)
+	@echo "Imagem pronta: $(IMAGE)"
 
 imb: $(IMAGE)
 	@echo "Copiando imagem para build/vibe-os-usb.img"
 	@cp $(IMAGE) build/vibe-os-usb.img
 	@echo "Imagem para hardware real pronta: build/vibe-os-usb.img"
 
--include $(shell test -d $(BUILD_DIR) && find $(BUILD_DIR) -name '*.d' -print)
+-include $(shell test -d $(BUILD_DIR) && find $(BUILD_DIR) -name '*.d' ! -name '* *' -print)
