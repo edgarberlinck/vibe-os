@@ -135,6 +135,8 @@ static int g_clipboard_node = -1;
 static int g_launch_editor_pending = 0;
 static int g_launch_editor_nano = 0;
 static char g_launch_editor_path[80];
+static int g_launch_terminal_pending = 0;
+static char g_launch_terminal_command[INPUT_MAX + 1];
 static int g_fm_context_has_wallpaper_action = 0;
 struct resolution_option {
     uint16_t width;
@@ -1542,7 +1544,7 @@ static void draw_start_menu_with_tab(enum start_menu_tab active_tab,
         "Sketchpad",
         "Personalizar",
         "Nano",
-        "Terminal 2"
+        "Vibefetch"
     };
     static const char *games_labels[START_MENU_ITEM_COUNT - 1] = {
         "Snake",
@@ -1871,6 +1873,16 @@ void desktop_main(void) {
         g_launch_editor_pending = 0;
         g_launch_editor_nano = 0;
         g_launch_editor_path[0] = '\0';
+        dirty = 1;
+    }
+
+    if (g_launch_terminal_pending) {
+        int idx = open_window_or_focus_existing(APP_TERMINAL, &focused);
+        if (idx >= 0) {
+            terminal_run_command(&g_terms[g_windows[idx].instance], g_launch_terminal_command, 1);
+        }
+        g_launch_terminal_pending = 0;
+        g_launch_terminal_command[0] = '\0';
         dirty = 1;
     }
 
@@ -2407,6 +2419,15 @@ void desktop_main(void) {
                                     int nano_window = open_window_or_focus_existing(APP_EDITOR, &focused);
                                     if (nano_window >= 0) {
                                         editor_set_nano_mode(&g_editors[g_windows[nano_window].instance], 1);
+                                        dirty = 1;
+                                    }
+                                    launch_type = APP_NONE;
+                                    break;
+                                }
+                                if (start_menu_tab == START_MENU_TAB_APPS && i == START_MENU_ITEM_9) {
+                                    int terminal_window = open_window_or_focus_existing(APP_TERMINAL, &focused);
+                                    if (terminal_window >= 0) {
+                                        terminal_run_command(&g_terms[g_windows[terminal_window].instance], "vibefetch", 1);
                                         dirty = 1;
                                     }
                                     launch_type = APP_NONE;

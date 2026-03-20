@@ -8,6 +8,8 @@
 #include <kernel/fs.h>
 #include <kernel/hal.h>
 #include <kernel/cpu/cpu.h>
+#include <kernel/apic.h>
+#include <kernel/smp.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/video/video.h>
 #include <kernel/drivers/storage/ata.h>
@@ -55,6 +57,12 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     hal_init();
     cpu_init();
     gdt_init();
+    if (kernel_cpu_count() > 1u) {
+        kernel_text_puts("CPU topology: SMP-capable hardware detected\n");
+    } else {
+        kernel_text_puts("CPU topology: single processor\n");
+    }
+    local_apic_init();
 
     kernel_text_puts("Initializing video...\n");
     kernel_video_init(); /* VESA with VGA fallback */
@@ -98,6 +106,10 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     scheduler_init();
     driver_manager_init(); /* second call to debug init performs HW setup */
     kernel_text_puts("Scheduler OK\n");
+
+    kernel_text_puts("Bringing up SMP...\n");
+    smp_init();
+    kernel_text_puts("SMP OK\n");
 
     kernel_text_puts("Initializing VFS...\n");
     vfs_init();

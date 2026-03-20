@@ -142,12 +142,12 @@ IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
 CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
 
 # Kernel sources - kernel only, no stage2
-KERNEL_SRCS := $(shell find kernel -name '*.c')
-KEYMAP_SRCS := $(shell find kernel/drivers/input/keymaps -name '*.c')
+KERNEL_SRCS := $(shell find kernel -name '*.c' ! -name '* *')
+KEYMAP_SRCS := $(shell find kernel/drivers/input/keymaps -name '*.c' ! -name '* *')
 KERNEL_OBJS := $(addprefix $(BUILD_DIR)/,$(patsubst %.c,%.o,$(KERNEL_SRCS)))
 KEYMAP_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KEYMAP_SRCS))
 
-KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
+KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm' ! -name '* *')
 KERNEL_ASM_OBJS := $(patsubst kernel_asm/%.asm,$(BUILD_DIR)/kernel_asm/%.o,$(KERNEL_ASM_SRCS))
 
 # Userland linked into the kernel image.
@@ -388,6 +388,8 @@ $(BUILD_DIR)/lang_apps_python_%.o: lang/apps/python/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 BOOT_BIN := $(BUILD_DIR)/boot.bin
+AP_TRAMPOLINE_BIN := $(BUILD_DIR)/ap_trampoline.bin
+AP_TRAMPOLINE_OBJ := $(BUILD_DIR)/ap_trampoline_blob.o
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 USERLAND_MAIN_ELF := $(BUILD_DIR)/userland-main.elf
@@ -597,8 +599,14 @@ $(JAVAC_APP_BUILD_DIR)/javac_main.o: lang/apps/javac/javac_main.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
+$(AP_TRAMPOLINE_BIN): $(BOOT_DIR)/ap_trampoline.asm | $(BUILD_DIR)
+	$(AS) -f bin $< -o $@
+
+$(AP_TRAMPOLINE_OBJ): $(AP_TRAMPOLINE_BIN) | $(BUILD_DIR)
+	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
+
+$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
