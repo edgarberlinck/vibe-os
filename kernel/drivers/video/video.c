@@ -119,6 +119,45 @@ static uint32_t kernel_video_supported_mode_mask(void) {
     return 0u;
 }
 
+static void kernel_video_append_cap_mode(struct video_capabilities *caps,
+                                         uint16_t width,
+                                         uint16_t height) {
+    uint32_t index;
+
+    if (caps == NULL || caps->mode_count >= VIDEO_MODE_LIST_MAX) {
+        return;
+    }
+
+    index = caps->mode_count++;
+    caps->mode_width[index] = width;
+    caps->mode_height[index] = height;
+}
+
+static void kernel_video_fill_capability_modes(struct video_capabilities *caps) {
+    if (caps == NULL) {
+        return;
+    }
+
+    caps->mode_count = 0u;
+    for (uint32_t i = 0; i < VIDEO_MODE_LIST_MAX; ++i) {
+        caps->mode_width[i] = 0u;
+        caps->mode_height[i] = 0u;
+    }
+
+    if (g_graphics_bga || (!g_graphics_boot_lfb && bga_available())) {
+        kernel_video_append_cap_mode(caps, 640u, 480u);
+        kernel_video_append_cap_mode(caps, 800u, 600u);
+        kernel_video_append_cap_mode(caps, 1024u, 768u);
+        kernel_video_append_cap_mode(caps, 1360u, 720u);
+        kernel_video_append_cap_mode(caps, 1920u, 1080u);
+        return;
+    }
+
+    if (g_graphics_boot_lfb) {
+        kernel_video_append_cap_mode(caps, (uint16_t)g_mode.width, (uint16_t)g_mode.height);
+    }
+}
+
 static size_t kernel_video_mode_buffer_size(const struct video_mode *mode) {
     if (mode == NULL || mode->pitch == 0u || mode->height == 0u) {
         return 0u;
@@ -423,6 +462,7 @@ void kernel_video_get_capabilities(struct video_capabilities *caps) {
     caps->active_width = g_mode.width;
     caps->active_height = g_mode.height;
     caps->active_bpp = g_mode.bpp;
+    kernel_video_fill_capability_modes(caps);
 
     if (g_graphics_bga) {
         caps->flags |= VIDEO_CAPS_BGA | VIDEO_CAPS_CAN_SET_MODE;
@@ -437,6 +477,7 @@ void kernel_video_get_capabilities(struct video_capabilities *caps) {
                                 VIDEO_RES_1024X768 |
                                 VIDEO_RES_1360X720 |
                                 VIDEO_RES_1920X1080;
+        kernel_video_fill_capability_modes(caps);
     } else {
         caps->flags |= VIDEO_CAPS_TEXT_ONLY;
     }

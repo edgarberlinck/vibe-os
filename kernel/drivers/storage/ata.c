@@ -1,4 +1,5 @@
 #include <kernel/drivers/storage/ata.h>
+#include <kernel/drivers/storage/block_device.h>
 #include <kernel/hal/io.h>
 #include <kernel/kernel_string.h>
 
@@ -27,9 +28,26 @@
 #define ATA_SR_BSY 0x80u
 
 #define ATA_TIMEOUT 100000u
-#define ATA_TOTAL_SECTORS 65536u
+#define ATA_MBR_PARTITION_OFFSET 446u
+#define ATA_MBR_SIGNATURE_OFFSET 510u
+#define ATA_STORAGE_PARTITION_INDEX 1u
 
 static int g_ata_ready = 0;
+static uint32_t g_ata_total_sectors = 0u;
+static uint32_t g_storage_partition_start_lba = 0u;
+static uint32_t g_storage_partition_sector_count = 0u;
+
+static int ata_read_sector(uint32_t lba, uint8_t *buf);
+static int ata_write_sector(uint32_t lba, const uint8_t *buf);
+static int ata_block_read(void *context, uint32_t lba, uint8_t *buf);
+static int ata_block_write(void *context, uint32_t lba, const uint8_t *buf);
+
+static uint32_t ata_read_u32_le(const uint8_t *src) {
+    return (uint32_t)src[0]
+         | ((uint32_t)src[1] << 8)
+         | ((uint32_t)src[2] << 16)
+         | ((uint32_t)src[3] << 24);
+}
 
 static int ata_wait_not_busy(void) {
     for (uint32_t i = 0; i < ATA_TIMEOUT; ++i) {
@@ -84,6 +102,8 @@ static void ata_select_lba(uint32_t lba) {
 }
 
 static int ata_identify(void) {
+    uint16_t identify_data[256];
+
     ata_select_lba(0u);
     outb(ATA_PRIMARY_CTRL, 0u);
     outb(ATA_REG_SECCOUNT0, 0u);
@@ -106,9 +126,61 @@ static int ata_identify(void) {
     }
 
     for (int i = 0; i < 256; ++i) {
-        (void)inw(ATA_REG_DATA);
+        identify_data[i] = inw(ATA_REG_DATA);
+    }
+    g_ata_total_sectors = ((uint32_t)identify_data[61] << 16) | (uint32_t)identify_data[60];
+    if (g_ata_total_sectors == 0u) {
+        return -1;
     }
     return 0;
+}
+
+static void ata_detect_storage_partition(void) {
+    uint8_t mbr[KERNEL_PERSIST_SECTOR_SIZE];
+    const uint8_t *entry;
+    uint32_t start_lba;
+    uint32_t sector_count;
+
+    g_storage_partition_start_lba = 0u;
+    g_storage_partition_sector_count = g_ata_total_sectors;
+
+    if (ata_read_sector(0u, mbr) != 0) {
+        return;
+    }
+    if (mbr[ATA_MBR_SIGNATURE_OFFSET] != 0x55u ||
+        mbr[ATA_MBR_SIGNATURE_OFFSET + 1] != 0xAAu) {
+        return;
+    }
+
+    entry = &mbr[ATA_MBR_PARTITION_OFFSET + (ATA_STORAGE_PARTITION_INDEX * 16u)];
+    start_lba = ata_read_u32_le(entry + 8);
+    sector_count = ata_read_u32_le(entry + 12);
+    if (start_lba == 0u || sector_count == 0u) {
+        return;
+    }
+    if (start_lba >= g_ata_total_sectors) {
+        return;
+    }
+    if (sector_count > (g_ata_total_sectors - start_lba)) {
+        sector_count = g_ata_total_sectors - start_lba;
+    }
+
+    g_storage_partition_start_lba = start_lba;
+    g_storage_partition_sector_count = sector_count;
+}
+
+static int ata_read_logical_sector(uint32_t lba, uint8_t *buf) {
+    if (lba >= g_storage_partition_sector_count) {
+        return -1;
+    }
+    return ata_read_sector(g_storage_partition_start_lba + lba, buf);
+}
+
+static int ata_write_logical_sector(uint32_t lba, const uint8_t *buf) {
+    if (lba >= g_storage_partition_sector_count) {
+        return -1;
+    }
+    return ata_write_sector(g_storage_partition_start_lba + lba, buf);
 }
 
 static int ata_read_sector(uint32_t lba, uint8_t *buf) {
@@ -170,94 +242,34 @@ static int ata_write_sector(uint32_t lba, const uint8_t *buf) {
 }
 
 void kernel_storage_init(void) {
+    kernel_block_device_reset();
     g_ata_ready = ata_identify() == 0;
+    if (!g_ata_ready) {
+        return;
+    }
+    ata_detect_storage_partition();
+    if (kernel_block_device_register_primary("ata",
+                                             0,
+                                             g_storage_partition_sector_count,
+                                             g_storage_partition_start_lba,
+                                             ata_block_read,
+                                             ata_block_write) != 0) {
+        g_ata_ready = 0;
+    }
 }
 
-int kernel_storage_ready(void) {
-    return g_ata_ready;
-}
-
-int kernel_storage_read_sectors(uint32_t lba, void *dst, uint32_t sector_count) {
-    uint8_t *out = (uint8_t *)dst;
-
-    if (!g_ata_ready || dst == 0 || sector_count == 0u) {
+static int ata_block_read(void *context, uint32_t lba, uint8_t *buf) {
+    (void)context;
+    if (!g_ata_ready) {
         return -1;
     }
-
-    for (uint32_t i = 0; i < sector_count; ++i) {
-        if (ata_read_sector(lba + i, out + (i * KERNEL_PERSIST_SECTOR_SIZE)) != 0) {
-            return -1;
-        }
-    }
-
-    return 0;
+    return ata_read_logical_sector(lba, buf);
 }
 
-int kernel_storage_write_sectors(uint32_t lba, const void *src, uint32_t sector_count) {
-    const uint8_t *in = (const uint8_t *)src;
-
-    if (!g_ata_ready || src == 0 || sector_count == 0u) {
+static int ata_block_write(void *context, uint32_t lba, const uint8_t *buf) {
+    (void)context;
+    if (!g_ata_ready) {
         return -1;
     }
-
-    for (uint32_t i = 0; i < sector_count; ++i) {
-        if (ata_write_sector(lba + i, in + (i * KERNEL_PERSIST_SECTOR_SIZE)) != 0) {
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
-uint32_t kernel_storage_total_sectors(void) {
-    return ATA_TOTAL_SECTORS;
-}
-
-int kernel_storage_load(void *dst, uint32_t size) {
-    uint8_t sector[KERNEL_PERSIST_SECTOR_SIZE];
-    uint8_t *out = (uint8_t *)dst;
-    uint32_t sectors;
-    uint32_t remaining;
-
-    if (!g_ata_ready || dst == 0 || size > KERNEL_PERSIST_MAX_BYTES) {
-        return -1;
-    }
-
-    sectors = (size + (KERNEL_PERSIST_SECTOR_SIZE - 1u)) / KERNEL_PERSIST_SECTOR_SIZE;
-    remaining = size;
-    for (uint32_t i = 0; i < sectors; ++i) {
-        uint32_t chunk = remaining > KERNEL_PERSIST_SECTOR_SIZE ? KERNEL_PERSIST_SECTOR_SIZE : remaining;
-        if (ata_read_sector(KERNEL_PERSIST_START_LBA + i, sector) != 0) {
-            return -1;
-        }
-        memcpy(out + (i * KERNEL_PERSIST_SECTOR_SIZE), sector, chunk);
-        remaining -= chunk;
-    }
-
-    return 0;
-}
-
-int kernel_storage_save(const void *src, uint32_t size) {
-    uint8_t sector[KERNEL_PERSIST_SECTOR_SIZE];
-    const uint8_t *in = (const uint8_t *)src;
-    uint32_t sectors;
-    uint32_t remaining;
-
-    if (!g_ata_ready || src == 0 || size > KERNEL_PERSIST_MAX_BYTES) {
-        return -1;
-    }
-
-    sectors = (size + (KERNEL_PERSIST_SECTOR_SIZE - 1u)) / KERNEL_PERSIST_SECTOR_SIZE;
-    remaining = size;
-    for (uint32_t i = 0; i < sectors; ++i) {
-        uint32_t chunk = remaining > KERNEL_PERSIST_SECTOR_SIZE ? KERNEL_PERSIST_SECTOR_SIZE : remaining;
-        memset(sector, 0, sizeof(sector));
-        memcpy(sector, in + (i * KERNEL_PERSIST_SECTOR_SIZE), chunk);
-        if (ata_write_sector(KERNEL_PERSIST_START_LBA + i, sector) != 0) {
-            return -1;
-        }
-        remaining -= chunk;
-    }
-
-    return 0;
+    return ata_write_logical_sector(lba, buf);
 }

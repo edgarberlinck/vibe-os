@@ -48,6 +48,7 @@ def build_directory(entries):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True)
+    parser.add_argument("--partition-base-lba", type=int, default=0)
     parser.add_argument("--directory-lba", type=int, required=True)
     parser.add_argument("--directory-sectors", type=int, required=True)
     parser.add_argument("--app-area-sectors", type=int, required=True)
@@ -72,7 +73,7 @@ def main():
             if used_app_sectors + sectors > args.app_area_sectors:
                 raise SystemExit("app area overflow while packing external apps")
 
-            image.seek(current_lba * 512)
+            image.seek((args.partition_base_lba + current_lba) * 512)
             image.write(blob)
             image.write(b"\0" * ((sectors * 512) - len(blob)))
             entries.append((name, current_lba, sectors, len(blob)))
@@ -82,7 +83,7 @@ def main():
         directory_blob = build_directory(entries)
         if len(directory_blob) > directory_size:
             raise SystemExit("app directory does not fit reserved sectors")
-        image.seek(args.directory_lba * 512)
+        image.seek((args.partition_base_lba + args.directory_lba) * 512)
         image.write(directory_blob)
         image.write(b"\0" * (directory_size - len(directory_blob)))
 

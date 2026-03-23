@@ -123,13 +123,18 @@ BUILD_DIR := build
 BOOT_DIR := boot
 USERLAND_DIR := userland
 LINKER_DIR := linker
-BOOT_KERNEL_SECTORS := 1280
-APPFS_DIRECTORY_LBA := $(shell echo $$((1 + $(BOOT_KERNEL_SECTORS) )))
+BOOT_PARTITION_START_LBA := 2048
+BOOT_PARTITION_SECTORS := 131072
+BOOT_PARTITION_RESERVED_SECTORS := 2048
+BOOT_STAGE2_START_SECTOR := 8
+BOOT_KERNEL_START_SECTOR := 32
+DATA_PARTITION_START_LBA := $(shell echo $$(( $(BOOT_PARTITION_START_LBA) + $(BOOT_PARTITION_SECTORS) )))
+APPFS_DIRECTORY_LBA := 0
 APPFS_DIRECTORY_SECTORS := 8
 APPFS_APP_AREA_SECTORS := 1536
 PERSIST_SECTOR_COUNT := 640
 IMAGE_ASSET_START_LBA := $(shell echo $$(( $(APPFS_DIRECTORY_LBA) + $(APPFS_DIRECTORY_SECTORS) + $(APPFS_APP_AREA_SECTORS) + $(PERSIST_SECTOR_COUNT) )))
-IMAGE_TOTAL_SECTORS := 65536
+IMAGE_TOTAL_SECTORS := 524288
 DOOM_WAD_SRC := userland/applications/games/DOOM/DOOM.WAD
 DOOM_WAD_IMAGE_LBA := $(IMAGE_ASSET_START_LBA)
 CRAFT_TEXTURE_SRC := userland/applications/games/craft/upstream/textures/texture.png
@@ -249,6 +254,15 @@ USERLAND_SRCS += \
 	$(USERLAND_DIR)/applications/games/craft/craft_upstream_runner.c
 endif
 USERLAND_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
+KERNEL_USERLAND_SRCS := \
+	$(USERLAND_DIR)/bootstrap_init.c \
+	$(USERLAND_DIR)/bootstrap_runtime.c \
+	$(USERLAND_DIR)/modules/console.c \
+	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/lang_loader.c \
+	$(USERLAND_DIR)/modules/utils.c \
+	$(USERLAND_DIR)/modules/syscalls.c
+KERNEL_USERLAND_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KERNEL_USERLAND_SRCS))
 
 DOOM_SRC_DIR := $(USERLAND_DIR)/applications/games/DOOM/linuxdoom-1.10
 DOOM_CORE_SRCS := \
@@ -390,6 +404,7 @@ $(BUILD_DIR)/lang_apps_python_%.o: lang/apps/python/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 BOOT_BIN := $(BUILD_DIR)/boot.bin
+STAGE2_BIN := $(BUILD_DIR)/stage2.bin
 MBR_BIN := $(BUILD_DIR)/mbr.bin
 AP_TRAMPOLINE_BIN := $(BUILD_DIR)/ap_trampoline.bin
 AP_TRAMPOLINE_OBJ := $(BUILD_DIR)/ap_trampoline_blob.o
@@ -482,7 +497,10 @@ include Build.compat.mk
 
 REQUIRED_BUILD_TOOLS := $(AS) $(CC) $(LD) $(NM) $(OBJCOPY) $(AR) $(RANLIB) $(PYTHON)
 
-all: check-tools $(IMAGE) $(USERLAND_MAIN_BIN)
+all: check-tools $(IMAGE)
+# Optional legacy monolithic payload for experiments outside the default image.
+all-monolith: check-tools $(IMAGE) $(USERLAND_MAIN_BIN)
+userland-main: check-tools $(USERLAND_MAIN_BIN)
 # Note: glibc separate build available via: make -f Build.glibc.mk glibc-build
 # To link glibc instead of stubs, modify KERNEL_ELF dependencies below
 
@@ -507,6 +525,10 @@ $(BUILD_DIR):
 $(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
 	$(AS) -f bin \
 		-DIMAGE_TOTAL_SECTORS=$(IMAGE_TOTAL_SECTORS) \
+		-DBOOT_PARTITION_START_LBA=$(BOOT_PARTITION_START_LBA) \
+		-DBOOT_PARTITION_SECTORS=$(BOOT_PARTITION_SECTORS) \
+		-DSOFTWARE_PARTITION_START_LBA=$(DATA_PARTITION_START_LBA) \
+		-DSOFTWARE_PARTITION_SECTORS=$$(( $(IMAGE_TOTAL_SECTORS) - $(DATA_PARTITION_START_LBA) )) \
 		$< -o $@
 	@mbr_size=$$(wc -c < $@); \
 	if [ "$$mbr_size" -ne 512 ]; then \
@@ -514,8 +536,18 @@ $(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
 		exit 1; \
 	fi
 
-$(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
-	$(AS) -f bin -DKERNEL_START_LBA=1 -DKERNEL_SECTORS=$(BOOT_KERNEL_SECTORS) $< -o $@
+$(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
+	$(AS) -f bin $< -o $@
+	@stage2_size=$$(wc -c < $@); \
+	stage2_sectors=$$(((stage2_size + 511) / 512)); \
+	if [ "$$stage2_sectors" -ge "$(BOOT_KERNEL_START_SECTOR)" ]; then \
+		echo "Erro: stage2 excede a janela reservada antes do kernel ($$stage2_sectors setores)."; \
+		exit 1; \
+	fi
+
+$(BOOT_BIN): $(BOOT_DIR)/stage1.asm $(STAGE2_BIN) | $(BUILD_DIR)
+	@stage2_sectors=$$((($$(wc -c < $(STAGE2_BIN)) + 511) / 512)); \
+	$(AS) -f bin -DSTAGE2_START_LBA=$(BOOT_STAGE2_START_SECTOR) -DSTAGE2_SECTORS=$$stage2_sectors $< -o $@
 	@boot_size=$$(wc -c < $@); \
 	if [ "$$boot_size" -ne 512 ]; then \
 		echo "Erro: stage1 precisa ter 512 bytes (atual: $$boot_size)."; \
@@ -624,14 +656,14 @@ $(AP_TRAMPOLINE_BIN): $(BOOT_DIR)/ap_trampoline.asm | $(BUILD_DIR)
 $(AP_TRAMPOLINE_OBJ): $(AP_TRAMPOLINE_BIN) | $(BUILD_DIR)
 	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
 
-$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
+$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(KERNEL_USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(KERNEL_USERLAND_OBJS) $(COMPAT_LIB) -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 	@kernel_sectors=$$((($$(wc -c < $@) + 511) / 512)); \
-	if [ "$$kernel_sectors" -gt "$(BOOT_KERNEL_SECTORS)" ]; then \
-		echo "Erro: kernel.bin excede o limite do bootloader ($$kernel_sectors > $(BOOT_KERNEL_SECTORS) setores)."; \
+	if [ "$$kernel_sectors" -gt "$$(( $(BOOT_PARTITION_RESERVED_SECTORS) - 1 ))" ]; then \
+		echo "Erro: kernel.bin excede a area reservada do boot FAT32 ($$kernel_sectors > $$(( $(BOOT_PARTITION_RESERVED_SECTORS) - 1 )) setores)."; \
 		exit 1; \
 	fi
 
@@ -694,31 +726,33 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB)
 
 $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
-$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
-	@rm -f $@
-	@bytes=$$(( $(IMAGE_TOTAL_SECTORS) * 512 )); \
-		if command -v truncate >/dev/null 2>&1; then \
-			truncate -s "$$bytes" $@; \
-		elif command -v mkfile >/dev/null 2>&1; then \
-			mkfile -n "$$bytes" $@; \
-		else \
-			dd if=/dev/zero of=$@ bs=512 count=0 seek=$(IMAGE_TOTAL_SECTORS); \
-		fi
-	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc
-	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc
-	$(PYTHON) tools/build_appfs.py --image $@ --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
+$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
+	$(PYTHON) tools/build_partitioned_image.py \
+		--image $@ \
+		--mbr $(MBR_BIN) \
+		--vbr $(BOOT_BIN) \
+		--stage2 $(STAGE2_BIN) \
+		--kernel $(KERNEL_BIN) \
+		--image-total-sectors $(IMAGE_TOTAL_SECTORS) \
+		--boot-partition-start-lba $(BOOT_PARTITION_START_LBA) \
+		--boot-partition-sectors $(BOOT_PARTITION_SECTORS) \
+		--boot-partition-reserved-sectors $(BOOT_PARTITION_RESERVED_SECTORS) \
+		--boot-stage2-start-sector $(BOOT_STAGE2_START_SECTOR) \
+		--boot-kernel-start-sector $(BOOT_KERNEL_START_SECTOR)
+	$(PYTHON) tools/build_appfs.py --image $@ --partition-base-lba $(DATA_PARTITION_START_LBA) --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
 	@mkdir -p $(BUILD_DIR)
 	@echo "# bundled assets" > $(IMAGE_ASSET_MANIFEST)
 	@if [ -f "$(DOOM_WAD_SRC)" ]; then \
 		size=$$(wc -c < "$(DOOM_WAD_SRC)" | tr -d '[:space:]'); \
 		sectors=$$(((size + 511) / 512)); \
-		end_lba=$$(( $(DOOM_WAD_IMAGE_LBA) + sectors )); \
+		abs_lba=$$(( $(DATA_PARTITION_START_LBA) + $(DOOM_WAD_IMAGE_LBA) )); \
+		end_lba=$$(( abs_lba + sectors )); \
 		if [ "$$end_lba" -gt "$(IMAGE_TOTAL_SECTORS)" ]; then \
 			echo "Erro: DOOM.WAD excede a imagem final ($$end_lba > $(IMAGE_TOTAL_SECTORS) setores)."; \
 			exit 1; \
 		fi; \
-		dd if="$(DOOM_WAD_SRC)" of="$@" bs=512 seek=$(DOOM_WAD_IMAGE_LBA) conv=notrunc; \
-		printf "DOOM.WAD lba=%s sectors=%s bytes=%s\n" "$(DOOM_WAD_IMAGE_LBA)" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
+		dd if="$(DOOM_WAD_SRC)" of="$@" bs=512 seek="$$abs_lba" conv=notrunc; \
+		printf "DOOM.WAD lba=%s physical_lba=%s sectors=%s bytes=%s\n" "$(DOOM_WAD_IMAGE_LBA)" "$$abs_lba" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
 	fi
 	@for asset in \
 		"$(CRAFT_TEXTURE_SRC):$(CRAFT_TEXTURE_IMAGE_LBA):texture.png" \
@@ -731,13 +765,14 @@ $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEX
 		name=$${rest##*:}; \
 		size=$$(wc -c < "$$src" | tr -d '[:space:]'); \
 		sectors=$$(((size + 511) / 512)); \
-		end_lba=$$(( lba + sectors )); \
+		abs_lba=$$(( $(DATA_PARTITION_START_LBA) + lba )); \
+		end_lba=$$(( abs_lba + sectors )); \
 		if [ "$$end_lba" -gt "$(IMAGE_TOTAL_SECTORS)" ]; then \
 			echo "Erro: $$name excede a imagem final ($$end_lba > $(IMAGE_TOTAL_SECTORS) setores)."; \
 			exit 1; \
 		fi; \
-		dd if="$$src" of="$@" bs=512 seek="$$lba" conv=notrunc; \
-		printf "CRAFT.%s lba=%s sectors=%s bytes=%s\n" "$$name" "$$lba" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
+		dd if="$$src" of="$@" bs=512 seek="$$abs_lba" conv=notrunc; \
+		printf "CRAFT.%s lba=%s physical_lba=%s sectors=%s bytes=%s\n" "$$name" "$$lba" "$$abs_lba" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
 	done
 	@echo "Imagem gerada: $(IMAGE)"
 
@@ -762,6 +797,18 @@ run-debug: $(IMAGE)
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-headless-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \

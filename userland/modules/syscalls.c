@@ -89,6 +89,38 @@ uint32_t sys_storage_total_sectors(void) {
     return (uint32_t)syscall5(SYSCALL_STORAGE_TOTAL_SECTORS, 0, 0, 0, 0, 0);
 }
 
+int sys_open(const char *path, int flags) {
+    return syscall5(SYSCALL_OPEN, (int)(uintptr_t)path, flags, 0, 0, 0);
+}
+
+int sys_read(int fd, void *buf, uint32_t count) {
+    return syscall5(SYSCALL_READ, fd, (int)(uintptr_t)buf, (int)count, 0, 0);
+}
+
+int sys_write(int fd, const void *buf, uint32_t count) {
+    return syscall5(SYSCALL_WRITE, fd, (int)(uintptr_t)buf, (int)count, 0, 0);
+}
+
+int sys_close(int fd) {
+    return syscall5(SYSCALL_CLOSE, fd, 0, 0, 0, 0);
+}
+
+off_t sys_lseek(int fd, off_t offset, int whence) {
+    return (off_t)syscall5(SYSCALL_LSEEK, fd, (int)offset, whence, 0, 0);
+}
+
+int sys_stat(const char *path, struct stat *buf) {
+    return syscall5(SYSCALL_STAT, (int)(uintptr_t)path, (int)(uintptr_t)buf, 0, 0, 0);
+}
+
+int sys_fstat(int fd, struct stat *buf) {
+    return syscall5(SYSCALL_FSTAT, fd, (int)(uintptr_t)buf, 0, 0, 0);
+}
+
+int sys_launch_info(struct userland_launch_info *info) {
+    return syscall5(SYSCALL_LAUNCH_INFO, (int)(uintptr_t)info, 0, 0, 0, 0);
+}
+
 void sys_sleep(void) {
     (void)syscall5(SYSCALL_SLEEP, 0, 0, 0, 0, 0);
 }
@@ -114,6 +146,10 @@ void sys_yield(void) {
 
 void sys_write_debug(const char *msg) {
     (void)syscall5(SYSCALL_WRITE_DEBUG, (int)(uintptr_t)msg, 0, 0, 0, 0);
+}
+
+int sys_text_write(const char *msg) {
+    return syscall5(SYSCALL_TEXT_WRITE, (int)(uintptr_t)msg, 0, 0, 0, 0);
 }
 
 int sys_keyboard_set_layout(const char *name) {

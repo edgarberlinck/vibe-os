@@ -77,13 +77,6 @@ static void smp_busy_wait(uint32_t iterations) {
     }
 }
 
-static void smp_wait_ticks(uint32_t delta) {
-    uint32_t start = kernel_timer_get_ticks();
-    while ((kernel_timer_get_ticks() - start) < delta) {
-        __asm__ volatile("pause");
-    }
-}
-
 static void smp_dump_cpu_stages(void) {
     for (uint32_t i = 0; i < kernel_cpu_count(); ++i) {
         const struct kernel_cpu_state *cpu = kernel_cpu_state(i);
@@ -167,8 +160,6 @@ void smp_init(void) {
         const struct kernel_cpu_state *cpu = kernel_cpu_state(i);
         void *stack;
         uint32_t stack_top;
-        uint32_t flags;
-
         if (!cpu) {
             break;
         }
@@ -179,7 +170,7 @@ void smp_init(void) {
         }
         stack_top = (uint32_t)(uintptr_t)stack + AP_STACK_SIZE;
 
-        flags = spinlock_lock_irqsave(&g_smp_boot_lock);
+        spinlock_lock(&g_smp_boot_lock);
         smp_prepare_trampoline((uint32_t)(uintptr_t)smp_ap_entry, stack_top);
         g_smp_cpu_stage[i] = SMP_CPU_STAGE_PREPARED;
         kernel_debug_printf("smp: starting ap idx=%d apic=%x stack=%x\n",
@@ -189,7 +180,7 @@ void smp_init(void) {
         if (local_apic_send_init(cpu->apic_id) == 0) {
             g_smp_cpu_stage[i] = SMP_CPU_STAGE_INIT_SENT;
             kernel_debug_printf("smp: init sent apic=%x\n", cpu->apic_id);
-            smp_wait_ticks(1u);
+            smp_busy_wait(200000u);
             if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI1_SENT;
                 kernel_debug_printf("smp: sipi1 sent apic=%x vec=%x\n",
@@ -206,7 +197,7 @@ void smp_init(void) {
         } else {
             kernel_debug_printf("smp: init failed apic=%x\n", cpu->apic_id);
         }
-        spinlock_unlock_irqrestore(&g_smp_boot_lock, flags);
+        spinlock_unlock(&g_smp_boot_lock);
 
         if (smp_wait_for_cpu(i + 1u) != 0) {
             kernel_debug_printf("smp: ap idx=%d apic=%x did not respond\n",

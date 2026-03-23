@@ -1,3 +1,4 @@
+#include <kernel/bootinfo.h>
 #include <kernel/kernel.h>  /* use include path */
 #include <kernel/interrupt.h> /* new interrupt interfaces */
 #include <kernel/scheduler.h>
@@ -15,25 +16,28 @@
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/input/input.h>
+#include <kernel/microkernel.h>
 #include <kernel/userland.h>
+#include <lang/include/vibe_app.h>
 #include <stdint.h>
 
 static inline void kernel_early_post(uint8_t code) {
     __asm__ volatile("outb %0, $0x80" : : "a"(code));
+    __asm__ volatile("outb %0, $0xE9" : : "a"(code));
 }
 
 static void kernel_early_fill_rect(uint8_t color, uint16_t x0, uint16_t y0, uint16_t width, uint16_t height) {
-    volatile uint8_t *vesa = (volatile uint8_t *)0x500u;
-    uint32_t fb_addr = ((uint32_t)vesa[5] << 24) |
-                       ((uint32_t)vesa[4] << 16) |
-                       ((uint32_t)vesa[3] << 8) |
-                       (uint32_t)vesa[2];
-    uint16_t pitch = ((uint16_t)vesa[7] << 8) | (uint16_t)vesa[6];
-    uint16_t screen_width = ((uint16_t)vesa[9] << 8) | (uint16_t)vesa[8];
-    uint16_t screen_height = ((uint16_t)vesa[11] << 8) | (uint16_t)vesa[10];
-    uint8_t bpp = vesa[12];
+    const volatile struct bootinfo *bootinfo =
+        (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
+    uint32_t fb_addr = bootinfo->vesa.fb_addr;
+    uint16_t pitch = bootinfo->vesa.pitch;
+    uint16_t screen_width = bootinfo->vesa.width;
+    uint16_t screen_height = bootinfo->vesa.height;
+    uint8_t bpp = bootinfo->vesa.bpp;
 
-    if ((((uint16_t)vesa[1] << 8) | (uint16_t)vesa[0]) == 0u ||
+    if (bootinfo->magic != BOOTINFO_MAGIC ||
+        bootinfo->version != BOOTINFO_VERSION ||
+        (bootinfo->flags & BOOTINFO_FLAG_VESA_VALID) == 0u ||
         fb_addr < 0x00100000u ||
         pitch == 0u ||
         screen_width == 0u ||
@@ -84,6 +88,7 @@ static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
 __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     enum {
         USERLAND_STACK_RESERVE = 512 * 1024,
+        USERLAND_APP_ARENA_RESERVE = VIBE_APP_STACK_TOP,
         HEAP_GUARD_BYTES = 64 * 1024
     };
     extern uint8_t __bss_end[];
@@ -101,6 +106,8 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     }
     kernel_early_mark(0x11u, 0x02u);
     kernel_debug_init(); /* registers debug driver */
+    mk_launch_init();
+    mk_service_init();
     kernel_early_mark(0x12u, 0x06u);
     hal_init();
     kernel_early_mark(0x13u, 0x01u);
@@ -151,16 +158,21 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
         heap_start = usable_base;
     }
     heap_start = align_up_uintptr(heap_start + USERLAND_STACK_RESERVE + HEAP_GUARD_BYTES, 0x1000u);
+    if (heap_start < align_up_uintptr((uintptr_t)USERLAND_APP_ARENA_RESERVE + HEAP_GUARD_BYTES, 0x1000u)) {
+        heap_start = align_up_uintptr((uintptr_t)USERLAND_APP_ARENA_RESERVE + HEAP_GUARD_BYTES, 0x1000u);
+    }
     heap_end = align_down_uintptr(usable_end, 0x1000u);
     if (heap_end <= heap_start) {
         heap_start = 0x00500000u;
         heap_end = 0x00900000u;
     }
     kernel_mm_init(heap_start, heap_end - heap_start);
+    mk_transfer_init();
     kernel_text_puts("Memory OK\n");
 
     kernel_text_puts("Initializing storage...\n");
     kernel_storage_init();
+    mk_storage_service_init();
     kernel_text_puts(kernel_storage_ready() ? "Storage OK\n" : "Storage unavailable\n");
 
     kernel_text_puts("Initializing scheduler/driver manager...\n");
@@ -178,6 +190,12 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     kernel_text_puts("Initializing VFS...\n");
     vfs_init();
+    mk_filesystem_service_init();
+    mk_video_service_init();
+    mk_input_service_init();
+    mk_console_service_init();
+    mk_network_service_init();
+    mk_audio_service_init();
     kernel_text_puts("VFS OK\n");
 
     kernel_text_puts("Initializing syscalls...\n");

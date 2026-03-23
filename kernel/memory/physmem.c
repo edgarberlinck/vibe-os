@@ -1,17 +1,9 @@
+#include <kernel/bootinfo.h>
 #include <kernel/memory/physmem.h>
 
-#define BOOT_MEMINFO_ADDR 0x8000u
-#define BOOT_MEMINFO_MAGIC 0x56424D49u
 #define PHYSMEM_FALLBACK_BASE 0x00500000u
 #define PHYSMEM_FALLBACK_END 0x00900000u
 #define PHYSMEM_MIN_BASE 0x00100000u
-
-struct boot_meminfo {
-    uint32_t magic;
-    uint32_t largest_base;
-    uint32_t largest_size;
-    uint32_t largest_end;
-};
 
 static uintptr_t g_physmem_base = PHYSMEM_FALLBACK_BASE;
 static uintptr_t g_physmem_end = PHYSMEM_FALLBACK_END;
@@ -31,13 +23,15 @@ static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
 }
 
 void physmem_init(void) {
-    const struct boot_meminfo *info = (const struct boot_meminfo *)(uintptr_t)BOOT_MEMINFO_ADDR;
+    const struct bootinfo *info = (const struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
     uintptr_t base = PHYSMEM_FALLBACK_BASE;
     uintptr_t end = PHYSMEM_FALLBACK_END;
 
-    if (info->magic == BOOT_MEMINFO_MAGIC) {
-        base = (uintptr_t)info->largest_base;
-        end = (uintptr_t)info->largest_end;
+    if (info->magic == BOOTINFO_MAGIC &&
+        info->version == BOOTINFO_VERSION &&
+        (info->flags & BOOTINFO_FLAG_MEMINFO_VALID) != 0u) {
+        base = (uintptr_t)info->meminfo.largest_base;
+        end = (uintptr_t)info->meminfo.largest_end;
 
         if (base < PHYSMEM_MIN_BASE) {
             base = PHYSMEM_MIN_BASE;

@@ -41,7 +41,9 @@ enum syscall_id {
     SYSCALL_CLOSE = 34,
     SYSCALL_LSEEK = 35,
     SYSCALL_STAT = 36,
-    SYSCALL_FSTAT = 37
+    SYSCALL_FSTAT = 37,
+    SYSCALL_LAUNCH_INFO = 38,
+    SYSCALL_TEXT_WRITE = 39
 };
 
 enum input_keycode {
@@ -94,6 +96,20 @@ struct video_capabilities {
     uint32_t mode_count;
     uint16_t mode_width[VIDEO_MODE_LIST_MAX];
     uint16_t mode_height[VIDEO_MODE_LIST_MAX];
+};
+
+struct userland_launch_info {
+    uint32_t abi_version;
+    uint32_t pid;
+    uint32_t kind;
+    uint32_t service_type;
+    uint32_t flags;
+    uint32_t boot_flags;
+    uint32_t boot_partition_lba;
+    uint32_t boot_partition_sectors;
+    uint32_t data_partition_lba;
+    uint32_t data_partition_sectors;
+    char name[16];
 };
 
 typedef void (*userland_entry_t)(void);

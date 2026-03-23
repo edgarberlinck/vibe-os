@@ -71,7 +71,7 @@ vibe-os/
 │   ├── boot.img      (1.4 MB) - Bootable image
 │   ├── kernel.bin    (179 KB) - Lean kernel
 │   ├── kernel.elf    (217 KB) - Kernel ELF
-│   └── userland-main.bin (167 KB)
+│   └── userland-main.bin (optional legacy monolith)
 └── ...
 ```
 
