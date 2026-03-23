@@ -776,7 +776,7 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB)
 	@mkdir -p $(dir $@)
 	$(MAKE) -j1 -f Build.ported.mk \
 		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \
-		ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-mkdir ported-tail ported-grep ported-loadkeys ported-true ported-false ported-printf
+		ported-all
 	@touch $@
 
 $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)

@@ -37,7 +37,7 @@ ORG 0x7C00
 %define SOFTWARE_PARTITION_SECTORS IMAGE_TOTAL_SECTORS - SOFTWARE_PARTITION_START_LBA
 %endif
 %define VBE_MODE_INFO_ADDR 0x0600
-%define VBE_MODE_640X480X8 0x0101
+%define VBE_MODE_800X600X24 0x0115
 
 start:
     cli
@@ -126,7 +126,7 @@ setup_vesa:
     mov es, ax
 
     mov ax, 0x4F01
-    mov cx, VBE_MODE_640X480X8
+    mov cx, VBE_MODE_800X600X24
     mov di, VBE_MODE_INFO_ADDR
     int 0x10
     mov al, 'b'
@@ -135,7 +135,7 @@ setup_vesa:
     jne .done
 
     mov ax, 0x4F02
-    mov bx, 0x4000 | VBE_MODE_640X480X8
+    mov bx, VBE_MODE_800X600X24
     int 0x10
     mov al, 'c'
     out 0xE9, al
@@ -143,7 +143,7 @@ setup_vesa:
     jne .done
 
     mov si, VBE_MODE_INFO_ADDR
-    mov word [BOOTINFO_ADDR + BOOTINFO_VESA_MODE], VBE_MODE_640X480X8
+    mov word [BOOTINFO_ADDR + BOOTINFO_VESA_MODE], VBE_MODE_800X600X24
     mov ax, [si + 0x28]
     mov [BOOTINFO_ADDR + BOOTINFO_VESA_FB], ax
     mov ax, [si + 0x2A]

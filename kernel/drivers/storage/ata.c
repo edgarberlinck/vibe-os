@@ -272,11 +272,11 @@ int kernel_ata_init(void) {
     }
     g_storage_partition_start_lba = 0u;
     g_storage_partition_sector_count = g_ata_total_sectors;
-    if (kernel_block_device_detect_mbr_partition(0,
-                                                 g_ata_total_sectors,
-                                                 ata_disk_read,
-                                                 &g_storage_partition_start_lba,
-                                                 &g_storage_partition_sector_count) != 0) {
+    if (kernel_block_device_resolve_partition(0,
+                                              g_ata_total_sectors,
+                                              ata_disk_read,
+                                              &g_storage_partition_start_lba,
+                                              &g_storage_partition_sector_count) != 0) {
         g_ata_ready = 0;
         return -1;
     }
@@ -289,7 +289,7 @@ int kernel_ata_init(void) {
         g_ata_ready = 0;
         return -1;
     }
-    kernel_debug_printf("ata: start=%u sectors=%u total=%u\n",
+    kernel_debug_printf("ata: start=%d sectors=%d total=%d\n",
                         g_storage_partition_start_lba,
                         g_storage_partition_sector_count,
                         g_ata_total_sectors);

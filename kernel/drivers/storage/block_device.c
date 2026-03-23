@@ -1,5 +1,6 @@
 #include <kernel/drivers/storage/block_device.h>
 #include <kernel/drivers/storage/ata.h>
+#include <kernel/bootinfo.h>
 #include <kernel/kernel_string.h>
 
 #define BLOCK_DEVICE_MBR_PARTITION_OFFSET 446u
@@ -86,6 +87,62 @@ int kernel_block_device_detect_mbr_partition(void *context,
     *partition_start_lba = start_lba;
     *partition_sector_count = sector_count;
     return 0;
+}
+
+static int kernel_block_device_detect_bootinfo_partition(uint32_t total_sectors,
+                                                         uint32_t *partition_start_lba,
+                                                         uint32_t *partition_sector_count) {
+    const volatile struct bootinfo *bootinfo;
+    uint32_t start_lba;
+    uint32_t sector_count;
+
+    if (partition_start_lba == 0 || partition_sector_count == 0 || total_sectors == 0u) {
+        return -1;
+    }
+
+    bootinfo = (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
+    if (bootinfo->magic != BOOTINFO_MAGIC ||
+        bootinfo->version != BOOTINFO_VERSION ||
+        (bootinfo->flags & BOOTINFO_FLAG_PARTITIONS_VALID) == 0u) {
+        return -1;
+    }
+
+    start_lba = bootinfo->disk.data_partition_lba;
+    sector_count = bootinfo->disk.data_partition_sectors;
+    if (start_lba == 0u || sector_count == 0u || start_lba >= total_sectors) {
+        return -1;
+    }
+    if (sector_count > (total_sectors - start_lba)) {
+        sector_count = total_sectors - start_lba;
+    }
+
+    *partition_start_lba = start_lba;
+    *partition_sector_count = sector_count;
+    return 0;
+}
+
+int kernel_block_device_resolve_partition(void *context,
+                                          uint32_t total_sectors,
+                                          kernel_block_device_read_fn read_sector,
+                                          uint32_t *partition_start_lba,
+                                          uint32_t *partition_sector_count) {
+    if (partition_start_lba == 0 || partition_sector_count == 0 || total_sectors == 0u) {
+        return -1;
+    }
+
+    *partition_start_lba = 0u;
+    *partition_sector_count = total_sectors;
+    if (kernel_block_device_detect_bootinfo_partition(total_sectors,
+                                                      partition_start_lba,
+                                                      partition_sector_count) == 0) {
+        return 0;
+    }
+
+    return kernel_block_device_detect_mbr_partition(context,
+                                                    total_sectors,
+                                                    read_sector,
+                                                    partition_start_lba,
+                                                    partition_sector_count);
 }
 
 const char *kernel_block_device_name(void) {

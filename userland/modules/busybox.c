@@ -479,7 +479,7 @@ static int cmd_startx(int argc, char **argv) {
     if (try_run_external(argc, argv) >= 0) {
         return 0;
     }
-    console_write("startx indisponivel nesta app de boot\n");
+    desktop_main();
     return 0;
 #else
     /* switch to graphics by simply calling desktop_main() */

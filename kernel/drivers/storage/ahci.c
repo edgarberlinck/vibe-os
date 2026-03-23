@@ -500,11 +500,11 @@ int kernel_ahci_init(void) {
 
         port->partition_start_lba = 0u;
         port->partition_sector_count = port->total_sectors;
-        if (kernel_block_device_detect_mbr_partition(port,
-                                                     port->total_sectors,
-                                                     ahci_read_raw,
-                                                     &port->partition_start_lba,
-                                                     &port->partition_sector_count) != 0) {
+        if (kernel_block_device_resolve_partition(port,
+                                                  port->total_sectors,
+                                                  ahci_read_raw,
+                                                  &port->partition_start_lba,
+                                                  &port->partition_sector_count) != 0) {
             port->present = 0u;
             continue;
         }

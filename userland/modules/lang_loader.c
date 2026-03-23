@@ -27,6 +27,7 @@ static int host_getcwd(char *buf, int max_len);
 #define LANG_HOST_SEEK_CUR 1
 #define LANG_HOST_SEEK_END 2
 #define LANG_STORAGE_RETRY_COUNT 4
+#define LANG_DIRECTORY_RETRY_COUNT 16
 #define LANG_SECTOR_SIZE 512u
 
 struct lang_host_fd {
@@ -569,7 +570,7 @@ static int lang_load_directory(struct vibe_appfs_directory *directory) {
         return -1;
     }
 
-    for (int attempt = 0; attempt < LANG_STORAGE_RETRY_COUNT; ++attempt) {
+    for (int attempt = 0; attempt < LANG_DIRECTORY_RETRY_COUNT; ++attempt) {
         if (lang_storage_read_bytes(VIBE_APPFS_DIRECTORY_LBA,
                                     raw_directory,
                                     VIBE_APPFS_DIRECTORY_SECTORS) != 0) {

@@ -335,7 +335,7 @@ Agora execute o primeiro ciclo:
 8. continuar para o próximo ciclo automaticamente
 
 ====================================================================
-STATUS DE IMPLEMENTAÇÃO (ATUALIZADO EM 2026-03-18)
+STATUS DE IMPLEMENTAÇÃO (ATUALIZADO EM 2026-03-23)
 ====================================================================
 
 FASE 1 — compat/bin (ciclo inicial)
@@ -354,10 +354,10 @@ FASE 1 — compat/bin (ciclo inicial)
 
 Pendências imediatas da fase 1
 
-- [ ] Portar `true` e `false` (não presentes em `compat/bin`, seguir para próxima fase)
-- [ ] Portar `printf` (fora de `compat/bin`, próxima fase)
-- [ ] Expandir próximos alvos de `compat/bin` (`sync`) conforme APIs necessárias
 - [x] Port de `mkdir` baseado em `compat/bin/mkdir/mkdir.c`
+- [x] Port de `true` e `false` integrado como apps externas
+- [x] Port de `printf` integrado como app externa
+- [ ] Expandir próximos alvos de `compat/bin` (`sync`) conforme APIs necessárias
 
 ====================================================================
 HANDOFF TÉCNICO (PARA PRÓXIMO AGENTE)
@@ -366,7 +366,7 @@ HANDOFF TÉCNICO (PARA PRÓXIMO AGENTE)
 Resumo objetivo do estado atual
 
 - Build completo segue passando com `make clean && make run-debug`.
-- Apps externos são gerados e empacotados no appfs (confirmado: `echo`, `cat`, `wc`, `pwd`, `head`, `sleep`, `rmdir`, `tail`, `grep`, `loadkeys`).
+- Apps externos são gerados e empacotados no appfs (confirmado: `echo`, `cat`, `wc`, `pwd`, `head`, `sleep`, `rmdir`, `mkdir`, `tail`, `grep`, `loadkeys`, `true`, `false`, `printf`).
 - Shell encontra comandos externos (não é falha de build/empacotamento).
 - Em runtime, usuário reporta travamento/loop com cursor piscando para comandos portados.
 

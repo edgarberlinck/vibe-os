@@ -148,7 +148,7 @@ def build_scenarios() -> List[Scenario]:
             args=ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
             must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Legacy ATA path accepts either the external AppFS shell or the built-in rescue shell fallback after a successful storage smoke test.",
+            notes="Legacy ATA path currently reaches the external AppFS shell again; the built-in rescue shell remains an accepted safety-net fallback.",
         ),
         Scenario(
             name="core2duo",
@@ -156,7 +156,7 @@ def build_scenarios() -> List[Scenario]:
             args=["-cpu", "core2duo"] + ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
             must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Core 2 Duo uses the same ATA compatibility rule as the default IDE path.",
+            notes="Core 2 Duo uses the same ATA compatibility rule as the default IDE path and should normally reach the external shell.",
         ),
         Scenario(
             name="pentium",
@@ -164,7 +164,7 @@ def build_scenarios() -> List[Scenario]:
             args=["-cpu", "pentium"] + ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
             must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Pentium uses the same ATA compatibility rule as the default IDE path.",
+            notes="Pentium uses the same ATA compatibility rule as the default IDE path and should normally reach the external shell.",
         ),
         Scenario(
             name="atom-n270",
@@ -172,7 +172,7 @@ def build_scenarios() -> List[Scenario]:
             args=["-cpu", "n270"] + ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
             must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Atom N270 uses the same ATA compatibility rule as the default IDE path.",
+            notes="Atom N270 uses the same ATA compatibility rule as the default IDE path and should normally reach the external shell.",
         ),
         Scenario(
             name="ahci-q35",
