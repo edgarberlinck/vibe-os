@@ -56,6 +56,8 @@ void craft_init_state(struct craft_state *state) {
     state->focused = 0;
     state->mouse_x = 0;
     state->mouse_y = 0;
+    state->mouse_dx = 0;
+    state->mouse_dy = 0;
     state->mouse_buttons = 0u;
     if (craft_storage_available()) {
         str_copy_limited(state->status, "Inicializando renderer do Craft", (int)sizeof(state->status));
@@ -65,10 +67,13 @@ void craft_init_state(struct craft_state *state) {
 }
 
 void craft_update_input(struct craft_state *state, int focused,
-                        int mouse_x, int mouse_y, uint8_t mouse_buttons) {
+                        int mouse_x, int mouse_y, int mouse_dx, int mouse_dy,
+                        uint8_t mouse_buttons) {
     state->focused = focused;
     state->mouse_x = mouse_x;
     state->mouse_y = mouse_y;
+    state->mouse_dx = mouse_dx;
+    state->mouse_dy = mouse_dy;
     state->mouse_buttons = mouse_buttons;
 }
 
@@ -79,6 +84,8 @@ void craft_shutdown_state(struct craft_state *state) {
     state->running = 0;
     state->started = 0;
     state->focused = 0;
+    state->mouse_dx = 0;
+    state->mouse_dy = 0;
     state->mouse_buttons = 0u;
     str_copy_limited(state->status, "Craft encerrado", (int)sizeof(state->status));
 }
@@ -115,7 +122,9 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
     }
 
     craft_upstream_resize(client.w, client.h);
-    craft_upstream_set_mouse(local_x, local_y, state->mouse_buttons, state->focused, inside);
+    craft_upstream_set_mouse(local_x, local_y,
+                             state->mouse_dx, state->mouse_dy,
+                             state->mouse_buttons, state->focused, inside);
     state->last_code = craft_upstream_frame();
     {
         static int logged_first_frame = 0;
@@ -144,12 +153,6 @@ int craft_handle_click(struct craft_state *state) {
 int craft_handle_key(struct craft_state *state, int key) {
     if (!state->started) {
         return 0;
-    }
-    if (key == 27) {
-        craft_upstream_request_close();
-        state->running = 0;
-        str_copy_limited(state->status, "Craft encerrado por ESC", (int)sizeof(state->status));
-        return 1;
     }
     craft_upstream_queue_key(key);
     return 1;

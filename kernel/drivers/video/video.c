@@ -15,17 +15,18 @@ static size_t g_graphics_backbuf_capacity = 0u;
 static int g_graphics_enabled = 0;
 static int g_graphics_bga = 0;
 static int g_graphics_boot_lfb = 0;
+static int g_graphics_direct_fb = 0;
 static int g_video_initialized = 0;
 static uint8_t g_early_graphics_backbuf[640u * 480u];
 
 #define GRAPHICS_DEFAULT_WIDTH 640u
 #define GRAPHICS_DEFAULT_HEIGHT 480u
-#define GRAPHICS_MAX_WIDTH 1920u
-#define GRAPHICS_MAX_HEIGHT 1080u
+#define GRAPHICS_MAX_WIDTH 4096u
+#define GRAPHICS_MAX_HEIGHT 2160u
 #define GRAPHICS_BPP 8u
 #define GRAPHICS_MIN_FB_ADDR 0x00100000u
 #define GRAPHICS_BANK_SIZE 65536u
-#define GRAPHICS_MAX_PITCH 2048u
+#define GRAPHICS_MAX_PITCH 8192u
 #define GRAPHICS_MAX_BYTES ((size_t)GRAPHICS_MAX_PITCH * (size_t)GRAPHICS_MAX_HEIGHT)
 
 #define BGA_INDEX_PORT 0x01CEu
@@ -119,6 +120,17 @@ static uint32_t kernel_video_supported_mode_mask(void) {
     return 0u;
 }
 
+static uint32_t kernel_video_mode_mask_from_list(const uint16_t *widths,
+                                                 const uint16_t *heights,
+                                                 size_t count) {
+    uint32_t mask = 0u;
+
+    for (size_t i = 0; i < count; ++i) {
+        mask |= kernel_video_mode_bit(widths[i], heights[i]);
+    }
+    return mask;
+}
+
 static size_t kernel_video_mode_buffer_size(const struct video_mode *mode) {
     if (mode == NULL || mode->pitch == 0u || mode->height == 0u) {
         return 0u;
@@ -157,19 +169,25 @@ static int kernel_video_mode_usable(const struct video_mode *mode) {
 }
 
 static int kernel_video_reserve_backbuffer(size_t required_size) {
+    uint8_t *new_backbuf;
+
     if (required_size == 0u || required_size > GRAPHICS_MAX_BYTES) {
         return 0;
     }
-    if (g_graphics_backbuf_capacity >= required_size && g_graphics_backbuf != NULL) {
+    if (!g_graphics_direct_fb &&
+        g_graphics_backbuf_capacity >= required_size &&
+        g_graphics_backbuf != NULL) {
         return 1;
     }
 
-    g_graphics_backbuf = (uint8_t *)kernel_malloc(required_size);
-    if (g_graphics_backbuf == NULL) {
+    new_backbuf = (uint8_t *)kernel_malloc(required_size);
+    if (new_backbuf == NULL) {
         return 0;
     }
 
+    g_graphics_backbuf = new_backbuf;
     g_graphics_backbuf_capacity = required_size;
+    g_graphics_direct_fb = 0;
     return 1;
 }
 
@@ -204,12 +222,16 @@ static int kernel_video_try_init_boot_lfb(void) {
     }
 
     required_size = kernel_video_mode_buffer_size(&boot_mode);
-    if (required_size == 0u || required_size > sizeof(g_early_graphics_backbuf)) {
-        return 0;
+    if (required_size <= sizeof(g_early_graphics_backbuf)) {
+        g_graphics_backbuf = g_early_graphics_backbuf;
+        g_graphics_backbuf_capacity = sizeof(g_early_graphics_backbuf);
+        g_graphics_direct_fb = 0;
+    } else {
+        g_graphics_backbuf = (uint8_t *)(uintptr_t)boot_mode.fb_addr;
+        g_graphics_backbuf_capacity = required_size;
+        g_graphics_direct_fb = 1;
     }
 
-    g_graphics_backbuf = g_early_graphics_backbuf;
-    g_graphics_backbuf_capacity = sizeof(g_early_graphics_backbuf);
     g_mode = boot_mode;
     g_fb = (volatile uint8_t *)(uintptr_t)g_mode.fb_addr;
     g_backbuf = g_graphics_backbuf;
@@ -275,6 +297,7 @@ static int kernel_video_apply_graphics_mode(uint16_t width, uint16_t height) {
     g_backbuf = g_graphics_backbuf;
     g_buf_size = required_size;
     g_graphics_enabled = 1;
+    g_graphics_direct_fb = 0;
 
     for (size_t i = 0; i < g_buf_size; ++i) {
         g_backbuf[i] = 0u;
@@ -318,6 +341,24 @@ void kernel_video_init(void) {
     g_video_initialized = 1;
 }
 
+void kernel_video_finalize_boot_lfb(void) {
+    size_t required_size;
+
+    if (!g_graphics_boot_lfb || !g_graphics_enabled || !g_graphics_direct_fb) {
+        return;
+    }
+
+    required_size = kernel_video_mode_buffer_size(&g_mode);
+    if (!kernel_video_reserve_backbuffer(required_size) || g_graphics_backbuf == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < required_size; ++i) {
+        g_graphics_backbuf[i] = g_fb[i];
+    }
+    g_backbuf = g_graphics_backbuf;
+}
+
 struct video_mode *kernel_video_get_mode(void) {
     return &g_mode;
 }
@@ -347,6 +388,9 @@ void kernel_video_clear(uint8_t color) {
 
 void kernel_video_flip(void) {
     if (!g_graphics_enabled || g_backbuf == NULL || g_fb == NULL) {
+        return;
+    }
+    if (g_graphics_direct_fb || g_backbuf == (uint8_t *)(uintptr_t)g_fb) {
         return;
     }
 
@@ -394,6 +438,7 @@ void kernel_video_leave_graphics(void) {
     g_graphics_enabled = 0;
     g_graphics_bga = 0;
     g_graphics_boot_lfb = 0;
+    g_graphics_direct_fb = 0;
     g_mode.fb_addr = 0xB8000u;
     g_mode.width = 80u;
     g_mode.height = 25u;
@@ -407,6 +452,11 @@ void kernel_video_leave_graphics(void) {
 
 int kernel_video_set_mode(uint32_t width, uint32_t height) {
     if (g_graphics_boot_lfb &&
+        width == g_mode.width &&
+        height == g_mode.height) {
+        return 0;
+    }
+    if (g_graphics_boot_lfb &&
         (width != g_mode.width || height != g_mode.height)) {
         return -1;
     }
@@ -414,6 +464,10 @@ int kernel_video_set_mode(uint32_t width, uint32_t height) {
 }
 
 void kernel_video_get_capabilities(struct video_capabilities *caps) {
+    uint16_t detected_widths[VIDEO_MODE_LIST_MAX];
+    uint16_t detected_heights[VIDEO_MODE_LIST_MAX];
+    size_t detected_count = 0u;
+
     if (caps == NULL) {
         return;
     }
@@ -423,13 +477,44 @@ void kernel_video_get_capabilities(struct video_capabilities *caps) {
     caps->active_width = g_mode.width;
     caps->active_height = g_mode.height;
     caps->active_bpp = g_mode.bpp;
+    caps->mode_count = 0u;
+    for (size_t i = 0; i < VIDEO_MODE_LIST_MAX; ++i) {
+        caps->mode_width[i] = 0u;
+        caps->mode_height[i] = 0u;
+    }
 
     if (g_graphics_bga) {
         caps->flags |= VIDEO_CAPS_BGA | VIDEO_CAPS_CAN_SET_MODE;
         caps->supported_modes = kernel_video_supported_mode_mask();
+        caps->mode_count = 5u;
+        caps->mode_width[0] = 640u;
+        caps->mode_height[0] = 480u;
+        caps->mode_width[1] = 800u;
+        caps->mode_height[1] = 600u;
+        caps->mode_width[2] = 1024u;
+        caps->mode_height[2] = 768u;
+        caps->mode_width[3] = 1360u;
+        caps->mode_height[3] = 720u;
+        caps->mode_width[4] = 1920u;
+        caps->mode_height[4] = 1080u;
     } else if (g_graphics_boot_lfb) {
         caps->flags |= VIDEO_CAPS_BOOT_LFB;
-        caps->supported_modes = kernel_video_supported_mode_mask();
+        detected_count = vesa_get_detected_mode_list(detected_widths,
+                                                     detected_heights,
+                                                     VIDEO_MODE_LIST_MAX);
+        if (detected_count == 0u) {
+            detected_widths[0] = (uint16_t)g_mode.width;
+            detected_heights[0] = (uint16_t)g_mode.height;
+            detected_count = 1u;
+        }
+        caps->mode_count = (uint32_t)detected_count;
+        for (size_t i = 0; i < detected_count; ++i) {
+            caps->mode_width[i] = detected_widths[i];
+            caps->mode_height[i] = detected_heights[i];
+        }
+        caps->supported_modes = kernel_video_mode_mask_from_list(detected_widths,
+                                                                 detected_heights,
+                                                                 detected_count);
     } else if (bga_available()) {
         caps->flags |= VIDEO_CAPS_BGA | VIDEO_CAPS_CAN_SET_MODE;
         caps->supported_modes = VIDEO_RES_640X480 |
@@ -437,6 +522,17 @@ void kernel_video_get_capabilities(struct video_capabilities *caps) {
                                 VIDEO_RES_1024X768 |
                                 VIDEO_RES_1360X720 |
                                 VIDEO_RES_1920X1080;
+        caps->mode_count = 5u;
+        caps->mode_width[0] = 640u;
+        caps->mode_height[0] = 480u;
+        caps->mode_width[1] = 800u;
+        caps->mode_height[1] = 600u;
+        caps->mode_width[2] = 1024u;
+        caps->mode_height[2] = 768u;
+        caps->mode_width[3] = 1360u;
+        caps->mode_height[3] = 720u;
+        caps->mode_width[4] = 1920u;
+        caps->mode_height[4] = 1080u;
     } else {
         caps->flags |= VIDEO_CAPS_TEXT_ONLY;
     }

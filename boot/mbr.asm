@@ -36,7 +36,7 @@ load_stage1:
     mov es, ax
     mov bx, STAGE1_LOAD_ADDR
     mov ah, 0x02
-    mov al, 0x01
+    mov al, 0x02
     xor ch, ch
     mov cl, 0x02
     xor dh, dh
@@ -50,7 +50,7 @@ load_stage1:
     jc .fail
 
     mov ah, 0x02
-    mov al, 0x01
+    mov al, 0x02
     xor ch, ch
     mov cl, 0x02
     xor dh, dh
@@ -113,7 +113,9 @@ try_enable_vesa:
     ret
 
 disk_error:
-    mov word [0xB8000], 0x0F45
+    mov bx, 0xB800
+    mov es, bx
+    mov word [es:0], 0x0F45
 .halt:
     hlt
     jmp .halt

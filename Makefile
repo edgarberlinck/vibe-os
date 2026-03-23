@@ -123,11 +123,11 @@ BOOT_DIR := boot
 USERLAND_DIR := userland
 LINKER_DIR := linker
 BOOT_KERNEL_SECTORS := 1280
-APPFS_DIRECTORY_LBA := 1282
+APPFS_DIRECTORY_LBA := 1283
 APPFS_DIRECTORY_SECTORS := 8
 APPFS_APP_AREA_SECTORS := 1536
 PERSIST_SECTOR_COUNT := 640
-IMAGE_ASSET_START_LBA := 3466
+IMAGE_ASSET_START_LBA := 3467
 IMAGE_TOTAL_SECTORS := 3417969
 DOOM_WAD_SRC := userland/applications/games/DOOM/DOOM.WAD
 DOOM_WAD_IMAGE_LBA := $(IMAGE_ASSET_START_LBA)
@@ -512,10 +512,10 @@ $(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
 	fi
 
 $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
-	$(AS) -f bin -DBOOT_LOAD_ADDR=0x7E00 -DKERNEL_START_LBA=2 -DKERNEL_SECTORS=$(BOOT_KERNEL_SECTORS) $< -o $@
+	$(AS) -f bin -DBOOT_LOAD_ADDR=0x7E00 -DKERNEL_START_LBA=3 -DKERNEL_SECTORS=$(BOOT_KERNEL_SECTORS) $< -o $@
 	@boot_size=$$(wc -c < $@); \
-	if [ "$$boot_size" -ne 512 ]; then \
-		echo "Erro: boot sector precisa ter 512 bytes (atual: $$boot_size)."; \
+	if [ "$$boot_size" -ne 1024 ]; then \
+		echo "Erro: stage1 precisa ter 1024 bytes (atual: $$boot_size)."; \
 		exit 1; \
 	fi
 
@@ -702,8 +702,8 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) 
 			dd if=/dev/zero of=$@ bs=512 count=0 seek=$(IMAGE_TOTAL_SECTORS); \
 		fi
 	dd if=$(MBR_BIN) of=$@ bs=512 count=1 conv=notrunc
-	dd if=$(BOOT_BIN) of=$@ bs=512 seek=1 count=1 conv=notrunc
-	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=2 conv=notrunc
+	dd if=$(BOOT_BIN) of=$@ bs=512 seek=1 count=2 conv=notrunc
+	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=3 conv=notrunc
 	$(PYTHON) tools/build_appfs.py --image $@ --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
 	@mkdir -p $(BUILD_DIR)
 	@echo "# bundled assets" > $(IMAGE_ASSET_MANIFEST)
