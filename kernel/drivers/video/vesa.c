@@ -29,29 +29,3 @@ int vesa_init(struct video_mode *mode) {
     }
     return 0;
 }
-
-size_t vesa_get_detected_mode_list(uint16_t *widths, uint16_t *heights, size_t capacity) {
-    size_t count;
-
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Warray-bounds"
-    count = (size_t)vesa_bytes[13];
-    #pragma GCC diagnostic pop
-    if (count > capacity) {
-        count = capacity;
-    }
-
-    for (size_t i = 0; i < count; ++i) {
-        size_t offset = 14u + (i * 4u);
-
-        #pragma GCC diagnostic push
-        #pragma GCC diagnostic ignored "-Warray-bounds"
-        widths[i] = (uint16_t)(vesa_bytes[offset] |
-                               (((uint16_t)vesa_bytes[offset + 1u]) << 8));
-        heights[i] = (uint16_t)(vesa_bytes[offset + 2u] |
-                                (((uint16_t)vesa_bytes[offset + 3u]) << 8));
-        #pragma GCC diagnostic pop
-    }
-
-    return count;
-}
