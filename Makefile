@@ -124,12 +124,12 @@ BOOT_DIR := boot
 USERLAND_DIR := userland
 LINKER_DIR := linker
 BOOT_KERNEL_SECTORS := 1280
-APPFS_DIRECTORY_LBA := 1283
+APPFS_DIRECTORY_LBA := $(shell echo $$((1 + $(BOOT_KERNEL_SECTORS) )))
 APPFS_DIRECTORY_SECTORS := 8
 APPFS_APP_AREA_SECTORS := 1536
 PERSIST_SECTOR_COUNT := 640
-IMAGE_ASSET_START_LBA := 3467
-IMAGE_TOTAL_SECTORS := 3417969
+IMAGE_ASSET_START_LBA := $(shell echo $$(( $(APPFS_DIRECTORY_LBA) + $(APPFS_DIRECTORY_SECTORS) + $(APPFS_APP_AREA_SECTORS) + $(PERSIST_SECTOR_COUNT) )))
+IMAGE_TOTAL_SECTORS := 65536
 DOOM_WAD_SRC := userland/applications/games/DOOM/DOOM.WAD
 DOOM_WAD_IMAGE_LBA := $(IMAGE_ASSET_START_LBA)
 CRAFT_TEXTURE_SRC := userland/applications/games/craft/upstream/textures/texture.png
@@ -346,7 +346,7 @@ DOOM_SYMBOL_REMAP = \
 	-Dlseek=doom_lseek \
 	-Dfstat=doom_fstat \
 	-Dexit=doom_exit
-DOOM_CFLAGS = -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython -Ilang/glibc/include -DNORMALUNIX -DLINUX -DSEEK_SET=0 -DSEEK_CUR=1 -DSEEK_END=2 -include stdio.h -include stdlib.h -include string.h -include userland/applications/games/doom_port/doom_libc_shim.h -Wno-sequence-point -Wno-unused-const-variable -Wno-unused-but-set-variable $(DOOM_SYMBOL_REMAP)
+DOOM_CFLAGS = -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython -Ilang/glibc/include -DNORMALUNIX -DLINUX -DSEEK_SET=0 -DSEEK_CUR=1 -DSEEK_END=2 -include stdio.h -include stdlib.h -include string.h -include userland/applications/games/doom_port/doom_libc_shim.h -Wno-sequence-point -Wno-unused-const-variable -Wno-unused-but-set-variable $(DOOM_SYMBOL_REMAP)
 DOOM_PORT_SRC_DIR := $(USERLAND_DIR)/applications/games/doom_port
 DOOM_PORT_CFLAGS = $(CFLAGS) -include userland/applications/games/doom_port/doom_libc_shim.h $(DOOM_SYMBOL_REMAP)
 
@@ -399,7 +399,7 @@ USERLAND_MAIN_ELF := $(BUILD_DIR)/userland-main.elf
 USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
+CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
 CFLAGS += -Ilang/glibc/include
 CFLAGS += -MMD -MP
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-multiple-definition
@@ -505,7 +505,9 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
-	$(AS) -f bin -DIMAGE_TOTAL_SECTORS=$(IMAGE_TOTAL_SECTORS) $< -o $@
+	$(AS) -f bin \
+		-DIMAGE_TOTAL_SECTORS=$(IMAGE_TOTAL_SECTORS) \
+		$< -o $@
 	@mbr_size=$$(wc -c < $@); \
 	if [ "$$mbr_size" -ne 512 ]; then \
 		echo "Erro: MBR precisa ter 512 bytes (atual: $$mbr_size)."; \
@@ -513,10 +515,10 @@ $(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
 	fi
 
 $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
-	$(AS) -f bin -DBOOT_LOAD_ADDR=0x7E00 -DKERNEL_START_LBA=3 -DKERNEL_SECTORS=$(BOOT_KERNEL_SECTORS) $< -o $@
+	$(AS) -f bin -DKERNEL_START_LBA=1 -DKERNEL_SECTORS=$(BOOT_KERNEL_SECTORS) $< -o $@
 	@boot_size=$$(wc -c < $@); \
-	if [ "$$boot_size" -ne 1024 ]; then \
-		echo "Erro: stage1 precisa ter 1024 bytes (atual: $$boot_size)."; \
+	if [ "$$boot_size" -ne 512 ]; then \
+		echo "Erro: stage1 precisa ter 512 bytes (atual: $$boot_size)."; \
 		exit 1; \
 	fi
 
@@ -692,7 +694,7 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB)
 
 $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
-$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
+$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
 	@rm -f $@
 	@bytes=$$(( $(IMAGE_TOTAL_SECTORS) * 512 )); \
 		if command -v truncate >/dev/null 2>&1; then \
@@ -702,9 +704,8 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) 
 		else \
 			dd if=/dev/zero of=$@ bs=512 count=0 seek=$(IMAGE_TOTAL_SECTORS); \
 		fi
-	dd if=$(MBR_BIN) of=$@ bs=512 count=1 conv=notrunc
-	dd if=$(BOOT_BIN) of=$@ bs=512 seek=1 count=2 conv=notrunc
-	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=3 conv=notrunc
+	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc
+	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc
 	$(PYTHON) tools/build_appfs.py --image $@ --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
 	@mkdir -p $(BUILD_DIR)
 	@echo "# bundled assets" > $(IMAGE_ASSET_MANIFEST)

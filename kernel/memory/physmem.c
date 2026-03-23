@@ -1,6 +1,6 @@
 #include <kernel/memory/physmem.h>
 
-#define BOOT_MEMINFO_ADDR 0x8200u
+#define BOOT_MEMINFO_ADDR 0x8000u
 #define BOOT_MEMINFO_MAGIC 0x56424D49u
 #define PHYSMEM_FALLBACK_BASE 0x00500000u
 #define PHYSMEM_FALLBACK_END 0x00900000u
