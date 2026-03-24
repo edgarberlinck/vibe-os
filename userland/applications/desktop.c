@@ -132,6 +132,7 @@ struct file_dialog_state {
     char status[40];
 };
 static int g_clipboard_node = -1;
+static enum app_type g_launch_app_type = APP_NONE;
 static int g_launch_editor_pending = 0;
 static int g_launch_editor_nano = 0;
 static char g_launch_editor_path[80];
@@ -961,6 +962,7 @@ static int open_editor_window_for_node(int node, int *focused) {
     }
     sync_window_instance_rect(idx);
     *focused = idx;
+    debug_window_event(" open-editor", idx, g_windows[idx].type, g_windows[idx].instance);
     return idx;
 }
 
@@ -1169,6 +1171,13 @@ void desktop_request_open_nano(const char *path) {
     }
     g_launch_editor_nano = 1;
     g_launch_editor_pending = 1;
+}
+
+void desktop_request_open_app(enum app_type type) {
+    if (!app_type_valid(type)) {
+        return;
+    }
+    g_launch_app_type = type;
 }
 
 static void sync_window_instance_rect(int widx) {
@@ -1892,6 +1901,7 @@ void desktop_main(void) {
     int running = 1;
 
     ui_init();
+    sys_write_debug("desktop: session start\n");
     start_button = ui_taskbar_start_button_rect();
     menu_rect = ui_start_menu_rect();
     context_menu = desktop_context_menu_rect(0, 0);
@@ -1920,6 +1930,13 @@ void desktop_main(void) {
     for (int i = 0; i < MAX_DOOM; ++i) g_doom_used[i] = 0;
     for (int i = 0; i < MAX_CRAFT; ++i) g_craft_used[i] = 0;
     g_clipboard_node = -1;
+
+    if (g_launch_app_type != APP_NONE) {
+        if (open_window_or_focus_existing(g_launch_app_type, &focused) >= 0) {
+            dirty = 1;
+        }
+        g_launch_app_type = APP_NONE;
+    }
 
     if (g_launch_editor_pending) {
         int idx = open_editor_window_for_node(-1, &focused);
@@ -2816,6 +2833,22 @@ void desktop_main(void) {
                 continue;
             }
 
+            if (key == 6) {
+                if (open_window_or_focus_existing(APP_FILEMANAGER, &focused) >= 0) {
+                    dirty = 1;
+                }
+                continue;
+            }
+            if (key == 20) {
+                int terminal_window = open_window_or_focus_existing(APP_TERMINAL, &focused);
+
+                if (terminal_window >= 0) {
+                    terminal_run_command(&g_terms[g_windows[terminal_window].instance], "vibefetch", 1);
+                    dirty = 1;
+                }
+                continue;
+            }
+
             if (focused < 0 ||
                 !g_windows[focused].active ||
                 g_windows[focused].minimized) {
@@ -3105,4 +3138,5 @@ void desktop_main(void) {
     }
 
     sys_leave_graphics();
+    sys_write_debug("desktop: session stop\n");
 }

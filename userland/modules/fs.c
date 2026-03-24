@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define FS_PERSIST_MAGIC 0x56465331u
-#define FS_PERSIST_VERSION 1u
+#define FS_PERSIST_VERSION 2u
 #define FS_SECTOR_SIZE 512u
 #define FS_STORAGE_DATA_START_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
 
@@ -184,19 +184,38 @@ static int fs_collect_sector_extents(struct fs_extent_info *extents, int max_ext
 
 static int fs_path_matches_root_prefix(const char *path, const char *prefix) {
     int i = 0;
+    const char *lhs = path;
+    const char *rhs = prefix;
 
-    if (!path || !prefix) {
+    if (!lhs || !rhs) {
         return 0;
     }
 
-    while (prefix[i] != '\0') {
-        if (path[i] != prefix[i]) {
+    if (lhs[0] == '/') {
+        ++lhs;
+    }
+    if (rhs[0] == '/') {
+        ++rhs;
+    }
+
+    while (rhs[i] != '\0') {
+        if (lhs[i] != rhs[i]) {
             return 0;
         }
         ++i;
     }
 
-    return path[i] == '\0' || path[i] == '/';
+    return lhs[i] == '\0' || lhs[i] == '/';
+}
+
+static void fs_debug_asset_path(const char *prefix, const char *path) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, prefix, (int)sizeof(msg));
+    str_append(msg, path ? path : "(null)", (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
 }
 
 static void fs_maybe_register_boot_assets_for_path(const char *path) {
@@ -1035,6 +1054,7 @@ static void fs_ensure_doom_wad_registered(void) {
 
     if (fs_detect_doom_wad(FS_STORAGE_DATA_START_LBA, &doom_wad_sectors, &doom_wad_size) == 0) {
         (void)fs_register_image_file("/DOOM/DOOM.WAD", FS_STORAGE_DATA_START_LBA, doom_wad_sectors, doom_wad_size);
+        fs_debug_asset_path("fs: asset file ", "/DOOM/DOOM.WAD");
     }
 }
 
@@ -1044,6 +1064,7 @@ static void fs_register_png_asset(const char *path, uint32_t lba) {
 
     if (fs_detect_png_file(lba, &sectors, &size) == 0) {
         (void)fs_register_image_file(path, lba, sectors, size);
+        fs_debug_asset_path("fs: asset file ", path);
     }
 }
 

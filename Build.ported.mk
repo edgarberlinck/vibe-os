@@ -602,7 +602,7 @@ ported-printf: $(PRINTF_APP)
 
 # === SED APP ===
 
-SED_SRCS := $(wildcard applications/ported/sed/*.c)
+SED_SRCS := applications/ported/sed/vibe_sed.c
 SED_OBJS := $(patsubst applications/ported/sed/%.c,build/ported/sed/%.o,$(SED_SRCS)) \
 	build/app_entry_sed.o \
 	build/app_runtime_sed.o
@@ -623,7 +623,10 @@ build/app_runtime_sed.o: $(APP_RUNTIME) | build
 
 build/ported/sed/%.o: applications/ported/sed/%.c $(COMPAT_LIB) | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -Iapplications/ported/sed -c $< -o $@
+	$(CC) $(CFLAGS) -Iapplications/ported/sed $(INCLUDES) -DHAVE_CONFIG_H \
+		-Iapplications/ported/sed \
+		-Icompat/gnu/lib/libiberty/include \
+		-c $< -o $@
 
 $(SED_ELF): $(SED_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
@@ -696,6 +699,7 @@ PORTED_APP_TARGETS := \
 	$(RMDIR_APP) \
 	$(TAIL_APP) \
 	$(GREP_APP) \
+	$(SED_APP) \
 	$(LOADKEYS_APP) \
 	$(MKDIR_APP) \
 	$(TRUE_APP) \

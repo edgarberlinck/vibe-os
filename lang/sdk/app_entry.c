@@ -13,7 +13,17 @@ extern uint8_t __app_image_end[];
 extern uint8_t __app_bss_end[];
 
 static void vibe_app_boot_debug(const char *text) {
-    __asm__ volatile("int $0x80"
+    __asm__ volatile("push %%ebx\n\t"
+                     "push %%ecx\n\t"
+                     "push %%edx\n\t"
+                     "push %%esi\n\t"
+                     "push %%edi\n\t"
+                     "int $0x80\n\t"
+                     "pop %%edi\n\t"
+                     "pop %%esi\n\t"
+                     "pop %%edx\n\t"
+                     "pop %%ecx\n\t"
+                     "pop %%ebx"
                      :
                      : "a"(11), "b"((int)(uintptr_t)text), "c"(0), "d"(0), "S"(0), "D"(0)
                      : "memory", "cc");
@@ -43,6 +53,7 @@ const struct vibe_app_header g_vibe_app_header = {
     VIBE_APP_MAGIC,
     VIBE_APP_ABI_VERSION,
     (uint16_t)sizeof(struct vibe_app_header),
+    0u,
     0u,
     0u,
     0u,

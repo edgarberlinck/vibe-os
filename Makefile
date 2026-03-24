@@ -134,8 +134,8 @@ BOOT_STAGE2_START_SECTOR := 8
 BOOT_KERNEL_START_SECTOR := 32
 DATA_PARTITION_START_LBA := $(shell echo $$(( $(BOOT_PARTITION_START_LBA) + $(BOOT_PARTITION_SECTORS) )))
 APPFS_DIRECTORY_LBA := 0
-APPFS_DIRECTORY_SECTORS := 8
-APPFS_APP_AREA_SECTORS := 1536
+APPFS_DIRECTORY_SECTORS := 16
+APPFS_APP_AREA_SECTORS := 131072
 PERSIST_SECTOR_COUNT := 640
 IMAGE_ASSET_START_LBA := $(shell echo $$(( $(APPFS_DIRECTORY_LBA) + $(APPFS_DIRECTORY_SECTORS) + $(APPFS_APP_AREA_SECTORS) + $(PERSIST_SECTOR_COUNT) )))
 IMAGE_TOTAL_SECTORS := 524288
@@ -156,6 +156,7 @@ DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.manifest
 BOOT_VOLUME_MANIFEST := $(BUILD_DIR)/boot-volume-layout.txt
 BOOT_POLICY_MANIFEST := $(BUILD_DIR)/boot-policy.txt
 PHASE6_REPORT := $(BUILD_DIR)/phase6-validation.md
+MODULAR_APPS_REPORT := $(BUILD_DIR)/modular-apps-validation.md
 CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
 
 # Kernel sources - kernel only, no stage2
@@ -530,9 +531,7 @@ LUA_APP_OBJS := $(patsubst %.c,$(LUA_APP_BUILD_DIR)/%.o,$(LUA_APP_SRCS))
 LUA_APP_ELF := $(BUILD_DIR)/lang/lua.elf
 LUA_APP_BIN := $(BUILD_DIR)/lang/lua.app
 
-DESKTOP_APP_SRCS := \
-	$(USERLAND_DIR)/applications/desktop_app_main.c \
-	$(USERLAND_DIR)/applications/startx_game_stubs.c \
+DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/modules/shell.c \
 	$(USERLAND_DIR)/modules/busybox.c \
 	$(USERLAND_DIR)/modules/console.c \
@@ -545,6 +544,7 @@ DESKTOP_APP_SRCS := \
 	$(USERLAND_DIR)/modules/dirty_rects.c \
 	$(USERLAND_DIR)/modules/ui_clip.c \
 	$(USERLAND_DIR)/modules/ui_cursor.c \
+	$(USERLAND_DIR)/applications/desktop_math_compat.c \
 	$(USERLAND_DIR)/applications/desktop.c \
 	$(USERLAND_DIR)/applications/terminal.c \
 	$(USERLAND_DIR)/applications/clock.c \
@@ -562,27 +562,85 @@ DESKTOP_APP_SRCS := \
 	$(USERLAND_DIR)/applications/games/brick_race.c \
 	$(USERLAND_DIR)/applications/games/flap_birb.c \
 	$(USERLAND_DIR)/applications/games/doom.c \
-	$(USERLAND_DIR)/applications/games/craft/craft_app.c
-STARTX_APP_BUILD_DIR := $(BUILD_DIR)/lang/startx
-STARTX_APP_OBJS := $(patsubst %.c,$(STARTX_APP_BUILD_DIR)/%.o,$(DESKTOP_APP_SRCS)) \
-	$(STARTX_APP_BUILD_DIR)/app_entry.o \
-	$(STARTX_APP_BUILD_DIR)/app_runtime.o
-STARTX_APP_ELF := $(BUILD_DIR)/lang/startx.elf
+	$(USERLAND_DIR)/applications/games/craft/craft_app.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_gl_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_glfw_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_curl_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_thread_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_auth_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_client_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_db_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/world.c \
+	$(USERLAND_DIR)/applications/games/craft/noise.c \
+	$(USERLAND_DIR)/applications/games/doom_port/doom_port_main.c \
+	$(USERLAND_DIR)/applications/games/doom_port/doom_libc_shim.c \
+	$(USERLAND_DIR)/applications/games/doom_port/i_system_vibe.c \
+	$(USERLAND_DIR)/applications/games/doom_port/i_video_vibe.c \
+	$(USERLAND_DIR)/applications/games/doom_port/i_sound_vibe.c \
+	$(USERLAND_DIR)/applications/games/doom_port/i_net_vibe.c
+DESKTOP_RUNTIME_EXTRA_SRCS :=
+ifeq ($(CRAFT_UPSTREAM_EXPERIMENTAL),1)
+DESKTOP_RUNTIME_EXTRA_SRCS += \
+	$(USERLAND_DIR)/applications/games/craft/craft_math_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_util_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/upstream/deps/lodepng/lodepng.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_map.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_matrix.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_ring.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_sign.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_item.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_cube.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_upstream_runner.c
+endif
+DESKTOP_RUNTIME_SRCS = $(DESKTOP_RUNTIME_BASE_SRCS) $(DESKTOP_RUNTIME_EXTRA_SRCS)
+DESKTOP_RUNTIME_OBJS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(DESKTOP_RUNTIME_SRCS)) \
+	$(DOOM_CORE_OBJS)
+DESKTOP_APP_MAIN_OBJ := $(BUILD_DIR)/lang/desktop_app_main.o
+DESKTOP_APP_RUNTIME_OBJ := $(BUILD_DIR)/lang/desktop_app_runtime.o
+DESKTOP_LAUNCHER_APPS := \
+	startx \
+	edit \
+	nano \
+	terminal \
+	clock \
+	filemanager \
+	editor \
+	taskmgr \
+	calculator \
+	sketchpad \
+	snake \
+	tetris \
+	pacman \
+	space_invaders \
+	pong \
+	donkey_kong \
+	brick_race \
+	flap_birb \
+	doom \
+	craft \
+	personalize
+
 STARTX_APP_BIN := $(BUILD_DIR)/lang/startx.app
-
-EDIT_APP_BUILD_DIR := $(BUILD_DIR)/lang/edit
-EDIT_APP_OBJS := $(patsubst %.c,$(EDIT_APP_BUILD_DIR)/%.o,$(DESKTOP_APP_SRCS)) \
-	$(EDIT_APP_BUILD_DIR)/app_entry.o \
-	$(EDIT_APP_BUILD_DIR)/app_runtime.o
-EDIT_APP_ELF := $(BUILD_DIR)/lang/edit.elf
 EDIT_APP_BIN := $(BUILD_DIR)/lang/edit.app
-
-NANO_APP_BUILD_DIR := $(BUILD_DIR)/lang/nano
-NANO_APP_OBJS := $(patsubst %.c,$(NANO_APP_BUILD_DIR)/%.o,$(DESKTOP_APP_SRCS)) \
-	$(NANO_APP_BUILD_DIR)/app_entry.o \
-	$(NANO_APP_BUILD_DIR)/app_runtime.o
-NANO_APP_ELF := $(BUILD_DIR)/lang/nano.elf
 NANO_APP_BIN := $(BUILD_DIR)/lang/nano.app
+TERMINAL_APP_BIN := $(BUILD_DIR)/lang/terminal.app
+CLOCK_APP_BIN := $(BUILD_DIR)/lang/clock.app
+FILEMANAGER_APP_BIN := $(BUILD_DIR)/lang/filemanager.app
+EDITOR_APP_BIN := $(BUILD_DIR)/lang/editor.app
+TASKMGR_APP_BIN := $(BUILD_DIR)/lang/taskmgr.app
+CALCULATOR_APP_BIN := $(BUILD_DIR)/lang/calculator.app
+SKETCHPAD_APP_BIN := $(BUILD_DIR)/lang/sketchpad.app
+SNAKE_APP_BIN := $(BUILD_DIR)/lang/snake.app
+TETRIS_APP_BIN := $(BUILD_DIR)/lang/tetris.app
+PACMAN_APP_BIN := $(BUILD_DIR)/lang/pacman.app
+SPACE_INVADERS_APP_BIN := $(BUILD_DIR)/lang/space_invaders.app
+PONG_APP_BIN := $(BUILD_DIR)/lang/pong.app
+DONKEY_KONG_APP_BIN := $(BUILD_DIR)/lang/donkey_kong.app
+BRICK_RACE_APP_BIN := $(BUILD_DIR)/lang/brick_race.app
+FLAP_BIRB_APP_BIN := $(BUILD_DIR)/lang/flap_birb.app
+DOOM_APP_BIN := $(BUILD_DIR)/lang/doom.app
+CRAFT_APP_BIN := $(BUILD_DIR)/lang/craft.app
+PERSONALIZE_APP_BIN := $(BUILD_DIR)/lang/personalize.app
 
 SECTORC_APP_BUILD_DIR := $(BUILD_DIR)/lang/sectorc
 SECTORC_APP_SRCS := \
@@ -632,6 +690,7 @@ MKDIR_APP_BIN := $(BUILD_DIR)/ported/mkdir.app
 TRUE_APP_BIN := $(BUILD_DIR)/ported/true.app
 FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
+SED_APP_BIN := $(BUILD_DIR)/ported/sed.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 
 $(shell mkdir -p $(APP_CATALOG_GENERATED_DIR))
@@ -737,12 +796,6 @@ $(APP_CATALOG_GENERATED_MK) $(APP_CATALOG_GENERATED_H): $(APP_CATALOG_MANIFEST) 
 
 $(BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
 $(BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
-$(STARTX_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
-$(STARTX_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
-$(EDIT_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
-$(EDIT_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
-$(NANO_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
-$(NANO_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
 $(USERLAND_BOOT_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
 $(USERLAND_BOOT_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
 
@@ -911,62 +964,28 @@ $(LUA_APP_BIN): $(LUA_APP_ELF)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
 
-$(STARTX_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"startx\" -DVIBE_APP_BUILD_HEAP_SIZE=393216u -c $< -o $@
-
-$(STARTX_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+$(DESKTOP_APP_MAIN_OBJ): $(USERLAND_DIR)/applications/desktop_app_main.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(STARTX_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+$(DESKTOP_APP_RUNTIME_OBJ): $(USERLAND_DIR)/applications/desktop_app_runtime.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(STARTX_APP_ELF): $(STARTX_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_APP) $(STARTX_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+define DESKTOP_LAUNCHER_RULES
+$(BUILD_DIR)/lang/$(1)_app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(CFLAGS) -DVIBE_APP_BUILD_NAME=\"$(1)\" -DVIBE_APP_BUILD_HEAP_SIZE=262144u -c $$< -o $$@
 
-$(STARTX_APP_BIN): $(STARTX_APP_ELF)
-	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+$(BUILD_DIR)/lang/$(1).elf: $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(LINKER_DIR)/app_desktop.ld $$(COMPAT_LIB)
+	$$(LD) -m elf_i386 -T $$(LINKER_DIR)/app_desktop.ld -nostdlib -N $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(COMPAT_LIB) -o $$@ $$(LIBGCC_A)
 
-$(EDIT_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"edit\" -DVIBE_APP_BUILD_HEAP_SIZE=393216u -c $< -o $@
+$(BUILD_DIR)/lang/$(1).app: $(BUILD_DIR)/lang/$(1).elf
+	$$(OBJCOPY) -O binary $$< $$@
+	$$(PYTHON) tools/patch_app_header.py --nm $$(NM) --elf $$< --bin $$@
+endef
 
-$(EDIT_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(EDIT_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(EDIT_APP_ELF): $(EDIT_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_APP) $(EDIT_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
-
-$(EDIT_APP_BIN): $(EDIT_APP_ELF)
-	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
-
-$(NANO_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"nano\" -DVIBE_APP_BUILD_HEAP_SIZE=393216u -c $< -o $@
-
-$(NANO_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(NANO_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(NANO_APP_ELF): $(NANO_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_APP) $(NANO_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
-
-$(NANO_APP_BIN): $(NANO_APP_ELF)
-	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+$(foreach app,$(DESKTOP_LAUNCHER_APPS),$(eval $(call DESKTOP_LAUNCHER_RULES,$(app))))
 
 $(SECTORC_APP_ELF): $(SECTORC_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
 	$(LD) $(LDFLAGS_APP) $(SECTORC_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
@@ -987,8 +1006,8 @@ $(USERLAND_BOOT_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
 
-$(USERLAND_BOOT_APP_ELF): $(USERLAND_BOOT_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_APP) $(USERLAND_BOOT_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+$(USERLAND_BOOT_APP_ELF): $(USERLAND_BOOT_APP_OBJS) $(LINKER_DIR)/app_boot.ld $(COMPAT_LIB)
+	$(LD) -m elf_i386 -T $(LINKER_DIR)/app_boot.ld -nostdlib -N $(USERLAND_BOOT_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(USERLAND_BOOT_APP_BIN): $(USERLAND_BOOT_APP_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -996,14 +1015,14 @@ $(USERLAND_BOOT_APP_BIN): $(USERLAND_BOOT_APP_ELF)
 
 # Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
 # Build once via stamp to avoid parallel duplicate sub-make executions.
-$(PORTED_APPS_STAMP): $(COMPAT_LIB)
+$(PORTED_APPS_STAMP): $(COMPAT_LIB) Build.ported.mk lang/sdk/app_entry.c lang/sdk/app_runtime.c lang/include/vibe_app.h tools/patch_app_header.py
 	@mkdir -p $(dir $@)
 	$(MAKE) -j1 -f Build.ported.mk \
 		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \
 		ported-all
 	@touch $@
 
-$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(SED_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
 $(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
 	$(PYTHON) tools/build_data_partition.py \
@@ -1177,6 +1196,9 @@ run-headless-usb-debug: $(IMAGE)
 
 validate-phase6: $(IMAGE)
 	$(PYTHON) tools/validate_phase6.py --image $(IMAGE) --report $(PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-modular-apps: $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \

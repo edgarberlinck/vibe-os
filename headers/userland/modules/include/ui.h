@@ -116,6 +116,7 @@ void draw_desktop(const struct mouse_state *mouse,
 /* entry point for the graphical desktop environment invoked by startx */
 void desktop_request_open_editor(const char *path);
 void desktop_request_open_nano(const char *path);
+void desktop_request_open_app(enum app_type type);
 void desktop_main(void);
 
 #endif // UI_H

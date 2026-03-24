@@ -3,7 +3,7 @@
 
 #include <include/userland_api.h>
 
-#define FS_MAX_NODES 64
+#define FS_MAX_NODES 192
 #define FS_NAME_MAX 15
 #define FS_FILE_MAX 4096
 #define FS_MAX_SEGMENTS 8

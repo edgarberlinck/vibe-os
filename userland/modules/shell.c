@@ -14,6 +14,16 @@ static char g_shell_history[SHELL_HISTORY_MAX][LINE_MAX];
 static int g_shell_history_count = 0;
 static int g_shell_history_next = 0;
 
+static void shell_debug_cmd(const char *prefix, const char *cmd) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, prefix, (int)sizeof(msg));
+    str_append(msg, cmd ? cmd : "(null)", (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
 static void build_prompt(char *out, int max_len) {
     char cwd[80];
 
@@ -255,6 +265,7 @@ void shell_start_ready(void) {
         int line_len;
 
         build_prompt(prompt, (int)sizeof(prompt));
+        sys_write_debug("shell: ready\n");
         prompt_print(prompt);
 
         line_len = read_line(line, LINE_MAX, prompt);
@@ -271,6 +282,8 @@ void shell_start_ready(void) {
             fs_tick();
             continue;
         }
+
+        shell_debug_cmd("shell: command ", argv[0]);
 
         if (busybox_main(argc, argv) != 0) {
             fs_flush();

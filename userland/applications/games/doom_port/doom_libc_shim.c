@@ -127,6 +127,21 @@ static int doom_try_resolve_wad_candidate(const char *path, const char **resolve
     return -1;
 }
 
+static void doom_debug_path(const char *prefix, const char *path) {
+    char msg[128];
+    int pos = 0;
+
+    while (prefix && *prefix && pos < (int)sizeof(msg) - 1) {
+        msg[pos++] = *prefix++;
+    }
+    while (path && *path && pos < (int)sizeof(msg) - 2) {
+        msg[pos++] = *path++;
+    }
+    msg[pos++] = '\n';
+    msg[pos] = '\0';
+    sys_write_debug(msg);
+}
+
 static int doom_embedded_read_raw(uint32_t start_lba, uint32_t offset, void *dst, uint32_t count) {
     uint8_t sector[DOOM_SECTOR_SIZE];
     uint8_t *out = (uint8_t *)dst;
@@ -872,6 +887,7 @@ int open(const char *path, int flags, ...) {
             g_doom_fds[fd].data = 0;
             g_doom_fds[fd].start_lba = g_fs_nodes[node].image_lba;
         }
+        doom_debug_path("doom: wad open ", resolved_path);
         return fd;
     }
     if (doom_path_is_embedded_wad(path) && doom_embedded_detect_wad()) {
@@ -887,6 +903,7 @@ int open(const char *path, int flags, ...) {
         g_doom_fds[fd].start_lba = DOOM_EMBEDDED_WAD_LBA;
         g_doom_fds[fd].cached_sector = 0u;
         g_doom_fds[fd].cache_valid = 0;
+        doom_debug_path("doom: wad open ", "embedded://doom.wad");
         return fd;
     }
     return -1;

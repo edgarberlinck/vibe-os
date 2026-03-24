@@ -33,6 +33,8 @@ class ScenarioResult:
     timed_out: bool
     exit_code: int
     log: str
+    observed_markers: List[str]
+    observed_any_markers: List[str]
     missing_markers: List[str]
     missing_any_markers: List[str]
 
@@ -107,9 +109,12 @@ def run_scenario(
             output = decode_output(exc.stdout)
 
     missing = [marker for marker in scenario.must_have if marker not in output]
+    observed = [marker for marker in scenario.must_have if marker in output]
     missing_any = []
+    observed_any = []
     if scenario.must_have_any:
-        if not any(marker in output for marker in scenario.must_have_any):
+        observed_any = [marker for marker in scenario.must_have_any if marker in output]
+        if not observed_any:
             missing_any = list(scenario.must_have_any)
     passed = not missing and not missing_any
     return ScenarioResult(
@@ -118,6 +123,8 @@ def run_scenario(
         timed_out=timed_out,
         exit_code=exit_code,
         log=output,
+        observed_markers=observed,
+        observed_any_markers=observed_any,
         missing_markers=missing,
         missing_any_markers=missing_any,
     )
@@ -280,6 +287,11 @@ def write_report(report_path: Path, mbr_info: dict, results: List[ScenarioResult
             if result.missing_any_markers:
                 parts.append("one of: " + ", ".join(result.missing_any_markers))
             lines.append(f"- missing markers: {' | '.join(parts)}")
+
+        if result.observed_markers:
+            lines.append("- observed required markers: " + ", ".join(result.observed_markers))
+        if result.observed_any_markers:
+            lines.append("- observed success markers: " + ", ".join(result.observed_any_markers))
 
         preview_lines = [line for line in result.log.strip().splitlines() if line][:14]
         if preview_lines:

@@ -7,6 +7,7 @@
 #include <userland/modules/include/shell.h> /* for history print */
 #include <userland/modules/include/ui.h>    /* for startx */
 #include <userland/modules/include/syscalls.h>
+#include <userland/modules/include/utils.h>
 #include "app_catalog.h"
 #include <stddef.h> /* for size_t */
 
@@ -74,6 +75,16 @@ struct command {
     const char *name;
     int (*handler)(int argc, char **argv);
 };
+
+static void busybox_debug_cmd(const char *prefix, const char *cmd) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, prefix, (int)sizeof(msg));
+    str_append(msg, cmd ? cmd : "(null)", (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
 
 static const char *const g_builtin_help_commands[] = {
     "help",
@@ -179,6 +190,7 @@ static const char *path_basename(const char *path) {
 }
 
 static int try_run_external(int argc, char **argv) {
+    busybox_debug_cmd("busybox: try external ", (argc > 0 && argv) ? argv[0] : "(null)");
     if (has_slash(argv[0])) {
         int node = fs_resolve(argv[0]);
         if (node >= 0 && !g_fs_nodes[node].is_dir) {
@@ -196,25 +208,30 @@ static int try_run_external(int argc, char **argv) {
             patched_argv[patched_argc] = 0;
             rc = lang_try_run(patched_argc, patched_argv);
             if (rc >= 0) {
+                busybox_debug_cmd("busybox: external ok ", patched_argv[0]);
                 return rc;
             }
         }
+        busybox_debug_cmd("busybox: external miss ", argv[0]);
         return -1;
     }
 
     {
         int rc = lang_try_run(argc, argv);
         if (rc >= 0) {
+            busybox_debug_cmd("busybox: external ok ", argv[0]);
             return rc;
         }
     }
 
+    busybox_debug_cmd("busybox: external miss ", argv[0]);
     return -1;
 }
 
 static int try_run_external_as(int argc, char **argv, const char *name) {
     char *patched_argv[32];
     int patched_argc = argc;
+    int rc;
 
     if (!name || name[0] == '\0') {
         return -1;
@@ -228,7 +245,11 @@ static int try_run_external_as(int argc, char **argv, const char *name) {
     }
     patched_argv[0] = (char *)name;
     patched_argv[patched_argc] = 0;
-    return lang_try_run(patched_argc, patched_argv);
+    rc = lang_try_run(patched_argc, patched_argv);
+    if (rc >= 0) {
+        busybox_debug_cmd("busybox: external ok ", patched_argv[0]);
+    }
+    return rc;
 }
 
 static int should_prefer_external(const char *cmd) {
@@ -548,6 +569,7 @@ static int cmd_startx(int argc, char **argv) {
     if (try_run_external(argc, argv) >= 0) {
         return 0;
     }
+    sys_write_debug("busybox: startx fallback desktop_main\n");
     desktop_main();
     return 0;
 #else

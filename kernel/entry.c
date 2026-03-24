@@ -88,7 +88,7 @@ static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
 __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     enum {
         USERLAND_STACK_RESERVE = 512 * 1024,
-        USERLAND_APP_ARENA_RESERVE = VIBE_APP_STACK_TOP,
+        USERLAND_APP_ARENA_RESERVE = VIBE_APP_RESERVED_TOP,
         HEAP_GUARD_BYTES = 64 * 1024
     };
     extern uint8_t __bss_end[];

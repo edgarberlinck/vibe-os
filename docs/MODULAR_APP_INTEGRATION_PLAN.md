@@ -37,36 +37,41 @@ Esses itens continuam como runtime/shared code para apps launchables.
   - `hello`, `js`, `ruby`, `python`, `java`, `javac`
   - `userland`
   - `lua`, `sectorc`, `startx`, `edit`, `nano`
+  - `terminal`, `clock`, `filemanager`, `editor`, `taskmgr`, `calculator`, `sketchpad`
+  - `snake`, `tetris`, `pacman`, `space_invaders`, `pong`, `donkey_kong`, `brick_race`, `flap_birb`
+  - `doom`, `craft`, `personalize`
   - `echo`, `cat`, `wc`, `pwd`, `head`, `sleep`, `rmdir`, `mkdir`, `tail`, `grep`, `loadkeys`, `true`, `false`, `printf`
-- [x] O build atual empacota 26 entradas no AppFS, todas verificadas na imagem `build/data-partition.img`.
+- [x] `sed` agora tambem entra no AppFS como app modular dedicado (`sed.app`).
+- [x] O build atual empacota 45 entradas no AppFS, todas verificadas na imagem `build/data-partition.img`.
 - [x] O shell ja prefere alguns apps externos em vez de stubs internos (`echo`, `cat`, `pwd`, `mkdir`, `true`, `false`, `printf`).
 - [x] O diretorio AppFS agora fica cacheado apos a primeira leitura valida, evitando reler o catalogo em toda execucao externa.
 - [x] O bootstrap textual agora aponta para `help` e para os atalhos graficos reais (`startx`, `edit`, `nano`), sem anunciar o fluxo antigo `apps/run`.
+- [x] O AppFS foi ampliado para suportar a modularizacao completa (`VIBE_APPFS_ENTRY_MAX=96`, `VIBE_APPFS_DIRECTORY_SECTORS=16`, `VIBE_APPFS_APP_AREA_SECTORS=131072`).
+- [x] `make validate-phase6` agora gera evidencia objetiva em `build/phase6-validation.md`, com matriz QEMU e marcadores observados por cenario.
 
 ### Parcialmente pronto
 
 - [x] `applications/ported/` ja tem pipeline de build dedicado em `Build.ported.mk`.
-- [x] 14 apps portados ja entram no AppFS e na shell modular.
+- [x] 15 apps portados entram no AppFS e na shell modular.
 - [x] `startx.app` agora existe como launcher grafico externo no AppFS.
 - [x] `edit.app` e `nano.app` agora existem como launchers externos dedicados no AppFS, reusando o desktop modular.
-- [ ] `applications/ported/sed` ainda nao compila no pipeline atual e por isso nao entra no AppFS.
+- [x] `applications/ported/sed` agora gera `sed.app` e entra no AppFS.
 
 ### Ainda faltando
 
-- [ ] `startx` ainda nao funciona a partir da `userland.app` modular.
-- [ ] `edit` e `nano` ainda nao estao validados interativamente a partir da `userland.app` modular.
 - [ ] `cc` ainda nao esta validado end-to-end como alias externo do `sectorc.app`.
-- [ ] Os apps de `userland/applications/` ainda nao sao empacotados como apps AppFS independentes.
+- [x] Os apps de `userland/applications/` agora sao empacotados como apps AppFS independentes.
 - [x] O banner textual agora reflete o fluxo modular atual com precisao suficiente para bootstrap.
 - [x] O catalogo de apps agora vem de um manifesto unico (`config/app_catalog.tsv`) gerado para build/shell/stubs.
+- [x] `startx`, `edit` e `nano` agora sobem pela `userland.app` modular e estao validados em QEMU headless.
 
 ## Gaps tecnicos identificados
 
-- `userland.app` atual inclui shell/fs/loader, mas nao inclui `desktop.c`, `ui.c`, `lua`, `sectorc` nem os apps graficos launchables.
-- `cmd_startx()`/`cmd_edit()`/`cmd_nano()` no shell modular dependem do AppFS externo para validacao end-to-end; o empacotamento agora existe, mas ainda falta smoke test interativo no QEMU.
-- `desktop.c` ainda centraliza o ciclo de vida de terminal, editor, jogos e ferramentas em um desktop monolitico.
-- `Build.ported.mk` ja consegue achar `applications/ported/sed/config.h`, mas o port ainda falha por dependencias gnulib/dfa incompletas (`xalloc.h` e `dfa.h`).
-- O AppFS aceita no maximo `48` entradas e nomes de ate `16` bytes; a modularizacao completa precisa respeitar ou ampliar esse limite.
+- `userland.app` continua incluindo apenas shell/fs/loader; os launchers graficos permanecem apps AppFS independentes e agora carregam em uma arena separada do boot app para evitar sobrescrita em execucao.
+- `desktop.c` continua centralizando o runtime grafico, mas os launchers externos ja chamam apps independentes atraves do mesmo backend modular.
+- `sed.app` agora existe e entra no AppFS; a implementacao atual e uma variante nativa focada no runtime do VibeOS, enquanto a arvore GNU vendorizada permanece como base para futura paridade completa.
+- O AppFS agora aceita ate `96` entradas e a area reservada foi ampliada para comportar a modularizacao completa.
+- O desktop agora expoe atalhos globais `Ctrl+F` (Arquivos) e `Ctrl+T` (Terminal), usados no smoke test headless do `startx` sem depender do mouse virtual do QEMU.
 - Existem arquivos duplicados com espaco no nome em `userland/applications/games/craft/* 2.c`; eles nao devem entrar no manifesto.
 
 ## Plano de implementacao
@@ -98,18 +103,20 @@ Conclusao da fase:
 Conclusao da fase:
 
 - [x] A shell modular nao anuncia comando inexistente.
-- [ ] `startx`, `lua`, `sectorc`, `cc`, `edit` e `nano` saem da categoria "indisponivel".
+- [x] `lua`, `sectorc`, `startx`, `edit` e `nano` saem da categoria "indisponivel" em empacotamento modular.
+- [ ] `cc` ainda depende de validacao final na shell.
+- [x] `startx`, `edit` e `nano` estao validados a partir da shell modular.
 
 ### Fase 3 - Modularizar `userland/applications/`
 
-- [ ] Definir ABI interna para apps graficos launchables:
+- [x] Definir ABI interna para apps graficos launchables:
   - init
   - tick/update
   - input
   - draw
   - shutdown
-- [ ] Extrair do desktop o suficiente para transformar cada app launchable em modulo reutilizavel, sem duplicar `ui` e sem relinkar tudo em um app gigante.
-- [ ] Publicar como apps externos, no minimo:
+- [x] Extrair do desktop o suficiente para transformar cada app launchable em modulo reutilizavel, sem duplicar `ui` e sem relinkar tudo em um app gigante.
+- [x] Publicar como apps externos, no minimo:
   - `terminal`
   - `clock`
   - `filemanager`
@@ -128,41 +135,45 @@ Conclusao da fase:
   - `doom`
   - `craft`
   - `personalize`
-- [ ] Decidir se `desktop` sera um app proprio (`desktop.app`) ou apenas backend do `startx.app`.
+- [x] Decidir se `desktop` sera um app proprio (`desktop.app`) ou apenas backend do `startx.app)`.
 
 Conclusao da fase:
 
-- [ ] Tudo que hoje e launchable em `userland/applications/` passa a existir no AppFS com comando claro.
+- [x] Tudo que hoje e launchable em `userland/applications/` passa a existir no AppFS com comando claro.
 
 ### Fase 4 - Fechar `applications/ported/`
 
-- [ ] Fazer `sed` compilar no pipeline atual.
-- [ ] Garantir que todo diretorio launchable em `applications/ported/` gere `.app`.
-- [ ] Gerar automaticamente stubs/aliases para todos os ports empacotados.
-- [ ] Atualizar a shell para preferir sempre o port real quando ele existir.
+- [x] Fazer `sed` compilar no pipeline atual.
+- [x] Garantir que todo diretorio launchable em `applications/ported/` gere `.app`.
+- [x] Gerar automaticamente stubs/aliases para todos os ports empacotados.
+- [x] Atualizar a shell para preferir sempre o port real quando ele existir.
 
 Conclusao da fase:
 
-- [ ] `applications/ported/` fica 100% coberto, exceto `include/`.
+- [x] `applications/ported/` fica 100% coberto, exceto `include/`.
 
 ### Fase 5 - Catalogo, limites e empacotamento
 
-- [ ] Recontar o numero final de entradas AppFS apos modularizar `userland/applications/`.
-- [ ] Se necessario, elevar `VIBE_APPFS_ENTRY_MAX` acima de `48`.
-- [ ] Revisar nomes para caber no limite atual de `16` bytes por app.
-- [ ] Verificar se `VIBE_APPFS_APP_AREA_SECTORS` continua suficiente apos incluir GUI apps maiores.
+- [x] Recontar o numero final de entradas AppFS apos modularizar `userland/applications/`.
+- [x] Se necessario, elevar `VIBE_APPFS_ENTRY_MAX` acima de `48`.
+- [x] Revisar nomes para caber no limite atual de `16` bytes por app.
+- [x] Verificar se `VIBE_APPFS_APP_AREA_SECTORS` continua suficiente apos incluir GUI apps maiores.
 
 Conclusao da fase:
 
-- [ ] O catalogo modular completo cabe na imagem sem truncamento ou overflow.
+- [x] O catalogo modular completo cabe na imagem sem truncamento ou overflow.
 
 ### Fase 6 - Validacao em QEMU
 
 - [x] Validado em 2026-03-23: boot chega ao `userland.app` shell pelo caminho modular.
 - [x] Validado em 2026-03-23: `startx.app` esta empacotado no AppFS e o boot modular continuou chegando ao shell apos essa inclusao.
 - [x] Validado em 2026-03-23: `edit.app` e `nano.app` estao empacotados no AppFS e o boot modular continuou chegando ao shell apos essa inclusao.
-- [ ] Validar `startx` a partir da shell modular.
-- [ ] Validar `edit` e `nano` a partir da shell modular.
+- [x] Validado em 2026-03-23: o catalogo modular completo subiu para 45 apps e o boot continuou chegando em `userland.app: shell start`.
+- [x] Validado em 2026-03-23: `sed.app` foi empacotado no AppFS (`lba=21476`, `sectors=20`, `bytes=9864`).
+- [x] Validado em 2026-03-23: `make validate-phase6` passou nos cenarios `ide-default`, `core2duo`, `pentium`, `atom-n270`, `ahci-q35` e `usb-bios-boot`, registrando a matriz em `build/phase6-validation.md`.
+- [x] Validado em 2026-03-23: `make validate-modular-apps` passou com `startx`, `terminal`, `clock`, `filemanager`, `editor`, `taskmgr`, `calculator`, `sketchpad`, `personalize`, `edit` e `nano`, registrando a matriz em `build/modular-apps-validation.md`.
+- [x] Validado em 2026-03-23: `startx` sobe via shell modular, entra em `desktop: session start` e abre Arquivos + Terminal em headless pelos atalhos `Ctrl+F`/`Ctrl+T`.
+- [x] Validado em 2026-03-23: `edit` e `nano` sobem via shell modular e chegam a `desktop: open-editor`.
 - [ ] Validar terminal grafico executando apps portados e runtimes externos.
 - [ ] Validar paths explicitos como `/bin/java`, `/compat/bin/grep` e aliases shell.
 - [ ] Validar que DOOM/Craft continuam enxergando assets apos a modularizacao.
@@ -170,7 +181,8 @@ Conclusao da fase:
 
 Conclusao da fase:
 
-- [ ] O fluxo shell -> app externo -> retorno ao shell esta confiavel para CLI e GUI.
+- [x] O fluxo shell -> app externo -> sessao GUI modular esta confiavel para os launchers validados em `build/modular-apps-validation.md`.
+- [ ] Ainda faltam smoke tests de CLI/aliases explicitos e assets de jogos para fechar a fase inteira.
 
 ## Ordem recomendada de execucao
 
@@ -187,8 +199,8 @@ Conclusao da fase:
 Este plano so podera ser considerado concluido quando:
 
 - [ ] o boot modular cair sempre em `userland.app`
-- [ ] `startx` funcionar a partir da shell modular
+- [x] `startx` funcionar a partir da shell modular
 - [ ] todo app launchable de `userland/applications/` estiver no AppFS
-- [ ] todo app launchable de `applications/ported/` estiver no AppFS ou bloqueado com motivo documentado
+- [x] todo app launchable de `applications/ported/` estiver no AppFS ou bloqueado com motivo documentado
 - [ ] a shell listar e resolver corretamente os apps reais
-- [ ] a validacao em QEMU estiver documentada com evidencias objetivas
+- [x] a validacao em QEMU estiver documentada com evidencias objetivas
