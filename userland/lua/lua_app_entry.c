@@ -4,7 +4,8 @@
 extern int vibe_app_main(int argc, char **argv);
 
 static void vibe_app_boot_debug(const char *text) {
-    __asm__ volatile("push %%ebx\n\t"
+    __asm__ volatile("push %%eax\n\t"
+                     "push %%ebx\n\t"
                      "push %%ecx\n\t"
                      "push %%edx\n\t"
                      "push %%esi\n\t"
@@ -14,7 +15,8 @@ static void vibe_app_boot_debug(const char *text) {
                      "pop %%esi\n\t"
                      "pop %%edx\n\t"
                      "pop %%ecx\n\t"
-                     "pop %%ebx"
+                     "pop %%ebx\n\t"
+                     "pop %%eax"
                      :
                      : "a"(11), "b"((int)(uintptr_t)text), "c"(0), "d"(0), "S"(0), "D"(0)
                      : "memory", "cc");

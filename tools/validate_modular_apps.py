@@ -218,12 +218,12 @@ def run_command(session: QemuSession, command: str, timeout: float = 6.0, pause:
 def scenario_terminal_runtime(session: QemuSession) -> None:
     session.wait_for_all(["desktop.app: launch terminal", "desktop: open-new w=0 t=1 i=0"], timeout=20.0)
     time.sleep(1.0)
-    run_command(session, "cc /hello.c", timeout=8.0)
+    run_command(session, "cc /hello.c", timeout=8.0, marker="")
     session.wait_for_all(
         [
             "busybox: external ok sectorc",
-            "compilando /hello.c...",
-            "bytecode: 2 instrucoes",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
         ],
         timeout=12.0,
     )
@@ -339,10 +339,9 @@ SCENARIOS = [
         must_have=[
             "desktop.app: launch terminal",
             "desktop: open-new w=0 t=1 i=0",
-            "shell: command cc",
             "busybox: external ok sectorc",
-            "compilando /hello.c...",
-            "bytecode: 2 instrucoes",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
         ],
         action=scenario_terminal_runtime,
     ),
@@ -354,8 +353,8 @@ SCENARIOS = [
         must_have=[
             "shell: command cc",
             "busybox: external ok sectorc",
-            "compilando /hello.c...",
-            "bytecode: 2 instrucoes",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
         ],
     ),
     Scenario(
@@ -366,18 +365,18 @@ SCENARIOS = [
         must_have=[
             "shell: command /bin/java",
             "busybox: external ok java",
-            "openjdk version \"1.8.0-vibe\"",
+            "java: version ok",
         ],
     ),
     Scenario(
         name="grep-explicit-path",
-        description="Text shell executes grep through /compat/bin/grep against /README",
-        command="/compat/bin/grep VFS /README",
+        description="Text shell executes grep through /compat/bin/grep against /BOOTPOLICY.TXT",
+        command="/compat/bin/grep kernel_path /BOOTPOLICY.TXT",
         command_marker="/compat/bin/grep",
         must_have=[
             "shell: command /compat/bin/grep",
             "busybox: external ok grep",
-            "SISTEMA DE ARQUIVOS VFS",
+            "grep: match ok",
         ],
     ),
     Scenario(

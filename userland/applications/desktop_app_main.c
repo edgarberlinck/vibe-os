@@ -82,25 +82,6 @@ static void desktop_app_debug_launch(const char *app_name) {
     sys_write_debug(msg);
 }
 
-static void desktop_app_debug_arg0(int argc, char **argv) {
-    char msg[96];
-
-    msg[0] = '\0';
-    str_append(msg, "desktop.app: argc=", (int)sizeof(msg));
-    if (argc >= 0 && argc <= 9) {
-        char digit[2];
-        digit[0] = (char)('0' + argc);
-        digit[1] = '\0';
-        str_append(msg, digit, (int)sizeof(msg));
-    } else {
-        str_append(msg, "?", (int)sizeof(msg));
-    }
-    str_append(msg, " argv0=", (int)sizeof(msg));
-    str_append(msg, (argc > 0 && argv && argv[0]) ? argv[0] : "(null)", (int)sizeof(msg));
-    str_append(msg, "\n", (int)sizeof(msg));
-    sys_write_debug(msg);
-}
-
 static void desktop_prepare_launch(int argc, char **argv) {
     const char *app_name = desktop_app_name(argc, argv);
     const char *path = "";
@@ -122,7 +103,6 @@ static void desktop_prepare_launch(int argc, char **argv) {
 int vibe_app_main(int argc, char **argv) {
     const char *app_name = desktop_app_name(argc, argv);
 
-    desktop_app_debug_arg0(argc, argv);
     desktop_app_debug_launch(app_name);
     console_init();
     fs_init();
