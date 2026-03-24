@@ -53,6 +53,7 @@ ifeq ($(strip $(QEMU)),)
 QEMU := qemu-system-i386
 endif
 QEMU_MEMORY_MB ?= 3072
+QEMU_SERIAL_LOG ?= build/qemu-serial.log
 ifeq ($(strip $(PYTHON)),)
 PYTHON := python3
 endif
@@ -1098,12 +1099,17 @@ run: $(IMAGE)
 		fi; \
 	fi
 
-run-debug: $(IMAGE)
+run-debug: run-debug-gui
+
+run-debug-gui: $(IMAGE)
+	@mkdir -p $(dir $(QEMU_SERIAL_LOG))
+	@rm -f $(QEMU_SERIAL_LOG)
+	@echo "QEMU GUI debug ativo. Serial do kernel: $(QEMU_SERIAL_LOG)"
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1205,13 +1211,14 @@ validate-modular-apps: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 debug: $(IMAGE)
+	@echo "QEMU pausado para GDB em tcp::1234. Serial do kernel no terminal."
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -s -S; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio -monitor none -s -S; \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64 com debug"; \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -s -S; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio -monitor none -s -S; \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
