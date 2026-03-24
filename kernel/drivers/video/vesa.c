@@ -12,7 +12,11 @@ int vesa_init(struct video_mode *mode) {
     if (bootinfo->magic != BOOTINFO_MAGIC ||
         bootinfo->version != BOOTINFO_VERSION ||
         (bootinfo->flags & BOOTINFO_FLAG_VESA_VALID) == 0u ||
-        bootinfo->vesa.mode != 0x0101u) {
+        bootinfo->vesa.fb_addr < 0x00100000u ||
+        bootinfo->vesa.pitch == 0u ||
+        bootinfo->vesa.width < 640u ||
+        bootinfo->vesa.height < 480u ||
+        bootinfo->vesa.bpp != 8u) {
         return -1;
     }
 

@@ -166,6 +166,7 @@ static int ui_wallpaper_set_from_node_internal(int node, int persist) {
                                      IMAGE_MAX_TARGET_H,
                                      &width,
                                      &height) != 0) {
+        sys_write_debug("ui: wallpaper decode failed\n");
         return -1;
     }
 
@@ -184,6 +185,7 @@ static int ui_try_set_default_wallpaper(void) {
     int node = fs_resolve("/wallpaper.png");
 
     if (node < 0) {
+        sys_write_debug("ui: default wallpaper not found\n");
         ui_wallpaper_reset(0);
         return -1;
     }

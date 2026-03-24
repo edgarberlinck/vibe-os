@@ -4,10 +4,10 @@ ORG 0x7C00
 %define RELOC_SEG 0x0700
 %define RELOC_OFF 0x0000
 %define RELOC_ADDR 0x7000
-%define BOOTINFO_ADDR 0x8000
-%define BOOTINFO_WORDS 32
+%define BOOTINFO_ADDR 0x8D00
+%define BOOTINFO_WORDS 66
 %define BOOTINFO_MAGIC 0x544F4256
-%define BOOTINFO_VERSION 1
+%define BOOTINFO_VERSION 2
 %define BOOTINFO_FLAG_VESA_VALID 0x00000001
 %define BOOTINFO_FLAG_PARTITIONS_VALID 0x00000004
 %define BOOTINFO_VESA_MODE 16
@@ -39,9 +39,13 @@ ORG 0x7C00
 %define VBE_MODE_INFO_ADDR 0x0600
 %define VBE_LFB_ENABLE 0x4000
 %define VBE_MODE_640X480X8  0x0101
-%define VBE_MODE_640X480X16 0x0111
-%define VBE_MODE_800X600X8  0x0103
-%define VBE_MODE_800X600X16 0x0114
+
+%macro TRACE_CHAR 1
+%ifdef VIBELOADER_DEBUG_TRACE
+    mov al, %1
+    out 0xE9, al
+%endif
+%endmacro
 
 start:
     cli
@@ -60,16 +64,13 @@ start:
 relocated_start:
     mov [boot_drive], dl
 
-    mov al, 'M'
-    out 0xE9, al
+    TRACE_CHAR 'M'
     call init_bootinfo
     call setup_vesa
-    mov al, 'V'
-    out 0xE9, al
+    TRACE_CHAR 'V'
     call load_active_vbr
     jc disk_error
-    mov al, 'J'
-    out 0xE9, al
+    TRACE_CHAR 'J'
     jmp 0x0000:0x7C00
 
 load_active_vbr:
@@ -130,7 +131,7 @@ setup_vesa:
     mov dx, VBE_MODE_640X480X8
     call try_vbe_mode
     jnc .mode_ready
-    jc .done
+    jmp .done
 
 .mode_ready:
     mov si, VBE_MODE_INFO_ADDR
@@ -152,12 +153,37 @@ setup_vesa:
     ret
 
 try_vbe_mode:
+    xor ax, ax
+    mov es, ax
+    mov di, VBE_MODE_INFO_ADDR
+    mov cx, 128
+    rep stosw
+
     mov ax, 0x4F01
     mov cx, dx
     mov di, VBE_MODE_INFO_ADDR
     int 0x10
     cmp ax, 0x004F
     jne .fail
+
+    test word [VBE_MODE_INFO_ADDR + 0], 0x0001
+    jz .fail
+    test word [VBE_MODE_INFO_ADDR + 0], 0x0010
+    jz .fail
+    test word [VBE_MODE_INFO_ADDR + 0], 0x0080
+    jz .fail
+    cmp word [VBE_MODE_INFO_ADDR + 0x10], 0
+    je .fail
+    cmp word [VBE_MODE_INFO_ADDR + 0x12], 640
+    jne .fail
+    cmp word [VBE_MODE_INFO_ADDR + 0x14], 480
+    jne .fail
+    cmp byte [VBE_MODE_INFO_ADDR + 0x19], 8
+    jne .fail
+    cmp byte [VBE_MODE_INFO_ADDR + 0x1B], 4
+    jne .fail
+    cmp dword [VBE_MODE_INFO_ADDR + 0x28], 0
+    je .fail
 
     mov ax, 0x4F02
     mov bx, dx
@@ -177,6 +203,7 @@ init_bootinfo:
     mov es, ax
     mov di, BOOTINFO_ADDR
     mov cx, BOOTINFO_WORDS
+    cld
     rep stosw
     mov dword [BOOTINFO_ADDR + 0], BOOTINFO_MAGIC
     mov dword [BOOTINFO_ADDR + 4], BOOTINFO_VERSION
@@ -188,8 +215,7 @@ init_bootinfo:
     ret
 
 disk_error:
-    mov al, 'E'
-    out 0xE9, al
+    TRACE_CHAR 'E'
 .halt:
     hlt
     jmp .halt

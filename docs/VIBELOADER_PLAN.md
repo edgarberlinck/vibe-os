@@ -158,7 +158,7 @@ Obs.: o formato pode continuar propositalmente simples neste ciclo, sem script, 
 
 ## Fora de escopo deste ciclo
 
-- [ ] UEFI nativo.
+- [ ] UEFI nativo. não quero suporte a urfi, apenas boot legacy 32 bits
 - [ ] Script de boot estilo shell.
 - [ ] Temas dinamicos multiplos do boot.
 - [ ] Animacoes complexas no boot.

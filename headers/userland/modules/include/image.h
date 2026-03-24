@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define IMAGE_MAX_TARGET_W 80
-#define IMAGE_MAX_TARGET_H 60
+#define IMAGE_MAX_TARGET_W 120
+#define IMAGE_MAX_TARGET_H 80
 
 int image_decode_to_palette(const uint8_t *data, int size,
                             uint8_t *out_pixels, int out_stride,

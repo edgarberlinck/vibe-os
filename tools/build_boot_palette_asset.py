@@ -25,7 +25,14 @@ EGA16 = [
     (255, 255, 255),
 ]
 
-RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+RESAMPLING = getattr(Image, "Resampling", Image)
+RESAMPLERS = {
+    "nearest": RESAMPLING.NEAREST,
+    "box": RESAMPLING.BOX,
+    "bilinear": RESAMPLING.BILINEAR,
+    "bicubic": RESAMPLING.BICUBIC,
+    "lanczos": RESAMPLING.LANCZOS,
+}
 
 
 def build_palette() -> List[Tuple[int, int, int]]:
@@ -58,12 +65,12 @@ def nearest_palette_index(palette: List[Tuple[int, int, int]], rgb: Tuple[int, i
     return best_index
 
 
-def convert_image(input_path: Path, output_path: Path, width: int, height: int) -> None:
+def convert_image(input_path: Path, output_path: Path, width: int, height: int, resample: str) -> None:
     palette = build_palette()
 
     with Image.open(input_path) as image:
         rgba = image.convert("RGBA")
-        fitted = ImageOps.fit(rgba, (width, height), method=RESAMPLING_LANCZOS, centering=(0.5, 0.5))
+        fitted = ImageOps.fit(rgba, (width, height), method=RESAMPLERS[resample], centering=(0.5, 0.5))
         pixels = fitted.load()
 
         output = bytearray(width * height)
@@ -86,9 +93,15 @@ def main() -> int:
     parser.add_argument("--output", required=True, help="Output binary path")
     parser.add_argument("--width", type=int, required=True, help="Target width in pixels")
     parser.add_argument("--height", type=int, required=True, help="Target height in pixels")
+    parser.add_argument(
+        "--resample",
+        choices=sorted(RESAMPLERS.keys()),
+        default="box",
+        help="Resize filter to use before palette conversion",
+    )
     args = parser.parse_args()
 
-    convert_image(Path(args.input), Path(args.output), args.width, args.height)
+    convert_image(Path(args.input), Path(args.output), args.width, args.height, args.resample)
     return 0
 
 

@@ -148,7 +148,13 @@ CRAFT_FONT_SRC := userland/applications/games/craft/upstream/textures/font.png
 CRAFT_SKY_SRC := userland/applications/games/craft/upstream/textures/sky.png
 CRAFT_SIGN_SRC := userland/applications/games/craft/upstream/textures/sign.png
 WALLPAPER_SRC := assets/wallpaper.png
+WALLPAPER_RUNTIME_PNG := $(BUILD_DIR)/wallpaper-runtime.png
+WALLPAPER_RUNTIME_W := 120
+WALLPAPER_RUNTIME_H := 80
 BOOTLOADER_BG_SRC := assets/bootloader_background.png
+BOOTLOADER_BG_WIDTH := 192
+BOOTLOADER_BG_HEIGHT := 144
+BOOTLOADER_BG_RESAMPLE := box
 CRAFT_TEXTURE_IMAGE_LBA := 30000
 CRAFT_FONT_IMAGE_LBA := 30128
 CRAFT_SKY_IMAGE_LBA := 30256
@@ -815,12 +821,13 @@ $(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
 		exit 1; \
 	fi
 
-$(BOOTLOADER_BG_BIN): $(BOOTLOADER_BG_SRC) tools/build_boot_palette_asset.py | $(BUILD_DIR)
+$(BOOTLOADER_BG_BIN): $(BOOTLOADER_BG_SRC) tools/build_boot_palette_asset.py Makefile | $(BUILD_DIR)
 	$(PYTHON) tools/build_boot_palette_asset.py \
 		--input $(BOOTLOADER_BG_SRC) \
 		--output $@ \
-		--width 80 \
-		--height 60
+		--width $(BOOTLOADER_BG_WIDTH) \
+		--height $(BOOTLOADER_BG_HEIGHT) \
+		--resample $(BOOTLOADER_BG_RESAMPLE)
 
 $(BOOT_BIN): $(BOOT_DIR)/stage1.asm $(STAGE2_BIN) | $(BUILD_DIR)
 	@stage2_sectors=$$((($$(wc -c < $(STAGE2_BIN)) + 511) / 512)); \
@@ -1101,7 +1108,14 @@ $(PRIMES_APP_BIN) $(QUIZ_APP_BIN) $(RAIN_APP_BIN) $(RANDOM_APP_BIN) $(ROBOTS_APP
 $(SNAKE_BSD_APP_BIN) $(TEACHGAMMON_APP_BIN) $(TETRIS_BSD_APP_BIN) $(TREK_APP_BIN) \
 $(WARGAMES_APP_BIN) $(WORM_APP_BIN) $(WORMS_APP_BIN) $(WUMP_APP_BIN): $(BSD_GAMES_APPS_STAMP)
 
-$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_SRC)
+$(WALLPAPER_RUNTIME_PNG): $(WALLPAPER_SRC) tools/build_runtime_png_asset.py | $(BUILD_DIR)
+	$(PYTHON) tools/build_runtime_png_asset.py \
+		--input $(WALLPAPER_SRC) \
+		--output $@ \
+		--width $(WALLPAPER_RUNTIME_W) \
+		--height $(WALLPAPER_RUNTIME_H)
+
+$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG)
 	$(PYTHON) tools/build_data_partition.py \
 		--image $@ \
 		--image-total-sectors $(DATA_PARTITION_SECTORS) \
@@ -1115,7 +1129,7 @@ $(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FON
 		--asset "$(CRAFT_FONT_SRC):$(CRAFT_FONT_IMAGE_LBA):font.png" \
 		--asset "$(CRAFT_SKY_SRC):$(CRAFT_SKY_IMAGE_LBA):sky.png" \
 		--asset "$(CRAFT_SIGN_SRC):$(CRAFT_SIGN_IMAGE_LBA):sign.png" \
-		--asset "$(WALLPAPER_SRC):$(WALLPAPER_IMAGE_LBA):wallpaper.png" \
+		--asset "$(WALLPAPER_RUNTIME_PNG):$(WALLPAPER_IMAGE_LBA):wallpaper.png" \
 		$(LANG_APP_BINS)
 	@cp $(DATA_IMAGE_MANIFEST) $(IMAGE_ASSET_MANIFEST)
 

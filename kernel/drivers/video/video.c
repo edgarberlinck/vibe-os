@@ -37,8 +37,8 @@ static int kernel_video_mode_usable(const struct video_mode *mode) {
     }
 
     return mode->fb_addr >= GRAPHICS_MIN_FB_ADDR &&
-           mode->width == GRAPHICS_WIDTH &&
-           mode->height == GRAPHICS_HEIGHT &&
+           mode->width >= GRAPHICS_WIDTH &&
+           mode->height >= GRAPHICS_HEIGHT &&
            mode->bpp == GRAPHICS_BPP &&
            mode->pitch >= GRAPHICS_WIDTH;
 }
@@ -113,7 +113,10 @@ void kernel_video_init(void) {
         kernel_video_load_default_palette();
         kernel_video_clear(0u);
         kernel_video_flip();
-        kernel_debug_printf("video: fixed VESA 640x480x8 fb=%x pitch=%d\n",
+        kernel_debug_printf("video: VESA %dx%dx%d fb=%x pitch=%d using 640x480 workspace\n",
+                            (int)boot_mode.width,
+                            (int)boot_mode.height,
+                            (int)boot_mode.bpp,
                             (unsigned int)g_mode.fb_addr,
                             (int)g_fb_pitch);
         g_video_initialized = 1;
