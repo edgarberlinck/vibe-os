@@ -180,9 +180,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_text_puts("Scheduler OK\n");
 
     if (kernel_cpu_is_smp_capable() && local_apic_enabled()) {
-        kernel_text_puts("Bringing up SMP...\n");
-        smp_init();
-        kernel_text_puts("SMP OK\n");
+        kernel_text_puts("SMP deferred\n");
     } else {
         kernel_text_puts("SMP skipped\n");
     }

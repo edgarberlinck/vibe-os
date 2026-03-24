@@ -32,6 +32,13 @@ extern int doom_vsprintf(char *str, const char *fmt, va_list ap);
 extern int doom_vsnprintf(char *str, size_t size, const char *fmt, va_list ap);
 
 static const struct vibe_app_context *g_desktop_app_ctx = 0;
+struct heap_block {
+    size_t size;
+    int free;
+    struct heap_block *next;
+};
+
+static struct heap_block *g_heap_head = 0;
 static void (*g_atexit_handlers[16])(void);
 static int g_atexit_count = 0;
 static FILE g_file_pool[VIBE_APP_MAX_OPEN_FILES];
@@ -52,6 +59,54 @@ static int vibe_app_syscall5(int num, int a, int b, int c, int d, int e) {
                      : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
                      : "memory", "cc");
     return ret;
+}
+
+static void heap_init(void *base, size_t size) {
+    g_heap_head = 0;
+    if (!base || size <= sizeof(struct heap_block)) {
+        return;
+    }
+
+    g_heap_head = (struct heap_block *)base;
+    g_heap_head->size = size - sizeof(struct heap_block);
+    g_heap_head->free = 1;
+    g_heap_head->next = 0;
+}
+
+static void *block_payload(struct heap_block *block) {
+    return (void *)(block + 1);
+}
+
+static struct heap_block *payload_block(void *ptr) {
+    return ((struct heap_block *)ptr) - 1;
+}
+
+static void split_block(struct heap_block *block, size_t size) {
+    struct heap_block *next;
+
+    if (block->size <= size + sizeof(struct heap_block) + 8u) {
+        return;
+    }
+
+    next = (struct heap_block *)((uint8_t *)block_payload(block) + size);
+    next->size = block->size - size - sizeof(struct heap_block);
+    next->free = 1;
+    next->next = block->next;
+    block->size = size;
+    block->next = next;
+}
+
+static void coalesce_blocks(void) {
+    struct heap_block *block = g_heap_head;
+
+    while (block && block->next) {
+        if (block->free && block->next->free) {
+            block->size += sizeof(struct heap_block) + block->next->size;
+            block->next = block->next->next;
+        } else {
+            block = block->next;
+        }
+    }
 }
 
 static int vibe_is_console_file(FILE *f) {
@@ -163,6 +218,11 @@ void vibe_app_runtime_init(const struct vibe_app_context *ctx) {
     g_desktop_app_ctx = ctx;
     g_atexit_count = 0;
     memset(g_file_pool, 0, sizeof(g_file_pool));
+    if (ctx) {
+        heap_init(ctx->heap_base, ctx->heap_size);
+    } else {
+        g_heap_head = 0;
+    }
 }
 
 int atexit(void (*fn)(void)) {
@@ -300,6 +360,60 @@ int vibe_app_sleep_ms(unsigned int ms) {
         vibe_app_yield();
     }
     return 0;
+}
+
+void *vibe_app_malloc(size_t size) {
+    struct heap_block *block;
+
+    if (size == 0u) {
+        return 0;
+    }
+    if (size & 7u) {
+        size += 8u - (size & 7u);
+    }
+
+    for (block = g_heap_head; block; block = block->next) {
+        if (block->free && block->size >= size) {
+            split_block(block, size);
+            block->free = 0;
+            return block_payload(block);
+        }
+    }
+    return 0;
+}
+
+void vibe_app_free(void *ptr) {
+    if (!ptr) {
+        return;
+    }
+    payload_block(ptr)->free = 1;
+    coalesce_blocks();
+}
+
+void *vibe_app_realloc(void *ptr, size_t size) {
+    struct heap_block *block;
+    void *new_ptr;
+
+    if (!ptr) {
+        return vibe_app_malloc(size);
+    }
+    if (size == 0u) {
+        vibe_app_free(ptr);
+        return 0;
+    }
+
+    block = payload_block(ptr);
+    if (block->size >= size) {
+        return ptr;
+    }
+
+    new_ptr = vibe_app_malloc(size);
+    if (!new_ptr) {
+        return 0;
+    }
+    memcpy(new_ptr, ptr, block->size);
+    vibe_app_free(ptr);
+    return new_ptr;
 }
 
 int printf(const char *fmt, ...) {

@@ -151,6 +151,14 @@ static void craft_report_alloc_failure(const char *message) {
     }
 }
 
+static void craft_gl_debug(const char *message) {
+    if (!message) {
+        return;
+    }
+    sys_write_debug(message);
+    sys_write_debug("\n");
+}
+
 static float craft_absf(float v) {
     return v < 0.0f ? -v : v;
 }
@@ -298,28 +306,39 @@ void craft_gl_init_window(int width, int height) {
         return;
     }
 
-    free(g_framebuffer);
-    free(g_depthbuffer);
+    if (g_framebuffer) {
+        craft_gl_debug("craft: gl free framebuffer");
+        free(g_framebuffer);
+        g_framebuffer = NULL;
+    }
+    if (g_depthbuffer) {
+        craft_gl_debug("craft: gl free depth");
+        free(g_depthbuffer);
+        g_depthbuffer = NULL;
+    }
     g_fb_width = render_width;
     g_fb_height = render_height;
     pixel_count = (size_t)render_width * (size_t)render_height;
+    craft_gl_debug("craft: gl alloc framebuffer");
     g_framebuffer = (uint8_t *)malloc(pixel_count);
+    craft_gl_debug("craft: gl alloc depth");
     g_depthbuffer = (float *)malloc(sizeof(float) * pixel_count);
     if (!g_framebuffer || !g_depthbuffer) {
         craft_report_alloc_failure("craft: alloc failed framebuffer/depth");
     }
     if (g_framebuffer) {
+        craft_gl_debug("craft: gl clear framebuffer");
         memset(g_framebuffer, 0, pixel_count);
     }
     if (g_depthbuffer) {
+        craft_gl_debug("craft: gl clear depth");
         for (size_t i = 0; i < pixel_count; ++i) {
             g_depthbuffer[i] = 1.0e30f;
         }
     }
-    if (!g_saved_palette_valid) {
-        g_saved_palette_valid = (sys_gfx_get_palette(g_saved_palette) == 0);
-    }
+    craft_gl_debug("craft: gl reset state");
     craft_gl_reset_state();
+    craft_gl_debug("craft: gl init done");
 }
 
 void craft_gl_get_framebuffer_size(int *width, int *height) {

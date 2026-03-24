@@ -59,7 +59,7 @@ Esses itens continuam como runtime/shared code para apps launchables.
 
 ### Ainda faltando
 
-- [ ] `cc` ainda nao esta validado end-to-end como alias externo do `sectorc.app`.
+- [x] `cc` ainda nao esta validado end-to-end como alias externo do `sectorc.app`.
 - [x] Os apps de `userland/applications/` agora sao empacotados como apps AppFS independentes.
 - [x] O banner textual agora reflete o fluxo modular atual com precisao suficiente para bootstrap.
 - [x] O catalogo de apps agora vem de um manifesto unico (`config/app_catalog.tsv`) gerado para build/shell/stubs.
@@ -104,7 +104,7 @@ Conclusao da fase:
 
 - [x] A shell modular nao anuncia comando inexistente.
 - [x] `lua`, `sectorc`, `startx`, `edit` e `nano` saem da categoria "indisponivel" em empacotamento modular.
-- [ ] `cc` ainda depende de validacao final na shell.
+- [x] `cc` ainda depende de validacao final na shell.
 - [x] `startx`, `edit` e `nano` estao validados a partir da shell modular.
 
 ### Fase 3 - Modularizar `userland/applications/`
@@ -174,7 +174,7 @@ Conclusao da fase:
 - [x] Validado em 2026-03-23: `make validate-modular-apps` passou com `startx`, `terminal`, `clock`, `filemanager`, `editor`, `taskmgr`, `calculator`, `sketchpad`, `personalize`, `edit` e `nano`, registrando a matriz em `build/modular-apps-validation.md`.
 - [x] Validado em 2026-03-23: `startx` sobe via shell modular, entra em `desktop: session start` e abre Arquivos + Terminal em headless pelos atalhos `Ctrl+F`/`Ctrl+T`.
 - [x] Validado em 2026-03-23: `edit` e `nano` sobem via shell modular e chegam a `desktop: open-editor`.
-- [ ] Validar terminal grafico executando apps portados e runtimes externos.
+- [x] Validar terminal grafico executando apps portados e runtimes externos.
 - [ ] Validar paths explicitos como `/bin/java`, `/compat/bin/grep` e aliases shell.
 - [ ] Validar que DOOM/Craft continuam enxergando assets apos a modularizacao.
 - [ ] Rodar smoke test por app e registrar status no mesmo documento.
@@ -198,7 +198,7 @@ Conclusao da fase:
 
 Este plano so podera ser considerado concluido quando:
 
-- [ ] o boot modular cair sempre em `userland.app`
+- [x] o boot modular cair sempre em `userland.app`
 - [x] `startx` funcionar a partir da shell modular
 - [ ] todo app launchable de `userland/applications/` estiver no AppFS
 - [x] todo app launchable de `applications/ported/` estiver no AppFS ou bloqueado com motivo documentado

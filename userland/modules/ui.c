@@ -12,7 +12,7 @@ uint32_t SCREEN_WIDTH = 640;
 uint32_t SCREEN_HEIGHT = 480;
 uint32_t SCREEN_PITCH = 640;
 struct video_mode g_screen_mode = {0};
-static struct desktop_theme g_theme = {1, 7, 3, 14, 7, 3, 15, 0}; /* Classic Win95: teal desktop(11), light gray menu(7), light gray button(7), dark gray inactive(8), light gray taskbar(7), dark gray window(8), white bg(15), black text(0) */
+static struct desktop_theme g_theme = {1, 7, 3, 14, 7, 3, 15, 0};
 static int g_ui_loading_settings = 0;
 static struct {
     int active;
@@ -23,14 +23,57 @@ static struct {
 } g_wallpaper = {0, -1, 0, 0, {{0}}};
 
 #define TASKBAR_HEIGHT 22
-#define START_MENU_WIDTH 368
-#define START_MENU_HEIGHT 420
-#define START_MENU_ITEM_X 16
-#define START_MENU_ITEM_Y 94
-#define START_MENU_ITEM_W 336
-#define START_MENU_ITEM_H 20
-#define START_MENU_ITEM_STEP 26
+#define START_MENU_WIDTH 336
+#define START_MENU_HEIGHT 404
+#define START_MENU_ITEM_X 14
+#define START_MENU_ITEM_Y 86
+#define START_MENU_ITEM_W 188
+#define START_MENU_ITEM_H 30
+#define START_MENU_ITEM_STEP 34
 #define UI_SETTINGS_PATH "/config/ui.cfg"
+#define UI_CANVAS_COLOR 1u
+#define UI_PANEL_COLOR 8u
+#define UI_MUTED_COLOR 7u
+
+static void ui_build_desktop_palette(uint8_t *palette) {
+    static const uint8_t ega16[16][3] = {
+        {0x00u, 0x00u, 0x00u},
+        {0x00u, 0x00u, 0xAAu},
+        {0x00u, 0xAAu, 0x00u},
+        {0x00u, 0xAAu, 0xAAu},
+        {0xAAu, 0x00u, 0x00u},
+        {0xAAu, 0x00u, 0xAAu},
+        {0xAAu, 0x55u, 0x00u},
+        {0xAAu, 0xAAu, 0xAAu},
+        {0x55u, 0x55u, 0x55u},
+        {0x55u, 0x55u, 0xFFu},
+        {0x55u, 0xFFu, 0x55u},
+        {0x55u, 0xFFu, 0xFFu},
+        {0xFFu, 0x55u, 0x55u},
+        {0xFFu, 0x55u, 0xFFu},
+        {0xFFu, 0xFFu, 0x55u},
+        {0xFFu, 0xFFu, 0xFFu}
+    };
+
+    for (int i = 0; i < 16; ++i) {
+        palette[i * 3 + 0] = ega16[i][0];
+        palette[i * 3 + 1] = ega16[i][1];
+        palette[i * 3 + 2] = ega16[i][2];
+    }
+
+    for (int i = 16; i < 256; ++i) {
+        palette[i * 3 + 0] = (uint8_t)((((unsigned)i >> 5) & 0x07u) * 255u / 7u);
+        palette[i * 3 + 1] = (uint8_t)((((unsigned)i >> 2) & 0x07u) * 255u / 7u);
+        palette[i * 3 + 2] = (uint8_t)(((unsigned)i & 0x03u) * 255u / 3u);
+    }
+}
+
+static void ui_apply_desktop_palette(void) {
+    uint8_t palette[256 * 3];
+
+    ui_build_desktop_palette(palette);
+    (void)sys_gfx_set_palette(palette);
+}
 static int ui_text_width(const char *text) {
     int len = str_len(text);
 
@@ -221,6 +264,7 @@ void ui_init(void) {
     g_ui_loading_settings = 1;
     ui_load_settings();
     g_ui_loading_settings = 0;
+    ui_apply_desktop_palette();
 
     dirty_init();
     clip_init();
@@ -232,6 +276,7 @@ int ui_set_resolution(uint32_t width, uint32_t height) {
         return -1;
     }
     ui_refresh_metrics();
+    ui_apply_desktop_palette();
     dirty_init();
     clip_init();
     cursor_init();
@@ -516,15 +561,15 @@ struct rect ui_desktop_craft_icon_rect(void) {
 }
 
 uint8_t ui_color_canvas(void) {
-    return g_theme.window_bg;
+    return UI_CANVAS_COLOR;
 }
 
 uint8_t ui_color_panel(void) {
-    return g_theme.menu;
+    return UI_PANEL_COLOR;
 }
 
 uint8_t ui_color_muted(void) {
-    return g_theme.menu_button_inactive;
+    return UI_MUTED_COLOR;
 }
 
 void ui_draw_surface(const struct rect *r, uint8_t fill) {
@@ -532,9 +577,9 @@ void ui_draw_surface(const struct rect *r, uint8_t fill) {
         return;
     }
 
-    sys_rect(r->x, r->y, r->w, r->h, g_theme.window);
+    sys_rect(r->x, r->y, r->w, r->h, 0);
     if (r->w > 2 && r->h > 2) {
-        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, g_theme.taskbar);
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, UI_PANEL_COLOR);
     }
     if (r->w > 4 && r->h > 4) {
         sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
@@ -546,9 +591,9 @@ void ui_draw_inset(const struct rect *r, uint8_t fill) {
         return;
     }
 
-    sys_rect(r->x, r->y, r->w, r->h, g_theme.taskbar);
+    sys_rect(r->x, r->y, r->w, r->h, UI_PANEL_COLOR);
     if (r->w > 2 && r->h > 2) {
-        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, g_theme.window);
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, 0);
     }
     if (r->w > 4 && r->h > 4) {
         sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
@@ -557,8 +602,8 @@ void ui_draw_inset(const struct rect *r, uint8_t fill) {
 
 void ui_draw_button(const struct rect *r, const char *label,
                     enum ui_button_style style, int highlighted) {
-    uint8_t fill = g_theme.menu;
-    uint8_t border = highlighted ? g_theme.window : g_theme.taskbar;
+    uint8_t fill = UI_PANEL_COLOR;
+    uint8_t border = highlighted ? 15 : 0;
     int text_x;
     int text_y;
 
@@ -568,7 +613,7 @@ void ui_draw_button(const struct rect *r, const char *label,
 
     switch (style) {
     case UI_BUTTON_NORMAL:
-        fill = g_theme.menu_button_inactive;
+        fill = UI_PANEL_COLOR;
         break;
     case UI_BUTTON_PRIMARY:
         fill = g_theme.menu_button;
@@ -580,7 +625,7 @@ void ui_draw_button(const struct rect *r, const char *label,
         fill = g_theme.window;
         break;
     default:
-        fill = g_theme.menu_button_inactive;
+        fill = UI_PANEL_COLOR;
         break;
     }
 
@@ -642,17 +687,17 @@ static const char *app_caption(enum app_type type) {
     case APP_CALCULATOR: return "Calc";
     case APP_SKETCHPAD: return "Sketch";
     case APP_SNAKE: return "Snake";
-    case APP_TETRIS: return "Tetrax";
-    case APP_PACMAN: return "Pacpac";
-    case APP_SPACE_INVADERS: return "Aliens";
+    case APP_TETRIS: return "Tetris";
+    case APP_PACMAN: return "Pacman";
+    case APP_SPACE_INVADERS: return "Invaders";
     case APP_PONG: return "Pong";
-    case APP_DONKEY_KONG: return "Monkey Dong";
-    case APP_BRICK_RACE: return "Race";
-    case APP_FLAP_BIRB: return "Flap";
+    case APP_DONKEY_KONG: return "Donkey";
+    case APP_BRICK_RACE: return "Brick";
+    case APP_FLAP_BIRB: return "Birb";
     case APP_DOOM: return "DOOM";
     case APP_CRAFT: return "Craft";
-    case APP_PERSONALIZE: return "Cores";
-    default: return "";
+    case APP_PERSONALIZE: return "Tema";
+    default: return "App";
     }
 }
 
@@ -667,7 +712,7 @@ void draw_window_frame(const struct rect *w, const char *title,
     const struct rect outer = {w->x, w->y, w->w, w->h};
     const struct rect title_bar = {w->x + 2, w->y + 2, w->w - 4, 12};
 
-    ui_draw_surface(&outer, g_theme.window_bg);
+    ui_draw_surface(&outer, UI_PANEL_COLOR);
     sys_rect(title_bar.x, title_bar.y, title_bar.w, title_bar.h, active ? g_theme.window : g_theme.taskbar);
     sys_rect(title_bar.x, title_bar.y + title_bar.h - 1, title_bar.w, 1, 0);
     sys_text(w->x + 8, w->y + 4, g_theme.text, title);
@@ -726,19 +771,13 @@ void draw_desktop(const struct mouse_state *mouse,
     {
         struct rect banner = {18, 18, 154, 20};
         struct rect files_icon = ui_desktop_files_icon_rect();
-        struct rect craft_icon = ui_desktop_craft_icon_rect();
         struct rect files_plate = {files_icon.x + 16, files_icon.y + 10, 52, 40};
-        struct rect craft_plate = {craft_icon.x + 16, craft_icon.y + 10, 52, 40};
         int files_hover = point_in_rect(&files_icon, mouse->x, mouse->y);
-        int craft_hover = point_in_rect(&craft_icon, mouse->x, mouse->y);
 
         ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
         ui_draw_button(&files_icon, "", files_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, files_hover);
         ui_draw_surface(&files_plate, g_theme.window);
         sys_text(files_icon.x + 24, files_icon.y + 60, g_theme.text, "Arquivos");
-        ui_draw_button(&craft_icon, "", craft_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, craft_hover);
-        ui_draw_surface(&craft_plate, 10);
-        sys_text(craft_icon.x + 32, craft_icon.y + 60, g_theme.text, "Craft");
     }
 
     draw_taskbar(wins, win_count, focused, start_hover);

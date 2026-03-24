@@ -37,7 +37,11 @@ ORG 0x7C00
 %define SOFTWARE_PARTITION_SECTORS IMAGE_TOTAL_SECTORS - SOFTWARE_PARTITION_START_LBA
 %endif
 %define VBE_MODE_INFO_ADDR 0x0600
-%define VBE_MODE_800X600X24 0x0115
+%define VBE_LFB_ENABLE 0x4000
+%define VBE_MODE_640X480X8  0x0101
+%define VBE_MODE_640X480X16 0x0111
+%define VBE_MODE_800X600X8  0x0103
+%define VBE_MODE_800X600X16 0x0114
 
 start:
     cli
@@ -120,30 +124,25 @@ load_active_vbr:
     ret
 
 setup_vesa:
-    mov al, 'a'
-    out 0xE9, al
     xor ax, ax
     mov es, ax
 
-    mov ax, 0x4F01
-    mov cx, VBE_MODE_800X600X24
-    mov di, VBE_MODE_INFO_ADDR
-    int 0x10
-    mov al, 'b'
-    out 0xE9, al
-    cmp ax, 0x004F
-    jne .done
+    mov dx, VBE_MODE_640X480X8
+    call try_vbe_mode
+    jnc .mode_ready
+    mov dx, VBE_MODE_640X480X16
+    call try_vbe_mode
+    jnc .mode_ready
+    mov dx, VBE_MODE_800X600X8
+    call try_vbe_mode
+    jnc .mode_ready
+    mov dx, VBE_MODE_800X600X16
+    call try_vbe_mode
+    jc .done
 
-    mov ax, 0x4F02
-    mov bx, VBE_MODE_800X600X24
-    int 0x10
-    mov al, 'c'
-    out 0xE9, al
-    cmp ax, 0x004F
-    jne .done
-
+.mode_ready:
     mov si, VBE_MODE_INFO_ADDR
-    mov word [BOOTINFO_ADDR + BOOTINFO_VESA_MODE], VBE_MODE_800X600X24
+    mov [BOOTINFO_ADDR + BOOTINFO_VESA_MODE], dx
     mov ax, [si + 0x28]
     mov [BOOTINFO_ADDR + BOOTINFO_VESA_FB], ax
     mov ax, [si + 0x2A]
@@ -158,8 +157,27 @@ setup_vesa:
     mov [BOOTINFO_ADDR + BOOTINFO_VESA_BPP], al
     or dword [BOOTINFO_ADDR + 8], BOOTINFO_FLAG_VESA_VALID
 .done:
-    mov al, 'd'
-    out 0xE9, al
+    ret
+
+try_vbe_mode:
+    mov ax, 0x4F01
+    mov cx, dx
+    mov di, VBE_MODE_INFO_ADDR
+    int 0x10
+    cmp ax, 0x004F
+    jne .fail
+
+    mov ax, 0x4F02
+    mov bx, dx
+    or bx, VBE_LFB_ENABLE
+    int 0x10
+    cmp ax, 0x004F
+    jne .fail
+    clc
+    ret
+
+.fail:
+    stc
     ret
 
 init_bootinfo:

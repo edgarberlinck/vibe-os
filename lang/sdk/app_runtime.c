@@ -122,9 +122,15 @@ const struct vibe_app_context *vibe_app_get_context(void) {
 void vibe_app_runtime_init(const struct vibe_app_context *ctx) {
     g_app_ctx = ctx;
     g_current_thread_id = 0;
+    g_atexit_count = 0;
+    memset(g_atexit_handlers, 0, sizeof(g_atexit_handlers));
+    memset(g_file_pool, 0, sizeof(g_file_pool));
     memset(g_thread_pool, 0, sizeof(g_thread_pool));
     if (ctx) {
         heap_init(ctx->heap_base, ctx->heap_size);
+        if (ctx->host && ctx->host->write_debug) {
+            ctx->host->write_debug("vibe_app_runtime: heap ready\n");
+        }
     } else {
         g_heap_head = 0;
     }
@@ -417,6 +423,8 @@ int vibe_app_read_line(char *buf, int max_len, const char *prompt) {
 
 void *vibe_app_malloc(size_t size) {
     struct heap_block *block;
+    int guard = 0;
+    int trace = size >= 65536u;
 
     if (size == 0u) {
         return 0;
@@ -425,11 +433,24 @@ void *vibe_app_malloc(size_t size) {
         size += 8u - (size & 7u);
     }
 
+    if (trace && g_app_ctx && g_app_ctx->host && g_app_ctx->host->write_debug) {
+        g_app_ctx->host->write_debug("vibe_app_malloc: begin\n");
+    }
+
     block = g_heap_head;
     while (block) {
+        if (++guard > 16384) {
+            if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->write_debug) {
+                g_app_ctx->host->write_debug("vibe_app_malloc: heap loop detected\n");
+            }
+            return 0;
+        }
         if (block->free && block->size >= size) {
             split_block(block, size);
             block->free = 0;
+            if (trace && g_app_ctx && g_app_ctx->host && g_app_ctx->host->write_debug) {
+                g_app_ctx->host->write_debug("vibe_app_malloc: ok\n");
+            }
             return block_payload(block);
         }
         block = block->next;

@@ -835,18 +835,6 @@ int vibe_app_remove_dir(const char *path) {
     return (rc == 0) ? 0 : -1;
 }
 
-void *vibe_app_malloc(size_t size) {
-    return malloc(size);
-}
-
-void vibe_app_free(void *ptr) {
-    free(ptr);
-}
-
-void *vibe_app_realloc(void *ptr, size_t size) {
-    return realloc(ptr, size);
-}
-
 int mkdir(const char *path, int mode) {
     int rc;
     (void)mode;

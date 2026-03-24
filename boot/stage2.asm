@@ -4,7 +4,21 @@ ORG 0x9000
 %define STAGE2_LOAD_SEG 0x0900
 %define KERNEL_LOAD_SEG 0x1000
 %define KERNEL_LOAD_OFF 0x0000
+%define LEGACY_VESA_ADDR 0x0500
 %define SCRATCH_BUFFER 0x0600
+%define BOOTINFO_ADDR 0x8000
+%define BOOTINFO_FLAGS 8
+%define BOOTINFO_FLAG_VESA_VALID 0x00000001
+%define BOOTINFO_FLAG_MEMINFO_VALID 0x00000002
+%define BOOTINFO_VESA_MODE 16
+%define BOOTINFO_VESA_FB 20
+%define BOOTINFO_VESA_PITCH 24
+%define BOOTINFO_VESA_WIDTH 26
+%define BOOTINFO_VESA_HEIGHT 28
+%define BOOTINFO_VESA_BPP 30
+%define BOOTINFO_MEM_LARGEST_BASE 32
+%define BOOTINFO_MEM_LARGEST_SIZE 36
+%define BOOTINFO_MEM_LARGEST_END 40
 %define ROOT_NAME_LEN 11
 
 %define CODE_SEG 0x08
@@ -36,6 +50,11 @@ stage2_entry:
 
     mov al, 'K'
     out 0xE9, al
+
+    call detect_memory
+    mov al, 'M'
+    out 0xE9, al
+    call populate_legacy_vesa_info
 
     call enable_a20
     mov al, 'A'
@@ -288,6 +307,125 @@ load_kernel_file:
 
 .fail:
     stc
+    ret
+
+detect_memory:
+    and dword [BOOTINFO_ADDR + 8], ~BOOTINFO_FLAG_MEMINFO_VALID
+    mov dword [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_BASE], 0
+    mov dword [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_SIZE], 0
+    mov dword [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_END], 0
+    xor ebx, ebx
+
+detect_memory_e820_loop:
+    mov eax, 0xE820
+    mov edx, 0x534D4150
+    mov ecx, 24
+    mov di, SCRATCH_BUFFER
+    mov dword [SCRATCH_BUFFER + 20], 1
+    int 0x15
+    jc detect_memory_e820_done
+    cmp eax, 0x534D4150
+    jne detect_memory_e820_done
+    cmp dword [SCRATCH_BUFFER + 16], 1
+    jne detect_memory_e820_next
+    cmp dword [SCRATCH_BUFFER + 4], 0
+    jne detect_memory_e820_next
+    cmp dword [SCRATCH_BUFFER + 12], 0
+    jne detect_memory_e820_next
+
+    mov eax, [SCRATCH_BUFFER + 0]
+    cmp eax, 0x00100000
+    jae detect_memory_e820_base_ok
+    mov eax, 0x00100000
+detect_memory_e820_base_ok:
+    mov edx, [SCRATCH_BUFFER + 0]
+    add edx, [SCRATCH_BUFFER + 8]
+    jc detect_memory_e820_clamp_end
+    jmp detect_memory_e820_end_ok
+detect_memory_e820_clamp_end:
+    mov edx, 0xFFFFF000
+detect_memory_e820_end_ok:
+    cmp edx, eax
+    jbe detect_memory_e820_next
+    mov ecx, edx
+    sub ecx, eax
+    cmp ecx, [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_SIZE]
+    jbe detect_memory_e820_next
+    mov [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_BASE], eax
+    mov [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_SIZE], ecx
+    mov [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_END], edx
+
+detect_memory_e820_next:
+    test ebx, ebx
+    jnz detect_memory_e820_loop
+
+detect_memory_e820_done:
+    cmp dword [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_SIZE], 0
+    jne detect_memory_store_bootinfo
+
+    mov ax, 0xE801
+    int 0x15
+    jc detect_memory_fallback_88
+
+    test ax, ax
+    jnz detect_memory_have_low_kb
+    mov ax, cx
+detect_memory_have_low_kb:
+    test bx, bx
+    jnz detect_memory_have_high_blocks
+    mov bx, dx
+detect_memory_have_high_blocks:
+    movzx eax, ax
+    shl eax, 10
+    movzx edx, bx
+    shl edx, 16
+    add eax, edx
+    jmp detect_memory_store
+
+detect_memory_fallback_88:
+    mov ah, 0x88
+    int 0x15
+    jc detect_memory_done
+    movzx eax, ax
+    shl eax, 10
+
+detect_memory_store:
+    test eax, eax
+    jz detect_memory_done
+    mov dword [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_BASE], 0x00100000
+    mov [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_SIZE], eax
+    mov edx, eax
+    add edx, 0x00100000
+    mov [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_END], edx
+detect_memory_store_bootinfo:
+    or dword [BOOTINFO_ADDR + 8], BOOTINFO_FLAG_MEMINFO_VALID
+detect_memory_done:
+    ret
+
+populate_legacy_vesa_info:
+    xor ax, ax
+    mov es, ax
+    mov di, LEGACY_VESA_ADDR
+    mov cx, 7
+    rep stosw
+
+    test dword [BOOTINFO_ADDR + BOOTINFO_FLAGS], BOOTINFO_FLAG_VESA_VALID
+    jz .done
+
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_MODE]
+    mov [LEGACY_VESA_ADDR + 0], ax
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_VESA_FB]
+    mov [LEGACY_VESA_ADDR + 2], eax
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_PITCH]
+    mov [LEGACY_VESA_ADDR + 6], ax
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH]
+    mov [LEGACY_VESA_ADDR + 8], ax
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT]
+    mov [LEGACY_VESA_ADDR + 10], ax
+    mov al, [BOOTINFO_ADDR + BOOTINFO_VESA_BPP]
+    mov [LEGACY_VESA_ADDR + 12], al
+
+.done:
     ret
 
 enable_a20:

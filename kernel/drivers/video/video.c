@@ -52,11 +52,10 @@ static uint8_t g_early_graphics_backbuf[1024u * 768u];
 #define BGA_PCI_DEVICE_ID 0x1111u
 
 #define VGA_DAC_READ_INDEX 0x3C7u
+#define VGA_PEL_MASK 0x3C6u
 #define VGA_DAC_WRITE_INDEX 0x3C8u
 #define VGA_DAC_DATA 0x3C9u
 
-/* prototypes for driver implementations */
-int vesa_init(struct video_mode *mode);
 int vga_init(struct video_mode *mode);
 
 static void bga_write(uint16_t index, uint16_t value) {
@@ -151,6 +150,7 @@ static void kernel_video_program_palette(void) {
         return;
     }
 
+    outb(VGA_PEL_MASK, 0xFFu);
     outb(VGA_DAC_WRITE_INDEX, 0u);
     for (int i = 0; i < 256 * 3; ++i) {
         outb(VGA_DAC_DATA, (uint8_t)(g_palette[i] >> 2));
@@ -158,7 +158,31 @@ static void kernel_video_program_palette(void) {
 }
 
 static void kernel_video_load_default_palette(void) {
-    for (int i = 0; i < 256; ++i) {
+    static const uint8_t ega16[16][3] = {
+        {0x00u, 0x00u, 0x00u},
+        {0x00u, 0x00u, 0xAAu},
+        {0x00u, 0xAAu, 0x00u},
+        {0x00u, 0xAAu, 0xAAu},
+        {0xAAu, 0x00u, 0x00u},
+        {0xAAu, 0x00u, 0xAAu},
+        {0xAAu, 0x55u, 0x00u},
+        {0xAAu, 0xAAu, 0xAAu},
+        {0x55u, 0x55u, 0x55u},
+        {0x55u, 0x55u, 0xFFu},
+        {0x55u, 0xFFu, 0x55u},
+        {0x55u, 0xFFu, 0xFFu},
+        {0xFFu, 0x55u, 0x55u},
+        {0xFFu, 0x55u, 0xFFu},
+        {0xFFu, 0xFFu, 0x55u},
+        {0xFFu, 0xFFu, 0xFFu}
+    };
+
+    for (int i = 0; i < 16; ++i) {
+        g_palette[i * 3 + 0] = ega16[i][0];
+        g_palette[i * 3 + 1] = ega16[i][1];
+        g_palette[i * 3 + 2] = ega16[i][2];
+    }
+    for (int i = 16; i < 256; ++i) {
         g_palette[i * 3 + 0] = (uint8_t)((((unsigned)i >> 5) & 0x07u) * 255u / 7u);
         g_palette[i * 3 + 1] = (uint8_t)((((unsigned)i >> 2) & 0x07u) * 255u / 7u);
         g_palette[i * 3 + 2] = (uint8_t)(((unsigned)i & 0x03u) * 255u / 3u);
@@ -607,9 +631,20 @@ void kernel_video_flip(void) {
         return;
     }
 
-    if (g_fb_bpp == 8u && g_fb_pitch == g_mode.pitch) {
-        for (size_t i = 0; i < g_buf_size; ++i) {
-            g_fb[i] = g_backbuf[i];
+    if (g_fb_bpp == 8u) {
+        if (g_fb_pitch == g_mode.pitch) {
+            for (size_t i = 0; i < g_buf_size; ++i) {
+                g_fb[i] = g_backbuf[i];
+            }
+        } else {
+            for (uint32_t y = 0u; y < g_mode.height; ++y) {
+                uint32_t src_row = y * g_mode.pitch;
+                uint32_t dst_row = y * g_fb_pitch;
+
+                for (uint32_t x = 0u; x < g_mode.width; ++x) {
+                    g_fb[dst_row + x] = g_backbuf[src_row + x];
+                }
+            }
         }
         return;
     }
@@ -624,7 +659,6 @@ void kernel_video_flip(void) {
             for (uint32_t x = 0u; x < g_mode.width; ++x) {
                 uint8_t index = g_backbuf[src_row + x];
                 uint32_t dst = dst_row + (x * bytes_per_pixel);
-
                 g_fb[dst + 0u] = g_palette[index * 3u + 2u];
                 g_fb[dst + 1u] = g_palette[index * 3u + 1u];
                 g_fb[dst + 2u] = g_palette[index * 3u + 0u];

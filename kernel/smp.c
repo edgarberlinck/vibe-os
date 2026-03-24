@@ -5,6 +5,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/lock.h>
 #include <kernel/memory/heap.h>
+#include <kernel/memory/paging.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/scheduler.h>
 #include <stdint.h>
@@ -17,6 +18,7 @@
 #define AP_TRAMPOLINE_PMODE_PTR_OFFSET 0x7Eu
 #define AP_TRAMPOLINE_ENTRY_PTR_OFFSET 0x84u
 #define AP_TRAMPOLINE_STACK_PTR_OFFSET 0x88u
+#define AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET 0x8Cu
 #define AP_TRAMPOLINE_PMODE_OFFSET 0x33u
 #define AP_TRAMPOLINE_DEBUG_STAGE_ADDR 0x6FF0u
 #define AP_STACK_SIZE 4096u
@@ -41,6 +43,7 @@ static volatile uint32_t g_smp_started_cpus = 1u;
 static volatile uint32_t g_smp_cpu_stage[32];
 static spinlock_t g_smp_boot_lock;
 static int g_smp_initialized = 0;
+static volatile uint32_t g_smp_scheduler_enabled = 0u;
 
 static uint32_t smp_trampoline_size(void) {
     return (uint32_t)(_binary_build_ap_trampoline_bin_end - _binary_build_ap_trampoline_bin_start);
@@ -50,6 +53,7 @@ static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
     uint8_t *dst = (uint8_t *)(uintptr_t)AP_TRAMPOLINE_PHYS_ADDR;
     uint32_t gdt_base = AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_GDT_START_OFFSET;
     uint32_t pmode_entry = AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PMODE_OFFSET;
+    uint32_t page_dir = paging_is_enabled() ? (uint32_t)paging_page_directory_phys() : 0u;
     uint32_t size = smp_trampoline_size();
 
     memcpy(dst, _binary_build_ap_trampoline_bin_start, size);
@@ -58,6 +62,7 @@ static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PMODE_PTR_OFFSET) = pmode_entry;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_ENTRY_PTR_OFFSET) = entry;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_STACK_PTR_OFFSET) = stack_top;
+    *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET) = page_dir;
 }
 
 static int smp_wait_for_cpu(uint32_t expected_count) {
@@ -128,7 +133,12 @@ void smp_ap_entry(void) {
         g_smp_cpu_stage[idx] = SMP_CPU_STAGE_AP_SCHED;
     }
     for (;;) {
-        schedule();
+        if (g_smp_scheduler_enabled != 0u) {
+            schedule();
+        } else {
+            __asm__ volatile("cli");
+            __asm__ volatile("hlt");
+        }
         __asm__ volatile("pause");
     }
 }
@@ -211,6 +221,7 @@ void smp_init(void) {
     kernel_debug_printf("smp: online cpus=%d/%d\n",
                         (int)g_smp_started_cpus,
                         (int)kernel_cpu_count());
+    kernel_debug_puts("smp: aps online and parked until per-cpu scheduler bring-up is implemented\n");
 }
 
 uint32_t smp_started_cpu_count(void) {

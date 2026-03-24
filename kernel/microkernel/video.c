@@ -262,8 +262,6 @@ static int mk_video_local_handler(const struct mk_message *request,
         if (request->payload_size != 0u) {
             return -1;
         }
-        kernel_gfx_clear(0u);
-        kernel_video_flip();
         mode = kernel_video_get_mode();
         return mk_video_reply_mode(reply, 0, mode);
     }

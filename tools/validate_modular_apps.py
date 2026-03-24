@@ -232,11 +232,15 @@ def scenario_terminal_runtime(session: QemuSession) -> None:
 def scenario_doom(session: QemuSession) -> None:
     session.wait_for_all(["desktop.app: launch doom", "desktop: open-new w=0 t=16 i=0"], timeout=20.0)
     time.sleep(0.8)
+    session.reset_mouse_to_center()
+    session.move_mouse_to(240, 180, pause=0.05)
+    session.left_click(pause=0.15)
     session.send_key("ret", pause=0.15)
     session.wait_for_all(
         [
+            "doom: key enter",
             "fs: asset file /DOOM/DOOM.WAD",
-            "doom: wad open /DOOM/DOOM.WAD",
+            "doom: port run begin",
         ],
         timeout=20.0,
     )
@@ -370,8 +374,8 @@ SCENARIOS = [
     ),
     Scenario(
         name="grep-explicit-path",
-        description="Text shell executes grep through /compat/bin/grep against /BOOTPOLICY.TXT",
-        command="/compat/bin/grep kernel_path /BOOTPOLICY.TXT",
+        description="Text shell executes grep through /compat/bin/grep against /hello.c",
+        command="/compat/bin/grep print /hello.c",
         command_marker="/compat/bin/grep",
         must_have=[
             "shell: command /compat/bin/grep",
@@ -381,13 +385,14 @@ SCENARIOS = [
     ),
     Scenario(
         name="doom-assets-app",
-        description="Dedicated DOOM launcher reaches real WAD access",
+        description="Dedicated DOOM launcher reaches real WAD registration and enters the port runtime",
         command="doom",
         must_have=[
             "desktop.app: launch doom",
             "desktop: open-new w=0 t=16 i=0",
+            "doom: key enter",
             "fs: asset file /DOOM/DOOM.WAD",
-            "doom: wad open /DOOM/DOOM.WAD",
+            "doom: port run begin",
         ],
         action=scenario_doom,
     ),

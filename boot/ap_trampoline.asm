@@ -31,6 +31,18 @@ protected_mode:
     mov fs, ax
     mov gs, ax
     mov ss, ax
+    mov eax, [esi + page_dir_ptr]
+    test eax, eax
+    jz .paging_ready
+    mov cr3, eax
+    mov eax, cr4
+    or eax, 0x10
+    mov cr4, eax
+    mov eax, cr0
+    or eax, 0x80000000
+    mov cr0, eax
+    jmp short .paging_ready
+.paging_ready:
     mov esp, [esi + stack_ptr]
     mov eax, [esi + entry_ptr]
     mov byte [AP_DEBUG_STAGE_ADDR], 0x22
@@ -55,6 +67,9 @@ entry_ptr:
     dd 0
 
 stack_ptr:
+    dd 0
+
+page_dir_ptr:
     dd 0
 
 end:

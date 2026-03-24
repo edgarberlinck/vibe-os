@@ -51,6 +51,14 @@ static int g_pending_key_count = 0;
 
 #define CRAFT_GLFW_KEY_HOLD_TICKS 6
 
+static void craft_glfw_debug(const char *message) {
+    if (!message) {
+        return;
+    }
+    sys_write_debug(message);
+    sys_write_debug("\n");
+}
+
 static void craft_glfw_push_mapped_key(int mapped, int raw) {
     if (mapped >= 0 && mapped < (int)(sizeof(g_window.key_states) / sizeof(g_window.key_states[0]))) {
         g_window.key_states[mapped] = GLFW_PRESS;
@@ -97,6 +105,13 @@ int glfwInit(void) { return 1; }
 void glfwTerminate(void) {}
 GLFWwindow *glfwCreateWindow(int width, int height, const char *title, GLFWmonitor *monitor, GLFWwindow *share) {
     (void)title; (void)monitor; (void)share;
+    craft_glfw_debug("craft: glfwCreateWindow begin");
+    if (width > 640) {
+        width = 640;
+    }
+    if (height > 480) {
+        height = 480;
+    }
     g_window.width = width;
     g_window.height = height;
     g_window.cursor_mode = GLFW_CURSOR_NORMAL;
@@ -121,7 +136,9 @@ GLFWwindow *glfwCreateWindow(int width, int height, const char *title, GLFWmonit
     g_window_focused = 0;
     g_pending_key_count = 0;
     g_last_ticks = sys_ticks();
+    craft_glfw_debug("craft: glfwCreateWindow before gl init");
     craft_gl_init_window(width, height);
+    craft_glfw_debug("craft: glfwCreateWindow after gl init");
     return &g_window;
 }
 void glfwMakeContextCurrent(GLFWwindow *window) { (void)window; }

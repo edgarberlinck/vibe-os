@@ -642,6 +642,10 @@ DOOM_APP_BIN := $(BUILD_DIR)/lang/doom.app
 CRAFT_APP_BIN := $(BUILD_DIR)/lang/craft.app
 PERSONALIZE_APP_BIN := $(BUILD_DIR)/lang/personalize.app
 
+DESKTOP_LAUNCHER_HEAP_DEFAULT := 262144u
+DESKTOP_LAUNCHER_HEAP_doom := 2097152u
+DESKTOP_LAUNCHER_HEAP_craft := 8388608u
+
 SECTORC_APP_BUILD_DIR := $(BUILD_DIR)/lang/sectorc
 SECTORC_APP_SRCS := \
 	$(USERLAND_DIR)/sectorc/sectorc_app_main.c \
@@ -975,7 +979,7 @@ $(DESKTOP_APP_RUNTIME_OBJ): $(USERLAND_DIR)/applications/desktop_app_runtime.c |
 define DESKTOP_LAUNCHER_RULES
 $(BUILD_DIR)/lang/$(1)_app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $$(dir $$@)
-	$$(CC) $$(CFLAGS) -DVIBE_APP_BUILD_NAME=\"$(1)\" -DVIBE_APP_BUILD_HEAP_SIZE=262144u -c $$< -o $$@
+	$$(CC) $$(CFLAGS) -DVIBE_APP_BUILD_NAME=\"$(1)\" -DVIBE_APP_BUILD_HEAP_SIZE=$$(or $$(DESKTOP_LAUNCHER_HEAP_$(1)),$$(DESKTOP_LAUNCHER_HEAP_DEFAULT)) -c $$< -o $$@
 
 $(BUILD_DIR)/lang/$(1).elf: $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(LINKER_DIR)/app_desktop.ld $$(COMPAT_LIB)
 	$$(LD) -m elf_i386 -T $$(LINKER_DIR)/app_desktop.ld -nostdlib -N $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(COMPAT_LIB) -o $$@ $$(LIBGCC_A)

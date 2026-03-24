@@ -102,6 +102,11 @@ enum {
     FMENU_COUNT
 };
 enum {
+    START_MENU_ENTRY_COUNT = 18,
+    START_MENU_SEARCH_MAX = 24,
+    START_MENU_SCROLLBAR_W = 10
+};
+enum {
     APPCTX_PRIMARY = 0,
     APPCTX_SAVE_AS,
     APPCTX_COUNT
@@ -154,6 +159,34 @@ static const struct resolution_option g_resolution_fallbacks[] = {
 static struct resolution_option g_resolution_options[VIDEO_MODE_LIST_MAX];
 static int g_resolution_option_count = 0;
 static int g_resolution_can_set = 0;
+
+struct start_menu_entry {
+    const char *label;
+    const char *meta;
+    enum app_type type;
+    enum start_menu_tab tab;
+};
+
+static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT] = {
+    {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS},
+    {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS},
+    {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS},
+    {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS},
+    {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS},
+    {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS},
+    {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS},
+    {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS},
+    {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES},
+    {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES},
+    {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES},
+    {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES},
+    {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES},
+    {"Donkey Kong", "Arcade", APP_DONKEY_KONG, START_MENU_TAB_GAMES},
+    {"Brick Race", "Arcade", APP_BRICK_RACE, START_MENU_TAB_GAMES},
+    {"Flap Birb", "Arcade", APP_FLAP_BIRB, START_MENU_TAB_GAMES},
+    {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES},
+    {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES}
+};
 
 static void refresh_resolution_options(void) {
     struct video_capabilities caps;
@@ -1588,115 +1621,340 @@ static struct rect filemanager_context_item_rect(const struct rect *menu, int ac
     return r;
 }
 
-static int start_menu_item_contains(int item, int x, int y) {
-    struct rect r = ui_start_menu_item_rect(item);
-    return point_in_rect(&r, x, y);
+static int start_menu_contains_ci(const char *text, const char *needle) {
+    int needle_len = str_len(needle);
+
+    if (needle_len <= 0) {
+        return 1;
+    }
+    for (int i = 0; text[i] != '\0'; ++i) {
+        int match = 1;
+        for (int j = 0; j < needle_len; ++j) {
+            if (text[i + j] == '\0' || to_upper(text[i + j]) != to_upper(needle[j])) {
+                match = 0;
+                break;
+            }
+        }
+        if (match) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int start_menu_search_active(const char *query) {
+    return query != 0 && query[0] != '\0';
+}
+
+static struct rect start_menu_header_rect(void) {
+    struct rect menu = ui_start_menu_rect();
+    struct rect r = {menu.x + 10, menu.y + 10, menu.w - 20, 48};
+    return r;
+}
+
+static struct rect start_menu_user_rect(void) {
+    struct rect menu = ui_start_menu_rect();
+    struct rect r = {menu.x + 12, menu.y + 16, 194, 34};
+    return r;
 }
 
 static struct rect start_menu_tab_rect(int tab) {
     struct rect menu = ui_start_menu_rect();
-    struct rect r = {menu.x + 18 + (tab * 126), menu.y + 42, 118, 20};
+    struct rect r = {menu.x + 12 + (tab * 88), menu.y + 64, 82, 18};
     return r;
 }
 
+static struct rect start_menu_list_panel_rect(void) {
+    struct rect menu = ui_start_menu_rect();
+    struct rect r = {menu.x + 12, menu.y + 88, 202, menu.h - 146};
+    return r;
+}
+
+static struct rect start_menu_list_view_rect(void) {
+    struct rect panel = start_menu_list_panel_rect();
+    struct rect r = {panel.x + 4, panel.y + 4, panel.w - 18, panel.h - 8};
+    return r;
+}
+
+static struct rect start_menu_search_rect(void) {
+    struct rect menu = ui_start_menu_rect();
+    struct rect r = {menu.x + 12, menu.y + menu.h - 50, 202, 28};
+    return r;
+}
+
+static struct rect start_menu_search_clear_rect(void) {
+    struct rect box = start_menu_search_rect();
+    struct rect r = {box.x + box.w - 20, box.y + 6, 12, 12};
+    return r;
+}
+
+static struct rect start_menu_sidebar_rect(void) {
+    struct rect menu = ui_start_menu_rect();
+    struct rect r = {menu.x + menu.w - 108, menu.y + 16, 88, menu.h - 32};
+    return r;
+}
+
+static struct rect start_menu_sidebar_button_rect(int index) {
+    struct rect side = start_menu_sidebar_rect();
+    struct rect r = {side.x + 8, side.y + 94 + (index * 28), side.w - 16, 22};
+    return r;
+}
+
+static struct rect start_menu_logout_rect(void) {
+    struct rect side = start_menu_sidebar_rect();
+    struct rect r = {side.x + 8, side.y + side.h - 30, side.w - 16, 20};
+    return r;
+}
+
+static struct rect start_menu_scroll_track_rect(void) {
+    struct rect panel = start_menu_list_panel_rect();
+    struct rect r = {panel.x + panel.w - 12, panel.y + 4, START_MENU_SCROLLBAR_W, panel.h - 8};
+    return r;
+}
+
+static int start_menu_visible_count(void) {
+    struct rect view = start_menu_list_view_rect();
+    int visible = view.h / 36;
+
+    if (visible < 1) {
+        visible = 1;
+    }
+    return visible;
+}
+
+static int start_menu_scroll_limit_for_count(int count) {
+    int limit = count - start_menu_visible_count();
+
+    if (limit < 0) {
+        return 0;
+    }
+    return limit;
+}
+
+static void start_menu_clamp_scroll(int *scroll_offset, int count) {
+    int limit = start_menu_scroll_limit_for_count(count);
+
+    if (*scroll_offset < 0) {
+        *scroll_offset = 0;
+    }
+    if (*scroll_offset > limit) {
+        *scroll_offset = limit;
+    }
+}
+
+static struct rect start_menu_item_rect_visible(int visible_slot) {
+    struct rect view = start_menu_list_view_rect();
+    struct rect r = {view.x, view.y + (visible_slot * 36), view.w, 32};
+    return r;
+}
+
+static int start_menu_entry_matches(const struct start_menu_entry *entry,
+                                    enum start_menu_tab active_tab,
+                                    const char *query) {
+    if (!start_menu_search_active(query) && entry->tab != active_tab) {
+        return 0;
+    }
+    if (!start_menu_search_active(query)) {
+        return 1;
+    }
+    return start_menu_contains_ci(entry->label, query) || start_menu_contains_ci(entry->meta, query);
+}
+
+static int start_menu_build_filtered_indices(enum start_menu_tab active_tab,
+                                             const char *query,
+                                             int *indices,
+                                             int max_indices) {
+    int count = 0;
+
+    for (int i = 0; i < START_MENU_ENTRY_COUNT && count < max_indices; ++i) {
+        if (!start_menu_entry_matches(&g_start_menu_entries[i], active_tab, query)) {
+            continue;
+        }
+        indices[count++] = i;
+    }
+    return count;
+}
+
+static struct rect start_menu_scroll_thumb_rect(int result_count, int scroll_offset) {
+    struct rect track = start_menu_scroll_track_rect();
+    struct rect thumb = track;
+    int visible = start_menu_visible_count();
+    int limit = start_menu_scroll_limit_for_count(result_count);
+    int thumb_h;
+    int travel;
+
+    if (result_count <= visible) {
+        return thumb;
+    }
+
+    thumb_h = (track.h * visible) / result_count;
+    if (thumb_h < 18) {
+        thumb_h = 18;
+    }
+    if (thumb_h > track.h) {
+        thumb_h = track.h;
+    }
+    travel = track.h - thumb_h;
+    thumb.h = thumb_h;
+    thumb.y = track.y + ((travel * scroll_offset) / (limit > 0 ? limit : 1));
+    return thumb;
+}
+
+static int start_menu_result_at_point(int filtered_count,
+                                      int scroll_offset,
+                                      int x,
+                                      int y) {
+    int visible = start_menu_visible_count();
+
+    for (int slot = 0; slot < visible; ++slot) {
+        int result_index = scroll_offset + slot;
+        struct rect item;
+
+        if (result_index >= filtered_count) {
+            break;
+        }
+        item = start_menu_item_rect_visible(slot);
+        if (point_in_rect(&item, x, y)) {
+            return result_index;
+        }
+    }
+    return -1;
+}
+
+static int start_menu_scroll_from_thumb_y(int result_count, int thumb_y) {
+    struct rect track = start_menu_scroll_track_rect();
+    struct rect thumb = start_menu_scroll_thumb_rect(result_count, 0);
+    int limit = start_menu_scroll_limit_for_count(result_count);
+    int travel = track.h - thumb.h;
+    int relative = thumb_y - track.y;
+
+    if (travel <= 0 || limit <= 0) {
+        return 0;
+    }
+    if (relative < 0) {
+        relative = 0;
+    }
+    if (relative > travel) {
+        relative = travel;
+    }
+    return (relative * limit) / travel;
+}
+
+static void start_menu_append_search_char(char *query, int *len, int key) {
+    if (*len >= START_MENU_SEARCH_MAX || key < 32 || key > 126) {
+        return;
+    }
+    query[*len] = (char)key;
+    *len += 1;
+    query[*len] = '\0';
+}
+
+static void start_menu_backspace(char *query, int *len) {
+    if (*len <= 0) {
+        return;
+    }
+    *len -= 1;
+    query[*len] = '\0';
+}
+
 static void draw_start_menu_with_tab(enum start_menu_tab active_tab,
-                                     const int *menu_item_hover,
+                                     const int *filtered_indices,
+                                     int filtered_count,
+                                     int hovered_result,
                                      int apps_tab_hover,
-                                     int games_tab_hover) {
-    static const char *apps_labels[START_MENU_ITEM_COUNT - 1] = {
-        "Terminal",
-        "Relogio",
-        "Arquivos",
-        "Editor",
-        "Tasks",
-        "Calculadora",
-        "Sketchpad",
-        "Personalizar",
-        "Nano",
-        "Vibefetch"
-    };
-    static const char *games_labels[START_MENU_ITEM_COUNT - 1] = {
-        "Snake",
-        "Tetrax",
-        "Pacpac",
-        "Aliens",
-        "Pong",
-        "Monkey Dong",
-        "Brick Race",
-        "Flap Birb",
-        "DOOM",
-        "Craft"
-    };
+                                     int games_tab_hover,
+                                     int scroll_offset,
+                                     const char *query,
+                                     int search_hover,
+                                     int clear_hover,
+                                     int sidebar_hover,
+                                     int sidebar_files_hover,
+                                     int sidebar_terminal_hover,
+                                     int sidebar_personalize_hover,
+                                     int logout_hover,
+                                     int scroll_thumb_hover) {
+    const struct desktop_theme *theme = ui_theme_get();
     struct rect menu_rect = ui_start_menu_rect();
-    struct rect header = {menu_rect.x + 12, menu_rect.y + 10, menu_rect.w - 24, 24};
+    struct rect header = start_menu_header_rect();
+    struct rect user = start_menu_user_rect();
     struct rect apps_tab = start_menu_tab_rect(START_MENU_TAB_APPS);
     struct rect games_tab = start_menu_tab_rect(START_MENU_TAB_GAMES);
-    struct rect tagline = {menu_rect.x + 16, menu_rect.y + menu_rect.h - 26, menu_rect.w - 32, 16};
-    const struct desktop_theme *theme = ui_theme_get();
+    struct rect list_panel = start_menu_list_panel_rect();
+    struct rect search = start_menu_search_rect();
+    struct rect search_clear = start_menu_search_clear_rect();
+    struct rect sidebar = start_menu_sidebar_rect();
+    struct rect logout = start_menu_logout_rect();
+    struct rect track = start_menu_scroll_track_rect();
+    struct rect thumb = start_menu_scroll_thumb_rect(filtered_count, scroll_offset);
+    struct rect sidebar_files = start_menu_sidebar_button_rect(0);
+    struct rect sidebar_terminal = start_menu_sidebar_button_rect(1);
+    struct rect sidebar_personalize = start_menu_sidebar_button_rect(2);
+    int visible = start_menu_visible_count();
 
-    ui_draw_surface(&menu_rect, theme->menu);
-    ui_draw_button(&header, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
-    sys_rect(menu_rect.x + 12, menu_rect.y + 34, menu_rect.w - 24, 1, theme->window);
+    ui_draw_surface(&menu_rect, ui_color_panel());
+    ui_draw_surface(&header, theme->menu);
+    ui_draw_surface(&user, theme->window);
+    sys_text(user.x + 10, user.y + 8, theme->text, "VibeOS");
+    sys_text(user.x + 10, user.y + 20, theme->text, "Tudo pronto para abrir apps");
+
     ui_draw_button(&apps_tab,
-                   "Apps",
+                   "Programas",
                    active_tab == START_MENU_TAB_APPS ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    apps_tab_hover);
     ui_draw_button(&games_tab,
-                   "Games",
+                   "Jogos",
                    active_tab == START_MENU_TAB_GAMES ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    games_tab_hover);
 
-    for (int i = 0; i < START_MENU_ITEM_COUNT; ++i) {
-        struct rect item = ui_start_menu_item_rect(i);
-        const char *label = "";
-        int is_logout = i == START_MENU_ITEM_COUNT - 1;
+    ui_draw_inset(&list_panel, ui_color_canvas());
+    ui_draw_inset(&search, ui_color_canvas());
+    ui_draw_surface(&sidebar, ui_color_canvas());
+    sys_text(sidebar.x + 10, sidebar.y + 10, theme->text, "Painel");
+    sys_text(sidebar.x + 10, sidebar.y + 24, theme->text,
+             start_menu_search_active(query) ? "Busca global" :
+             (active_tab == START_MENU_TAB_APPS ? "Apps do sistema" : "Biblioteca de jogos"));
+    sys_rect(sidebar.x + 8, sidebar.y + 44, sidebar.w - 16, 1, ui_color_muted());
+    ui_draw_button(&sidebar_files, "Arquivos", UI_BUTTON_NORMAL, sidebar_files_hover);
+    ui_draw_button(&sidebar_terminal, "Terminal", UI_BUTTON_NORMAL, sidebar_terminal_hover);
+    ui_draw_button(&sidebar_personalize, "Personalizar", UI_BUTTON_NORMAL, sidebar_personalize_hover);
+    ui_draw_button(&logout, "Encerrar", UI_BUTTON_DANGER, logout_hover);
 
-        if (is_logout) {
-            sys_rect(item.x, item.y - 8, item.w, 1, ui_color_muted());
-            label = "Encerrar sessao";
-        } else if (active_tab == START_MENU_TAB_APPS) {
-            label = apps_labels[i];
-        } else {
-            label = games_labels[i];
-        }
-
-        ui_draw_button(&item,
-                       label,
-                       is_logout ? UI_BUTTON_DANGER :
-                                   (menu_item_hover[i] ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL),
-                       menu_item_hover[i]);
+    sys_text(search.x + 8, search.y + 6, theme->text, "Pesquisar");
+    sys_text(search.x + 8, search.y + 15, theme->text, query[0] != '\0' ? query : "digite para filtrar apps e jogos");
+    if (query[0] != '\0') {
+        ui_draw_button(&search_clear, "X", UI_BUTTON_NORMAL, clear_hover);
+    } else if (search_hover) {
+        sys_rect(search.x + 6, search.y + search.h - 5, search.w - 12, 1, ui_color_muted());
     }
 
-    ui_draw_inset(&tagline, ui_color_canvas());
-    sys_text(tagline.x + 8, tagline.y + 5, theme->text, active_tab == START_MENU_TAB_APPS ?
-             "Ambiente e ferramentas do sistema" : "Colecao de jogos do VibeOS");
+    if (filtered_count <= 0) {
+        sys_text(list_panel.x + 18, list_panel.y + 18, theme->text, "Nenhum resultado encontrado");
+    } else {
+        for (int slot = 0; slot < visible; ++slot) {
+            int result_index = scroll_offset + slot;
+            int entry_index;
+            struct rect item;
+
+            if (result_index >= filtered_count) {
+                break;
+            }
+            entry_index = filtered_indices[result_index];
+            item = start_menu_item_rect_visible(slot);
+            ui_draw_button(&item,
+                           g_start_menu_entries[entry_index].label,
+                           hovered_result == result_index ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                           hovered_result == result_index);
+            sys_text(item.x + 8, item.y + 20, theme->text, g_start_menu_entries[entry_index].meta);
+        }
+    }
+
+    if (filtered_count > visible) {
+        sys_rect(track.x, track.y, track.w, track.h, ui_color_muted());
+        sys_rect(thumb.x, thumb.y, thumb.w, thumb.h, scroll_thumb_hover ? theme->window : theme->menu_button);
+    }
+
+    (void)sidebar_hover;
 }
-
-static const enum app_type g_start_apps[START_MENU_ITEM_COUNT - 1] = {
-    APP_TERMINAL,
-    APP_CLOCK,
-    APP_FILEMANAGER,
-    APP_EDITOR,
-    APP_TASKMANAGER,
-    APP_CALCULATOR,
-    APP_SKETCHPAD,
-    APP_PERSONALIZE,
-    APP_EDITOR,
-    APP_TERMINAL
-};
-
-static const enum app_type g_start_games[START_MENU_ITEM_COUNT - 1] = {
-    APP_SNAKE,
-    APP_TETRIS,
-    APP_PACMAN,
-    APP_SPACE_INVADERS,
-    APP_PONG,
-    APP_DONKEY_KONG,
-    APP_BRICK_RACE,
-    APP_FLAP_BIRB,
-    APP_DOOM,
-    APP_CRAFT
-};
 
 static void draw_personalize_window(struct personalize_state *state,
                                     int active,
@@ -1880,10 +2138,27 @@ void desktop_main(void) {
     struct mouse_state mouse;
     struct app_context_state app_context = {0, -1, APP_NONE, {0, 0, 0, 0}};
     struct file_dialog_state file_dialog;
-    int menu_hover[START_MENU_ITEM_COUNT];
+    int menu_hover[START_MENU_ENTRY_COUNT];
+    int filtered_indices[START_MENU_ENTRY_COUNT];
+    int filtered_count = 0;
+    int hovered_result = -1;
     int apps_tab_hover = 0;
     int games_tab_hover = 0;
+    int menu_search_hover = 0;
+    int menu_search_clear_hover = 0;
+    int menu_sidebar_hover = 0;
+    int menu_sidebar_files_hover = 0;
+    int menu_sidebar_terminal_hover = 0;
+    int menu_sidebar_personalize_hover = 0;
+    int menu_logout_hover = 0;
+    int menu_scroll_thumb_hover = 0;
+    int menu_scroll_dragging = 0;
+    int menu_scroll_drag_offset_y = 0;
     enum start_menu_tab start_menu_tab = START_MENU_TAB_APPS;
+    int start_menu_scroll[2] = {0, 0};
+    int start_menu_search_scroll = 0;
+    char start_menu_search[START_MENU_SEARCH_MAX + 1] = "";
+    int start_menu_search_len = 0;
     int menu_open = 0;
     int context_open = 0;
     int fm_context_open = 0;
@@ -1989,7 +2264,16 @@ void desktop_main(void) {
             dirty = 1;
         }
 
-        for (int i = 0; i < START_MENU_ITEM_COUNT; ++i) {
+        filtered_count = start_menu_build_filtered_indices(start_menu_tab,
+                                                           start_menu_search,
+                                                           filtered_indices,
+                                                           START_MENU_ENTRY_COUNT);
+        start_menu_clamp_scroll(start_menu_search_active(start_menu_search) ?
+                                &start_menu_search_scroll :
+                                &start_menu_scroll[(int)start_menu_tab],
+                                filtered_count);
+
+        for (int i = 0; i < START_MENU_ENTRY_COUNT; ++i) {
             menu_hover[i] = 0;
         }
 
@@ -2020,12 +2304,38 @@ void desktop_main(void) {
         if (menu_open) {
             struct rect apps_tab = start_menu_tab_rect(START_MENU_TAB_APPS);
             struct rect games_tab = start_menu_tab_rect(START_MENU_TAB_GAMES);
+            struct rect search_box = start_menu_search_rect();
+            struct rect search_clear = start_menu_search_clear_rect();
+            struct rect sidebar = start_menu_sidebar_rect();
+            struct rect sidebar_files = start_menu_sidebar_button_rect(0);
+            struct rect sidebar_terminal = start_menu_sidebar_button_rect(1);
+            struct rect sidebar_personalize = start_menu_sidebar_button_rect(2);
+            struct rect logout = start_menu_logout_rect();
+            struct rect thumb = start_menu_scroll_thumb_rect(filtered_count,
+                                                            start_menu_search_active(start_menu_search) ?
+                                                            start_menu_search_scroll :
+                                                            start_menu_scroll[(int)start_menu_tab]);
             apps_tab_hover = point_in_rect(&apps_tab, mouse.x, mouse.y);
             games_tab_hover = point_in_rect(&games_tab, mouse.x, mouse.y);
+            menu_search_hover = point_in_rect(&search_box, mouse.x, mouse.y);
+            menu_search_clear_hover = start_menu_search[0] != '\0' &&
+                                      point_in_rect(&search_clear, mouse.x, mouse.y);
+            menu_sidebar_hover = point_in_rect(&sidebar, mouse.x, mouse.y);
+            menu_sidebar_files_hover = point_in_rect(&sidebar_files, mouse.x, mouse.y);
+            menu_sidebar_terminal_hover = point_in_rect(&sidebar_terminal, mouse.x, mouse.y);
+            menu_sidebar_personalize_hover = point_in_rect(&sidebar_personalize, mouse.x, mouse.y);
+            menu_logout_hover = point_in_rect(&logout, mouse.x, mouse.y);
+            menu_scroll_thumb_hover = filtered_count > start_menu_visible_count() &&
+                                      point_in_rect(&thumb, mouse.x, mouse.y);
         }
-        for (int i = 0; i < START_MENU_ITEM_COUNT; ++i) {
-            struct rect item = ui_start_menu_item_rect(i);
-            menu_hover[i] = menu_open && point_in_rect(&item, mouse.x, mouse.y);
+        hovered_result = menu_open ? start_menu_result_at_point(filtered_count,
+                                                                start_menu_search_active(start_menu_search) ?
+                                                                start_menu_search_scroll :
+                                                                start_menu_scroll[(int)start_menu_tab],
+                                                                mouse.x,
+                                                                mouse.y) : -1;
+        if (menu_open && hovered_result >= 0 && hovered_result < filtered_count) {
+            menu_hover[filtered_indices[hovered_result]] = 1;
         }
         int context_personalize_hover = context_open && point_in_rect(&context_menu, mouse.x, mouse.y);
         struct rect fm_open_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_OPEN);
@@ -2178,9 +2488,21 @@ void desktop_main(void) {
             dirty = 1;
         }
 
+        if (menu_open && menu_scroll_dragging && left_pressed && mouse_event) {
+            int *scroll_ptr = start_menu_search_active(start_menu_search) ?
+                              &start_menu_search_scroll :
+                              &start_menu_scroll[(int)start_menu_tab];
+
+            *scroll_ptr = start_menu_scroll_from_thumb_y(filtered_count,
+                                                         mouse.y - menu_scroll_drag_offset_y);
+            start_menu_clamp_scroll(scroll_ptr, filtered_count);
+            dirty = 1;
+        }
+
         if (!left_pressed) {
             dragging = -1;
             resizing = -1;
+            menu_scroll_dragging = 0;
         }
 
         if (focused >= 0 &&
@@ -2447,6 +2769,13 @@ void desktop_main(void) {
                 handled = 1;
             } else if (start_click_hover) {
                 menu_open = !menu_open;
+                if (menu_open) {
+                    start_menu_search[0] = '\0';
+                    start_menu_search_len = 0;
+                    start_menu_search_scroll = 0;
+                } else {
+                    menu_scroll_dragging = 0;
+                }
                 context_open = 0;
                 fm_context_open = 0;
                 app_context.open = 0;
@@ -2479,56 +2808,81 @@ void desktop_main(void) {
                     enum app_type launch_type = APP_NONE;
                     struct rect apps_tab = start_menu_tab_rect(START_MENU_TAB_APPS);
                     struct rect games_tab = start_menu_tab_rect(START_MENU_TAB_GAMES);
+                    struct rect search_box = start_menu_search_rect();
+                    struct rect search_clear = start_menu_search_clear_rect();
+                    struct rect sidebar_files = start_menu_sidebar_button_rect(0);
+                    struct rect sidebar_terminal = start_menu_sidebar_button_rect(1);
+                    struct rect sidebar_personalize = start_menu_sidebar_button_rect(2);
+                    struct rect logout = start_menu_logout_rect();
+                    struct rect track = start_menu_scroll_track_rect();
+                    struct rect thumb = start_menu_scroll_thumb_rect(filtered_count,
+                                                                    start_menu_search_active(start_menu_search) ?
+                                                                    start_menu_search_scroll :
+                                                                    start_menu_scroll[(int)start_menu_tab]);
+                    int *scroll_ptr = start_menu_search_active(start_menu_search) ?
+                                      &start_menu_search_scroll :
+                                      &start_menu_scroll[(int)start_menu_tab];
                     int menu_contains_click = point_in_rect(&menu_rect, click_x, click_y);
 
                     if (menu_contains_click) {
                         if (point_in_rect(&apps_tab, click_x, click_y)) {
                             start_menu_tab = START_MENU_TAB_APPS;
+                            start_menu_clamp_scroll(&start_menu_scroll[(int)start_menu_tab], filtered_count);
                             dirty = 1;
                         } else if (point_in_rect(&games_tab, click_x, click_y)) {
                             start_menu_tab = START_MENU_TAB_GAMES;
+                            start_menu_clamp_scroll(&start_menu_scroll[(int)start_menu_tab], filtered_count);
                             dirty = 1;
-                        } else if (start_menu_item_contains(START_MENU_ITEM_COUNT - 1, click_x, click_y)) {
+                        } else if (point_in_rect(&search_clear, click_x, click_y) && start_menu_search[0] != '\0') {
+                            start_menu_search[0] = '\0';
+                            start_menu_search_len = 0;
+                            start_menu_search_scroll = 0;
+                            dirty = 1;
+                        } else if (point_in_rect(&search_box, click_x, click_y)) {
+                            dirty = 1;
+                        } else if (point_in_rect(&sidebar_files, click_x, click_y)) {
+                            launch_type = APP_FILEMANAGER;
+                        } else if (point_in_rect(&sidebar_terminal, click_x, click_y)) {
+                            launch_type = APP_TERMINAL;
+                        } else if (point_in_rect(&sidebar_personalize, click_x, click_y)) {
+                            launch_type = APP_PERSONALIZE;
+                        } else if (point_in_rect(&logout, click_x, click_y)) {
                             running = 0;
+                        } else if (filtered_count > start_menu_visible_count() &&
+                                   point_in_rect(&thumb, click_x, click_y)) {
+                            menu_scroll_dragging = 1;
+                            menu_scroll_drag_offset_y = click_y - thumb.y;
+                            dirty = 1;
+                        } else if (filtered_count > start_menu_visible_count() &&
+                                   point_in_rect(&track, click_x, click_y)) {
+                            int thumb_target_y = click_y - (thumb.h / 2);
+                            *scroll_ptr = start_menu_scroll_from_thumb_y(filtered_count, thumb_target_y);
+                            start_menu_clamp_scroll(scroll_ptr, filtered_count);
+                            dirty = 1;
                         } else {
-                            for (int i = 0; i < START_MENU_ITEM_COUNT - 1; ++i) {
-                                if (!start_menu_item_contains(i, click_x, click_y)) {
-                                    continue;
-                                }
-                                if (start_menu_tab == START_MENU_TAB_APPS && i == START_MENU_ITEM_8) {
-                                    int nano_window = open_window_or_focus_existing(APP_EDITOR, &focused);
-                                    if (nano_window >= 0) {
-                                        editor_set_nano_mode(&g_editors[g_windows[nano_window].instance], 1);
-                                        dirty = 1;
-                                    }
-                                    launch_type = APP_NONE;
-                                    break;
-                                }
-                                if (start_menu_tab == START_MENU_TAB_APPS && i == START_MENU_ITEM_9) {
-                                    int terminal_window = open_window_or_focus_existing(APP_TERMINAL, &focused);
-                                    if (terminal_window >= 0) {
-                                        terminal_run_command(&g_terms[g_windows[terminal_window].instance], "vibefetch", 1);
-                                        dirty = 1;
-                                    }
-                                    launch_type = APP_NONE;
-                                    break;
-                                }
-                                launch_type = start_menu_tab == START_MENU_TAB_APPS ? g_start_apps[i] : g_start_games[i];
-                                break;
+                            int clicked_result = start_menu_result_at_point(filtered_count,
+                                                                            *scroll_ptr,
+                                                                            click_x,
+                                                                            click_y);
+
+                            if (clicked_result >= 0 && clicked_result < filtered_count) {
+                                launch_type = g_start_menu_entries[filtered_indices[clicked_result]].type;
                             }
-                            if (launch_type != APP_NONE) {
-                                if (open_window_or_focus_existing(launch_type, &focused) >= 0) {
-                                    dirty = 1;
-                                }
-                                menu_open = 0;
-                                context_open = 0;
-                                fm_context_open = 0;
-                                app_context.open = 0;
+                        }
+                        if (launch_type != APP_NONE) {
+                            if (open_window_or_focus_existing(launch_type, &focused) >= 0) {
+                                dirty = 1;
                             }
+                            menu_open = 0;
+                            menu_scroll_dragging = 0;
+                            context_open = 0;
+                            fm_context_open = 0;
+                            app_context.open = 0;
                         }
                         handled = 1;
                     } else {
                         menu_open = 0;
+                        menu_scroll_dragging = 0;
                         dirty = 1;
                     }
 
@@ -2839,6 +3193,70 @@ void desktop_main(void) {
                 }
                 continue;
             }
+            if (menu_open) {
+                int *scroll_ptr = start_menu_search_active(start_menu_search) ?
+                                  &start_menu_search_scroll :
+                                  &start_menu_scroll[(int)start_menu_tab];
+
+                if (key == 27) {
+                    menu_open = 0;
+                    menu_scroll_dragging = 0;
+                    dirty = 1;
+                    continue;
+                }
+                if (key == '\b' || key == 127) {
+                    start_menu_backspace(start_menu_search, &start_menu_search_len);
+                    filtered_count = start_menu_build_filtered_indices(start_menu_tab,
+                                                                       start_menu_search,
+                                                                       filtered_indices,
+                                                                       START_MENU_ENTRY_COUNT);
+                    start_menu_clamp_scroll(&start_menu_search_scroll, filtered_count);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == '\n') {
+                    if (filtered_count > 0) {
+                        enum app_type launch_type = g_start_menu_entries[filtered_indices[*scroll_ptr]].type;
+
+                        if (open_window_or_focus_existing(launch_type, &focused) >= 0) {
+                            dirty = 1;
+                        }
+                        menu_open = 0;
+                    }
+                    continue;
+                }
+                if (key == '\t') {
+                    start_menu_tab = start_menu_tab == START_MENU_TAB_APPS ?
+                                     START_MENU_TAB_GAMES : START_MENU_TAB_APPS;
+                    dirty = 1;
+                    continue;
+                }
+                if (key == 'w' || key == 'W' || key == KEY_ARROW_UP) {
+                    if (*scroll_ptr > 0) {
+                        *scroll_ptr -= 1;
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == 's' || key == 'S' || key == KEY_ARROW_DOWN) {
+                    if (*scroll_ptr < start_menu_scroll_limit_for_count(filtered_count)) {
+                        *scroll_ptr += 1;
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key >= 32 && key <= 126) {
+                    start_menu_append_search_char(start_menu_search, &start_menu_search_len, key);
+                    filtered_count = start_menu_build_filtered_indices(start_menu_tab,
+                                                                       start_menu_search,
+                                                                       filtered_indices,
+                                                                       START_MENU_ENTRY_COUNT);
+                    start_menu_clamp_scroll(&start_menu_search_scroll, filtered_count);
+                    dirty = 1;
+                    continue;
+                }
+                continue;
+            }
             if (key == 20) {
                 int terminal_window = open_window_or_focus_existing(APP_TERMINAL, &focused);
 
@@ -3073,7 +3491,24 @@ void desktop_main(void) {
             }
 
             if (menu_open) {
-                draw_start_menu_with_tab(start_menu_tab, menu_hover, apps_tab_hover, games_tab_hover);
+                draw_start_menu_with_tab(start_menu_tab,
+                                         filtered_indices,
+                                         filtered_count,
+                                         hovered_result,
+                                         apps_tab_hover,
+                                         games_tab_hover,
+                                         start_menu_search_active(start_menu_search) ?
+                                         start_menu_search_scroll :
+                                         start_menu_scroll[(int)start_menu_tab],
+                                         start_menu_search,
+                                         menu_search_hover,
+                                         menu_search_clear_hover,
+                                         menu_sidebar_hover,
+                                         menu_sidebar_files_hover,
+                                         menu_sidebar_terminal_hover,
+                                         menu_sidebar_personalize_hover,
+                                         menu_logout_hover,
+                                         menu_scroll_thumb_hover);
             }
 
             if (context_open) {

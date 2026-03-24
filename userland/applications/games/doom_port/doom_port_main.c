@@ -73,6 +73,7 @@ int doom_port_run_full(void) {
     static char arg1[] = "-nomonsters";
     static char *argv[] = {arg0, arg1, 0};
 
+    sys_write_debug("doom: port run begin\n");
     g_quit = 0;
     g_code = 0;
     g_error[0] = '\0';

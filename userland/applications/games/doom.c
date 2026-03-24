@@ -14,6 +14,14 @@ static int doom_storage_available(void) {
     return sys_storage_total_sectors() > 0u;
 }
 
+static void doom_debug(const char *message) {
+    if (!message) {
+        return;
+    }
+    sys_write_debug(message);
+    sys_write_debug("\n");
+}
+
 static int doom_iwad_available(void) {
     static const char *candidates[] = {
         "doom1.wad",
@@ -60,10 +68,18 @@ int doom_step(struct doom_state *s, uint32_t ticks) {
 }
 
 int doom_handle_click(struct doom_state *s) {
+    (void)s;
+    doom_debug("doom: click");
     return doom_handle_key(s, '\n');
 }
 
 int doom_handle_key(struct doom_state *s, int key) {
+    (void)s;
+    if (key == '\n') {
+        doom_debug("doom: key enter");
+    } else if (key == ' ') {
+        doom_debug("doom: key space");
+    }
     if (s->running) {
         return 0;
     }
