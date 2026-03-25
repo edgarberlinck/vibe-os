@@ -1834,6 +1834,9 @@ gdt_end:
 gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start
+realmode_idtr:
+    dw 0x03FF
+    dd 0x00000000
 
 kernel_name db 'KERNEL  BIN'
 background_name db 'VIBEBG  BIN'
@@ -2487,7 +2490,7 @@ menu_restart_timer:
     mov [menu_prev_pit], ax
     mov dword [menu_elapsed_counts], 0
     mov dword [menu_seconds_left], MENU_TIMEOUT_SECONDS
-    mov byte [menu_timeout_paused], 1
+    mov byte [menu_timeout_paused], 0
     ret
 
 pit_read_counter:
@@ -3391,6 +3394,7 @@ realmode_apply_video_change:
     mov es, ax
     mov ss, ax
     mov sp, REALMODE_STACK_TOP
+    lidt [realmode_idtr]
 
     mov al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX]
     cmp al, BOOTINFO_VIDEO_INDEX_NONE
@@ -3433,6 +3437,7 @@ realmode_boot_selected_kernel:
     mov ss, ax
     mov sp, REALMODE_STACK_TOP
     cld
+    lidt [realmode_idtr]
 
     call load_kernel_file
     jc disk_error
@@ -3468,6 +3473,7 @@ realmode_debug_menu_fallback:
     mov ss, ax
     mov sp, REALMODE_STACK_TOP
     cld
+    lidt [realmode_idtr]
 
     mov ax, 0x0003
     int 0x10
