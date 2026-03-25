@@ -5,6 +5,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/lock.h>
 #include <kernel/memory/heap.h>
+#include <kernel/memory/paging.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/scheduler.h>
 #include <stdint.h>
@@ -17,6 +18,7 @@
 #define AP_TRAMPOLINE_PMODE_PTR_OFFSET 0x7Eu
 #define AP_TRAMPOLINE_ENTRY_PTR_OFFSET 0x84u
 #define AP_TRAMPOLINE_STACK_PTR_OFFSET 0x88u
+#define AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET 0x8Cu
 #define AP_TRAMPOLINE_PMODE_OFFSET 0x33u
 #define AP_TRAMPOLINE_DEBUG_STAGE_ADDR 0x6FF0u
 #define AP_STACK_SIZE 4096u
@@ -41,6 +43,7 @@ static volatile uint32_t g_smp_started_cpus = 1u;
 static volatile uint32_t g_smp_cpu_stage[32];
 static spinlock_t g_smp_boot_lock;
 static int g_smp_initialized = 0;
+static volatile uint32_t g_smp_scheduler_enabled = 0u;
 
 static uint32_t smp_trampoline_size(void) {
     return (uint32_t)(_binary_build_ap_trampoline_bin_end - _binary_build_ap_trampoline_bin_start);
@@ -50,6 +53,7 @@ static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
     uint8_t *dst = (uint8_t *)(uintptr_t)AP_TRAMPOLINE_PHYS_ADDR;
     uint32_t gdt_base = AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_GDT_START_OFFSET;
     uint32_t pmode_entry = AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PMODE_OFFSET;
+    uint32_t page_dir = paging_is_enabled() ? (uint32_t)paging_page_directory_phys() : 0u;
     uint32_t size = smp_trampoline_size();
 
     memcpy(dst, _binary_build_ap_trampoline_bin_start, size);
@@ -58,6 +62,7 @@ static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PMODE_PTR_OFFSET) = pmode_entry;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_ENTRY_PTR_OFFSET) = entry;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_STACK_PTR_OFFSET) = stack_top;
+    *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET) = page_dir;
 }
 
 static int smp_wait_for_cpu(uint32_t expected_count) {
@@ -73,13 +78,6 @@ static int smp_wait_for_cpu(uint32_t expected_count) {
 
 static void smp_busy_wait(uint32_t iterations) {
     while (iterations-- > 0u) {
-        __asm__ volatile("pause");
-    }
-}
-
-static void smp_wait_ticks(uint32_t delta) {
-    uint32_t start = kernel_timer_get_ticks();
-    while ((kernel_timer_get_ticks() - start) < delta) {
         __asm__ volatile("pause");
     }
 }
@@ -135,7 +133,12 @@ void smp_ap_entry(void) {
         g_smp_cpu_stage[idx] = SMP_CPU_STAGE_AP_SCHED;
     }
     for (;;) {
-        schedule();
+        if (g_smp_scheduler_enabled != 0u) {
+            schedule();
+        } else {
+            __asm__ volatile("cli");
+            __asm__ volatile("hlt");
+        }
         __asm__ volatile("pause");
     }
 }
@@ -167,8 +170,6 @@ void smp_init(void) {
         const struct kernel_cpu_state *cpu = kernel_cpu_state(i);
         void *stack;
         uint32_t stack_top;
-        uint32_t flags;
-
         if (!cpu) {
             break;
         }
@@ -179,7 +180,7 @@ void smp_init(void) {
         }
         stack_top = (uint32_t)(uintptr_t)stack + AP_STACK_SIZE;
 
-        flags = spinlock_lock_irqsave(&g_smp_boot_lock);
+        spinlock_lock(&g_smp_boot_lock);
         smp_prepare_trampoline((uint32_t)(uintptr_t)smp_ap_entry, stack_top);
         g_smp_cpu_stage[i] = SMP_CPU_STAGE_PREPARED;
         kernel_debug_printf("smp: starting ap idx=%d apic=%x stack=%x\n",
@@ -189,7 +190,7 @@ void smp_init(void) {
         if (local_apic_send_init(cpu->apic_id) == 0) {
             g_smp_cpu_stage[i] = SMP_CPU_STAGE_INIT_SENT;
             kernel_debug_printf("smp: init sent apic=%x\n", cpu->apic_id);
-            smp_wait_ticks(1u);
+            smp_busy_wait(200000u);
             if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI1_SENT;
                 kernel_debug_printf("smp: sipi1 sent apic=%x vec=%x\n",
@@ -206,7 +207,7 @@ void smp_init(void) {
         } else {
             kernel_debug_printf("smp: init failed apic=%x\n", cpu->apic_id);
         }
-        spinlock_unlock_irqrestore(&g_smp_boot_lock, flags);
+        spinlock_unlock(&g_smp_boot_lock);
 
         if (smp_wait_for_cpu(i + 1u) != 0) {
             kernel_debug_printf("smp: ap idx=%d apic=%x did not respond\n",
@@ -220,6 +221,7 @@ void smp_init(void) {
     kernel_debug_printf("smp: online cpus=%d/%d\n",
                         (int)g_smp_started_cpus,
                         (int)kernel_cpu_count());
+    kernel_debug_puts("smp: aps online and parked until per-cpu scheduler bring-up is implemented\n");
 }
 
 uint32_t smp_started_cpu_count(void) {

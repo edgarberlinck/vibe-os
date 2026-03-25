@@ -2,13 +2,13 @@
 #include <userland/modules/include/syscalls.h>
 #include <kernel/drivers/storage/ata.h>
 #include <userland/modules/include/utils.h> // for str_* functions
+#include "app_catalog.h"
 #include <string.h>
 
 #define FS_PERSIST_MAGIC 0x56465331u
-#define FS_PERSIST_VERSION 1u
+#define FS_PERSIST_VERSION 2u
 #define FS_SECTOR_SIZE 512u
 #define FS_STORAGE_DATA_START_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
-
 struct fs_persist_image {
     uint32_t magic;
     uint32_t version;
@@ -21,21 +21,28 @@ struct fs_persist_image {
 struct fs_node g_fs_nodes[FS_MAX_NODES];
 int g_fs_root = -1;
 int g_fs_cwd = -1;
+static struct fs_persist_image g_fs_persist_image;
 static int g_fs_sync_suspended = 0;
 static uint32_t g_fs_total_sectors_cache = 0u;
 static int g_fs_dirty = 0;
 static uint32_t g_fs_last_sync_tick = 0u;
+static int g_fs_doom_assets_scanned = 0;
+static int g_fs_texture_assets_scanned = 0;
+static int g_fs_wallpaper_asset_scanned = 0;
 
 #define FS_SYNC_PERIOD_TICKS 1000u
 
 static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
+static void fs_ensure_wallpaper_registered(void);
 static uint32_t fs_storage_total_sectors(void);
 
+#define DOOM_WAD_IMAGE_LBA 131728u
 #define CRAFT_TEXTURE_IMAGE_LBA 30000u
 #define CRAFT_FONT_IMAGE_LBA 30128u
 #define CRAFT_SKY_IMAGE_LBA 30256u
 #define CRAFT_SIGN_IMAGE_LBA 30416u
+#define WALLPAPER_IMAGE_LBA 30720u
 
 static void fs_reset_node(int idx) {
     int i;
@@ -176,6 +183,60 @@ static int fs_collect_sector_extents(struct fs_extent_info *extents, int max_ext
     }
 
     return count;
+}
+
+static int fs_path_matches_root_prefix(const char *path, const char *prefix) {
+    int i = 0;
+    const char *lhs = path;
+    const char *rhs = prefix;
+
+    if (!lhs || !rhs) {
+        return 0;
+    }
+
+    if (lhs[0] == '/') {
+        ++lhs;
+    }
+    if (rhs[0] == '/') {
+        ++rhs;
+    }
+
+    while (rhs[i] != '\0') {
+        if (lhs[i] != rhs[i]) {
+            return 0;
+        }
+        ++i;
+    }
+
+    return lhs[i] == '\0' || lhs[i] == '/';
+}
+
+static void fs_debug_asset_path(const char *prefix, const char *path) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, prefix, (int)sizeof(msg));
+    str_append(msg, path ? path : "(null)", (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
+static void fs_maybe_register_boot_assets_for_path(const char *path) {
+    if (fs_path_matches_root_prefix(path, "/DOOM") && !g_fs_doom_assets_scanned) {
+        g_fs_doom_assets_scanned = 1;
+        fs_ensure_doom_wad_registered();
+        g_fs_doom_assets_scanned = 0;
+    }
+
+    if (fs_path_matches_root_prefix(path, "/textures") && !g_fs_texture_assets_scanned) {
+        g_fs_texture_assets_scanned = 1;
+        fs_ensure_craft_textures_registered();
+    }
+
+    if (fs_path_matches_root_prefix(path, "/wallpaper.png") && !g_fs_wallpaper_asset_scanned) {
+        g_fs_wallpaper_asset_scanned = 1;
+        fs_ensure_wallpaper_registered();
+    }
 }
 
 static uint32_t fs_find_free_extent(uint32_t sector_count, int exclude_node) {
@@ -387,49 +448,59 @@ static int fs_validate_loaded_tree(void) {
 }
 
 static int fs_load_persistent_image(void) {
-    struct fs_persist_image image;
+    struct fs_persist_image *image = &g_fs_persist_image;
     uint32_t checksum;
+    extern void kernel_debug_puts(const char *);
 
-    if (sys_storage_load(&image, (uint32_t)sizeof(image)) != 0) {
+    kernel_debug_puts("fs: sys_storage_load begin\n");
+    if (sys_storage_load(image, (uint32_t)sizeof(*image)) != 0) {
+        kernel_debug_puts("fs: sys_storage_load failed\n");
         return -1;
     }
-    if (image.magic != FS_PERSIST_MAGIC || image.version != FS_PERSIST_VERSION) {
+    kernel_debug_puts("fs: sys_storage_load returned\n");
+    if (image->magic != FS_PERSIST_MAGIC || image->version != FS_PERSIST_VERSION) {
         return -1;
     }
 
-    checksum = image.checksum;
-    image.checksum = 0u;
-    if (checksum != fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image))) {
+    checksum = image->checksum;
+    image->checksum = 0u;
+    if (checksum != fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image))) {
         return -1;
     }
+    image->checksum = checksum;
 
     for (int i = 0; i < FS_MAX_NODES; ++i) {
-        g_fs_nodes[i] = image.nodes[i];
+        g_fs_nodes[i] = image->nodes[i];
     }
-    g_fs_root = image.root;
-    g_fs_cwd = image.cwd;
+    g_fs_root = image->root;
+    g_fs_cwd = image->cwd;
     return fs_validate_loaded_tree() ? 0 : -1;
 }
 
 static int fs_sync_now(void) {
-    struct fs_persist_image image = {0};
+    struct fs_persist_image *image = &g_fs_persist_image;
+    extern void kernel_debug_puts(const char *);
 
     if (g_fs_sync_suspended) {
         return 0;
     }
 
-    image.magic = FS_PERSIST_MAGIC;
-    image.version = FS_PERSIST_VERSION;
-    image.root = g_fs_root;
-    image.cwd = g_fs_cwd;
+    memset(image, 0, sizeof(*image));
+    image->magic = FS_PERSIST_MAGIC;
+    image->version = FS_PERSIST_VERSION;
+    image->root = g_fs_root;
+    image->cwd = g_fs_cwd;
     for (int i = 0; i < FS_MAX_NODES; ++i) {
-        image.nodes[i] = g_fs_nodes[i];
+        image->nodes[i] = g_fs_nodes[i];
     }
-    image.checksum = 0u;
-    image.checksum = fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image));
-    if (sys_storage_save(&image, (uint32_t)sizeof(image)) != 0) {
+    image->checksum = 0u;
+    image->checksum = fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image));
+    kernel_debug_puts("fs: sys_storage_save begin\n");
+    if (sys_storage_save(image, (uint32_t)sizeof(*image)) != 0) {
+        kernel_debug_puts("fs: sys_storage_save failed\n");
         return -1;
     }
+    kernel_debug_puts("fs: sys_storage_save returned\n");
     g_fs_dirty = 0;
     g_fs_last_sync_tick = sys_ticks();
     return 0;
@@ -621,6 +692,8 @@ int fs_resolve(const char *path) {
         return g_fs_cwd;
     }
 
+    fs_maybe_register_boot_assets_for_path(path);
+
     count = fs_split_path(path, seg, &is_abs);
     if (count < 0) {
         return -1;
@@ -808,6 +881,62 @@ int fs_rename_node(int node, const char *new_name) {
     return 0;
 }
 
+int fs_move_node(int node, int new_parent, const char *new_name) {
+    int old_parent;
+    int existing;
+    int cursor;
+    int guard = 0;
+
+    if (node < 0 || node >= FS_MAX_NODES || !g_fs_nodes[node].used || node == g_fs_root) {
+        return -1;
+    }
+    if (new_parent < 0 || new_parent >= FS_MAX_NODES ||
+        !g_fs_nodes[new_parent].used || !g_fs_nodes[new_parent].is_dir) {
+        return -2;
+    }
+    if (!fs_name_is_valid(new_name)) {
+        return -3;
+    }
+    if (node == new_parent) {
+        return -4;
+    }
+
+    if (g_fs_nodes[node].is_dir) {
+        cursor = new_parent;
+        while (++guard <= FS_MAX_NODES) {
+            if (cursor == node) {
+                return -5;
+            }
+            if (cursor == g_fs_root) {
+                break;
+            }
+            cursor = g_fs_nodes[cursor].parent;
+            if (cursor < 0 || cursor >= FS_MAX_NODES || !g_fs_nodes[cursor].used) {
+                return -5;
+            }
+        }
+        if (guard > FS_MAX_NODES) {
+            return -5;
+        }
+    }
+
+    existing = fs_find_child(new_parent, new_name);
+    if (existing >= 0 && existing != node) {
+        return -6;
+    }
+
+    old_parent = g_fs_nodes[node].parent;
+    if (old_parent == new_parent && str_eq(g_fs_nodes[node].name, new_name)) {
+        return 0;
+    }
+
+    fs_unlink_child(old_parent, node);
+    str_copy_limited(g_fs_nodes[node].name, new_name, FS_NAME_MAX + 1);
+    fs_link_child(new_parent, node);
+    fs_mark_dirty();
+    return 0;
+}
+
 int fs_write_file(const char *path, const char *text, int append) {
     int idx = fs_resolve(path);
     int i;
@@ -988,8 +1117,14 @@ static void fs_ensure_doom_wad_registered(void) {
         (void)fs_create("/DOOM", 1);
     }
 
-    if (fs_detect_doom_wad(FS_STORAGE_DATA_START_LBA, &doom_wad_sectors, &doom_wad_size) == 0) {
-        (void)fs_register_image_file("/DOOM/DOOM.WAD", FS_STORAGE_DATA_START_LBA, doom_wad_sectors, doom_wad_size);
+    if (fs_detect_doom_wad(DOOM_WAD_IMAGE_LBA,
+                           &doom_wad_sectors,
+                           &doom_wad_size) == 0) {
+        (void)fs_register_image_file("/DOOM/DOOM.WAD",
+                                     DOOM_WAD_IMAGE_LBA,
+                                     doom_wad_sectors,
+                                     doom_wad_size);
+        fs_debug_asset_path("fs: asset file ", "/DOOM/DOOM.WAD");
     }
 }
 
@@ -999,6 +1134,7 @@ static void fs_register_png_asset(const char *path, uint32_t lba) {
 
     if (fs_detect_png_file(lba, &sectors, &size) == 0) {
         (void)fs_register_image_file(path, lba, sectors, size);
+        fs_debug_asset_path("fs: asset file ", path);
     }
 }
 
@@ -1015,6 +1151,14 @@ static void fs_ensure_craft_textures_registered(void) {
     fs_register_png_asset("/textures/font.png", CRAFT_FONT_IMAGE_LBA);
     fs_register_png_asset("/textures/sky.png", CRAFT_SKY_IMAGE_LBA);
     fs_register_png_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
+}
+
+static void fs_ensure_wallpaper_registered(void) {
+    if (g_fs_root < 0) {
+        return;
+    }
+
+    fs_register_png_asset("/wallpaper.png", WALLPAPER_IMAGE_LBA);
 }
 
 void fs_build_path(int node, char *out, int max_len) {
@@ -1054,41 +1198,12 @@ void fs_build_path(int node, char *out, int max_len) {
 
 void fs_init(void) {
     int i;
-    static const char *compat_exec_stubs[] = {
-        "/bin/hello",
-        "/bin/js",
-        "/bin/ruby",
-        "/bin/python",
-        "/bin/java",
-        "/bin/javac",
-        "/bin/head",
-        "/bin/tail",
-        "/bin/grep",
-        "/bin/loadkeys",
-        "/bin/pwd",
-        "/bin/sleep",
-        "/bin/rmdir",
-        "/usr/bin/head",
-        "/usr/bin/tail",
-        "/usr/bin/grep",
-        "/usr/bin/java",
-        "/usr/bin/javac",
-        "/usr/bin/pwd",
-        "/usr/bin/sleep",
-        "/usr/bin/rmdir",
-        "/compat/bin/echo",
-        "/compat/bin/cat",
-        "/compat/bin/wc",
-        "/compat/bin/pwd",
-        "/compat/bin/head",
-        "/compat/bin/sleep",
-        "/compat/bin/rmdir",
-        "/compat/bin/tail",
-        "/compat/bin/grep",
-        "/compat/bin/loadkeys"
-    };
+    extern void kernel_debug_puts(const char *);
 
     g_fs_sync_suspended = 1;
+    g_fs_doom_assets_scanned = 0;
+    g_fs_texture_assets_scanned = 0;
+    g_fs_wallpaper_asset_scanned = 0;
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
     }
@@ -1097,13 +1212,16 @@ void fs_init(void) {
     g_fs_cwd = -1;
 
     if (fs_load_persistent_image() == 0) {
-        fs_ensure_doom_wad_registered();
-        fs_ensure_craft_textures_registered();
+        kernel_debug_puts("fs: persistent image valid\n");
+        kernel_debug_puts("fs: asset scans deferred\n");
         g_fs_sync_suspended = 0;
         g_fs_dirty = 1;
-        (void)fs_sync_now();
+        g_fs_last_sync_tick = 0u;
+        kernel_debug_puts("fs: initial sync deferred\n");
         return;
     }
+
+    kernel_debug_puts("fs: persistent image invalid, rebuilding\n");
 
     g_fs_root = fs_new_node("", 1, -1);
     g_fs_nodes[g_fs_root].parent = g_fs_root;
@@ -1123,6 +1241,7 @@ void fs_init(void) {
     (void)fs_create("/textures", 1);
     (void)fs_create("/docs", 1);
     (void)fs_create("/config", 1);
+    (void)fs_create("/trash", 1);
     (void)fs_write_file("/README", "SISTEMA DE ARQUIVOS VFS", 0);
     (void)fs_write_file("/teste.lua",
                         "print(\"hello from lua\")\n"
@@ -1134,12 +1253,14 @@ void fs_init(void) {
                         "  print(\"hello from sectorc\");\n"
                         "}\n",
                         0);
-    for (i = 0; i < (int)(sizeof(compat_exec_stubs) / sizeof(compat_exec_stubs[0])); ++i) {
-        (void)fs_write_file(compat_exec_stubs[i], "", 0);
+    kernel_debug_puts("fs: base tree created\n");
+    for (i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
+        (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
     }
-    fs_ensure_doom_wad_registered();
-    fs_ensure_craft_textures_registered();
+    kernel_debug_puts("fs: compat stubs created\n");
+    kernel_debug_puts("fs: asset scans deferred\n");
     g_fs_sync_suspended = 0;
     g_fs_dirty = 1;
-    (void)fs_sync_now();
+    g_fs_last_sync_tick = 0u;
+    kernel_debug_puts("fs: initial sync deferred\n");
 }

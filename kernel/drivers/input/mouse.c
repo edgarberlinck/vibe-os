@@ -1,6 +1,7 @@
 #include <kernel/drivers/input/input.h>
 #include <kernel/hal/io.h>
 #include <kernel/drivers/video/video.h>
+#include <kernel/drivers/debug/debug.h>
 #include <kernel/interrupt.h>
 
 #define PS2_STATUS_PORT 0x64u
@@ -20,6 +21,7 @@ static volatile uint8_t g_kernel_mouse_ready = 0u;
 static volatile struct mouse_state g_mouse_event_queue[MOUSE_EVENT_QUEUE_CAPACITY];
 static volatile uint8_t g_mouse_event_head = 0u;
 static volatile uint8_t g_mouse_event_tail = 0u;
+static volatile uint32_t g_mouse_trace_budget = 16u;
 
 static void kernel_mouse_queue_event_unlocked(void) {
     uint8_t next = (uint8_t)((g_mouse_event_tail + 1u) % MOUSE_EVENT_QUEUE_CAPACITY);
@@ -262,6 +264,15 @@ void kernel_mouse_irq_handler(void) {
 
     g_kernel_mouse.buttons = g_kernel_mouse_packet[0] & 0x07u;
     kernel_mouse_queue_event_unlocked();
+    if (g_mouse_trace_budget != 0u) {
+        g_mouse_trace_budget -= 1u;
+        kernel_debug_printf("mouse: x=%d y=%d dx=%d dy=%d b=%d\n",
+                            g_kernel_mouse.x,
+                            g_kernel_mouse.y,
+                            g_kernel_mouse.dx,
+                            g_kernel_mouse.dy,
+                            (int)g_kernel_mouse.buttons);
+    }
 
     kernel_pic_send_eoi(12);
 }

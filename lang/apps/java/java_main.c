@@ -56,6 +56,14 @@ struct jvalue {
     const char *string_value;
 };
 
+static void java_debug(const char *text) {
+    const struct vibe_app_context *ctx = vibe_app_get_context();
+
+    if (ctx && ctx->host && ctx->host->write_debug && text) {
+        ctx->host->write_debug(text);
+    }
+}
+
 static int str_len(const char *text) {
     int len = 0;
     while (text && text[len] != '\0') {
@@ -688,6 +696,7 @@ int vibe_app_main(int argc, char **argv) {
     }
 
     if (str_eq_local(argv[argi], "-version")) {
+        java_debug("java: version ok\n");
         puts("openjdk version \"1.8.0-vibe\"");
         puts("OpenJDK Runtime Environment (VibeOS subset JVM)");
         return 0;

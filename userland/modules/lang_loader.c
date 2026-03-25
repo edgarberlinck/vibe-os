@@ -9,6 +9,8 @@
 #include <stdint.h>
 
 static struct vibe_app_context g_app_ctx;
+static struct vibe_appfs_directory g_cached_directory;
+static int g_cached_directory_valid = 0;
 static void lang_debug_vga(int row, const char *text);
 void *malloc(size_t size);
 void *realloc(void *ptr, size_t size);
@@ -26,6 +28,9 @@ static int host_getcwd(char *buf, int max_len);
 #define LANG_HOST_SEEK_SET 0
 #define LANG_HOST_SEEK_CUR 1
 #define LANG_HOST_SEEK_END 2
+#define LANG_STORAGE_RETRY_COUNT 4
+#define LANG_DIRECTORY_RETRY_COUNT 16
+#define LANG_SECTOR_SIZE 512u
 
 struct lang_host_fd {
     int used;
@@ -45,6 +50,13 @@ static uintptr_t align_up_uintptr(uintptr_t value, uintptr_t align) {
         return value;
     }
     return (value + align - 1u) & ~(align - 1u);
+}
+
+static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
+    if (align == 0u) {
+        return value;
+    }
+    return value & ~(align - 1u);
 }
 
 static void *lang_memcpy(void *dst, const void *src, uint32_t size) {
@@ -162,6 +174,29 @@ static uint32_t lang_checksum_bytes(const uint8_t *data, uint32_t size) {
         hash *= 16777619u;
     }
     return hash;
+}
+
+static int lang_storage_read_retry(uint32_t lba, void *dst, uint32_t sector_count) {
+    for (int attempt = 0; attempt < LANG_STORAGE_RETRY_COUNT; ++attempt) {
+        if (sys_storage_read_sectors(lba, dst, sector_count) == 0) {
+            return 0;
+        }
+        sys_yield();
+    }
+    return -1;
+}
+
+static int lang_storage_read_bytes(uint32_t lba_start, void *dst, uint32_t sector_count) {
+    uint8_t *out = (uint8_t *)dst;
+
+    for (uint32_t i = 0; i < sector_count; ++i) {
+        if (lang_storage_read_retry(lba_start + i,
+                                    out + (i * LANG_SECTOR_SIZE),
+                                    1u) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int host_read_file(const char *path, const char **data_out, int *size_out) {
@@ -500,6 +535,17 @@ static const struct vibe_app_host_api g_host_api = {
     host_getenv_value
 };
 
+static int lang_load_address_valid(uint32_t load_address) {
+    return load_address == VIBE_APP_LOAD_ADDR ||
+           load_address == VIBE_APP_DESKTOP_LOAD_ADDR ||
+           load_address == VIBE_APP_BOOT_LOAD_ADDR;
+}
+
+void lang_invalidate_directory_cache(void) {
+    g_cached_directory_valid = 0;
+    lang_memset(&g_cached_directory, 0, (uint32_t)sizeof(g_cached_directory));
+}
+
 static int lang_has_runtime_stub(const char *name) {
     static const char *prefixes[] = {
         "/bin/",
@@ -538,33 +584,59 @@ static int lang_has_runtime_stub(const char *name) {
 static int lang_load_directory(struct vibe_appfs_directory *directory) {
     static uint8_t raw_directory[VIBE_APPFS_DIRECTORY_SECTORS * 512u];
     uint32_t checksum;
+    uint32_t computed_checksum;
 
     if (!directory) {
         return -1;
     }
 
-    if (sys_storage_read_sectors(VIBE_APPFS_DIRECTORY_LBA,
-                                 raw_directory,
-                                 VIBE_APPFS_DIRECTORY_SECTORS) != 0) {
-        return -1;
+    if (g_cached_directory_valid) {
+        lang_memcpy(directory, &g_cached_directory, (uint32_t)sizeof(*directory));
+        return 0;
     }
 
-    lang_memcpy(directory, raw_directory, (uint32_t)sizeof(*directory));
+    for (int attempt = 0; attempt < LANG_DIRECTORY_RETRY_COUNT; ++attempt) {
+        if (lang_storage_read_bytes(VIBE_APPFS_DIRECTORY_LBA,
+                                    raw_directory,
+                                    VIBE_APPFS_DIRECTORY_SECTORS) != 0) {
+            sys_write_debug("lang: directory read failed\n");
+            sys_yield();
+            continue;
+        }
+        lang_memcpy(directory, raw_directory, (uint32_t)sizeof(*directory));
 
-    if (directory->magic != VIBE_APPFS_MAGIC ||
-        directory->version != VIBE_APPFS_VERSION ||
-        directory->entry_count > VIBE_APPFS_ENTRY_MAX) {
-        return -1;
-    }
+        if (directory->magic != VIBE_APPFS_MAGIC ||
+            directory->version != VIBE_APPFS_VERSION ||
+            directory->entry_count > VIBE_APPFS_ENTRY_MAX) {
+            if (raw_directory[510] == 0x55u && raw_directory[511] == 0xAAu) {
+                sys_write_debug("lang: directory looks like boot sector\n");
+            } else if (raw_directory[0] == 0u &&
+                       raw_directory[1] == 0u &&
+                       raw_directory[2] == 0u &&
+                       raw_directory[3] == 0u) {
+                sys_write_debug("lang: directory looks zeroed\n");
+            }
+            sys_write_debug("lang: directory header invalid\n");
+            sys_yield();
+            continue;
+        }
 
-    checksum = directory->checksum;
-    directory->checksum = 0u;
-    if (checksum != lang_checksum_bytes((const uint8_t *)directory,
-                                        (uint32_t)sizeof(*directory))) {
-        return -1;
+        checksum = directory->checksum;
+        directory->checksum = 0u;
+        computed_checksum = lang_checksum_bytes((const uint8_t *)directory,
+                                                (uint32_t)sizeof(*directory));
+        if (checksum != computed_checksum) {
+            directory->checksum = checksum;
+            sys_write_debug("lang: directory checksum mismatch\n");
+            sys_yield();
+            continue;
+        }
+        directory->checksum = checksum;
+        lang_memcpy(&g_cached_directory, directory, (uint32_t)sizeof(*directory));
+        g_cached_directory_valid = 1;
+        return 0;
     }
-    directory->checksum = checksum;
-    return 0;
+    return -1;
 }
 
 static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_directory *directory,
@@ -588,8 +660,11 @@ static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_di
 static int lang_prepare_context(const struct vibe_appfs_entry *entry,
                                 struct vibe_app_header **header_out,
                                 struct vibe_app_context *ctx_out) {
+    struct vibe_app_header header_copy;
     struct vibe_app_header *header;
-    uint8_t *load_base = (uint8_t *)(uintptr_t)VIBE_APP_LOAD_ADDR;
+    uint8_t first_sector[LANG_SECTOR_SIZE];
+    uint8_t *load_base;
+    uintptr_t load_address;
     uintptr_t heap_base;
     uintptr_t heap_limit;
 
@@ -599,11 +674,36 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
 
     lang_debug_vga(17, "lang: prep");
     if (entry->sector_count > VIBE_APPFS_APP_AREA_SECTORS) {
+        sys_write_debug("lang: entry exceeds app area\n");
+        return -1;
+    }
+    if (entry->sector_count > (VIBE_APP_ARENA_SIZE / LANG_SECTOR_SIZE)) {
+        sys_write_debug("lang: entry exceeds arena\n");
         return -1;
     }
 
+    if (lang_storage_read_retry(entry->lba_start, first_sector, 1u) != 0) {
+        sys_write_debug("lang: header read failed\n");
+        return -1;
+    }
+
+    lang_memcpy(&header_copy, first_sector, (uint32_t)sizeof(header_copy));
+    if (header_copy.magic != VIBE_APP_MAGIC ||
+        header_copy.abi_version != VIBE_APP_ABI_VERSION ||
+        header_copy.header_size < sizeof(struct vibe_app_header)) {
+        sys_write_debug("lang: header invalid before read\n");
+        return -1;
+    }
+
+    load_address = (uintptr_t)header_copy.load_address;
+    if (!lang_load_address_valid((uint32_t)load_address)) {
+        sys_write_debug("lang: load address invalid\n");
+        return -1;
+    }
+    load_base = (uint8_t *)load_address;
+
     lang_debug_vga(18, "lang: read app");
-    if (sys_storage_read_sectors(entry->lba_start, load_base, entry->sector_count) != 0) {
+    if (lang_storage_read_bytes(entry->lba_start, load_base, entry->sector_count) != 0) {
         return -1;
     }
     lang_debug_vga(19, "lang: app read ok");
@@ -612,27 +712,37 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     if (header->magic != VIBE_APP_MAGIC ||
         header->abi_version != VIBE_APP_ABI_VERSION ||
         header->header_size < sizeof(struct vibe_app_header)) {
+        sys_write_debug("lang: header invalid after read\n");
         return -1;
     }
     lang_debug_vga(20, "lang: hdr ok");
+
+    if (header->load_address != (uint32_t)load_address) {
+        sys_write_debug("lang: header load mismatch\n");
+        return -1;
+    }
 
     if (header->image_size == 0u ||
         header->image_size > entry->image_size ||
         header->memory_size < header->image_size ||
         header->memory_size > VIBE_APP_ARENA_SIZE ||
-        header->entry_offset >= header->memory_size) {
+        header->entry_offset >= header->memory_size ||
+        header->entry_offset >= header->image_size) {
+        sys_write_debug("lang: header sizing invalid\n");
         return -1;
     }
 
     if (header->name[0] != '\0' && !str_eq(header->name, entry->name)) {
+        sys_write_debug("lang: header name mismatch\n");
         return -1;
     }
 
     lang_memset(load_base + header->image_size, 0, header->memory_size - header->image_size);
 
-    heap_base = align_up_uintptr((uintptr_t)load_base + header->memory_size, 16u);
-    heap_limit = (uintptr_t)VIBE_APP_STACK_TOP - VIBE_APP_STACK_SIZE;
+    heap_base = align_up_uintptr(load_address + header->memory_size, 16u);
+    heap_limit = load_address + VIBE_APP_ARENA_SIZE - VIBE_APP_STACK_SIZE;
     if (heap_base >= heap_limit) {
+        sys_write_debug("lang: heap base beyond limit\n");
         return -1;
     }
 
@@ -640,6 +750,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     ctx_out->heap_base = (void *)heap_base;
     ctx_out->heap_size = (uint32_t)(heap_limit - heap_base);
     if (ctx_out->heap_size < header->required_heap_size) {
+        sys_write_debug("lang: required heap exceeds available\n");
         return -1;
     }
 
@@ -667,11 +778,38 @@ static void lang_write_missing_runtime(const char *name) {
     console_putc('\n');
 }
 
+static uintptr_t lang_app_stack_top(uint32_t load_address) {
+    return align_down_uintptr((uintptr_t)load_address + VIBE_APP_ARENA_SIZE, 16u);
+}
+
+__attribute__((noinline, optimize("O0")))
 static int lang_call_app(vibe_app_entry_t entry,
                          const struct vibe_app_context *ctx,
                          int argc,
-                         char **argv) {
-    return entry(ctx, argc, argv);
+                         char **argv,
+                         uintptr_t stack_top) {
+    uintptr_t saved_esp;
+    int rc;
+
+    sys_write_debug("lang: calling app entry\n");
+    __asm__ volatile(
+        "mov %%esp, %[saved_esp]\n\t"
+        "mov %[stack_top], %%esp\n\t"
+        "push %[argv]\n\t"
+        "push %[argc]\n\t"
+        "push %[ctx]\n\t"
+        "call *%[entry]\n\t"
+        "add $12, %%esp\n\t"
+        "mov %[saved_esp], %%esp\n\t"
+        : [saved_esp] "=&r"(saved_esp),
+          "=a"(rc)
+        : [stack_top] "r"(stack_top),
+          [entry] "r"(entry),
+          [ctx] "g"(ctx),
+          [argc] "g"(argc),
+          [argv] "g"(argv)
+        : "ecx", "edx", "memory", "cc");
+    return rc;
 }
 
 int lang_try_run(int argc, char **argv) {
@@ -679,26 +817,41 @@ int lang_try_run(int argc, char **argv) {
     const struct vibe_appfs_entry *entry;
     struct vibe_app_header *header;
     vibe_app_entry_t app_entry;
+    uintptr_t entry_addr;
 
     if (argc <= 0 || !argv || !argv[0]) {
         return -1;
     }
 
+    if (sys_getpid() == 0) {
+        sys_write_debug("lang: pid zero before reset\n");
+    } else {
+        sys_write_debug("lang: pid ok before reset\n");
+    }
     lang_reset_host_fds();
+    if (sys_getpid() == 0) {
+        sys_write_debug("lang: pid zero after reset\n");
+    } else {
+        sys_write_debug("lang: pid ok after reset\n");
+    }
+    sys_write_debug("lang: try_run begin\n");
 
     lang_debug_vga(14, "lang: start");
     if (lang_load_directory(&directory) != 0) {
+        sys_write_debug("lang: directory load failed\n");
         if (lang_has_runtime_stub(argv[0])) {
             lang_write_load_error("catalog");
             return 0;
         }
         return -1;
     }
+    sys_write_debug("lang: directory loaded\n");
     lang_debug_vga(15, "lang: dir ok");
     lang_debug_vga(11, directory.entries[0].name);
 
     entry = lang_find_entry(&directory, argv[0]);
     if (!entry) {
+        sys_write_debug("lang: entry missing\n");
         lang_debug_vga(13, "lang: no entry");
         if (lang_has_runtime_stub(argv[0])) {
             lang_write_missing_runtime(argv[0]);
@@ -706,17 +859,27 @@ int lang_try_run(int argc, char **argv) {
         }
         return -1;
     }
+    sys_write_debug("lang: entry found\n");
     lang_debug_vga(16, "lang: entry ok");
 
     if (lang_prepare_context(entry, &header, &g_app_ctx) != 0) {
+        sys_write_debug("lang: prepare failed\n");
         lang_write_load_error(entry->name);
         return 0;
     }
-    app_entry = (vibe_app_entry_t)(uintptr_t)(VIBE_APP_LOAD_ADDR + header->entry_offset);
-    (void)lang_call_app(app_entry, &g_app_ctx, argc, argv);
+    sys_write_debug("lang: prepare ok\n");
+    entry_addr = (uintptr_t)header->load_address + header->entry_offset;
+    app_entry = (vibe_app_entry_t)entry_addr;
+    sys_write_debug("lang: app entry resolved\n");
+    (void)lang_call_app(app_entry,
+                        &g_app_ctx,
+                        argc,
+                        argv,
+                        lang_app_stack_top(header->load_address));
+    sys_write_debug("lang: app returned\n");
     lang_reset_host_fds();
-    lang_memcpy((void *)(uintptr_t)VIBE_APP_LOAD_ADDR,
-                (const void *)(uintptr_t)VIBE_APP_LOAD_ADDR,
+    lang_memcpy((void *)(uintptr_t)header->load_address,
+                (const void *)(uintptr_t)header->load_address,
                 0u);
     return 0;
 }

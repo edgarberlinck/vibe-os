@@ -1066,6 +1066,16 @@ void compute_chunk(WorkerItem *item) {
 
     // generate geometry
     GLfloat *data = malloc_faces(10, faces);
+    if (faces > 0 && !data) {
+        free(opaque);
+        free(light);
+        free(highest);
+        item->miny = 0;
+        item->maxy = 0;
+        item->faces = 0;
+        item->data = 0;
+        return;
+    }
     int offset = 0;
     MAP_FOR_EACH(map, ex, ey, ez, ew) {
         if (ew <= 0) {

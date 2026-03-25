@@ -452,6 +452,43 @@ $(LOADKEYS_APP): $(LOADKEYS_ELF)
 
 ported-loadkeys: $(LOADKEYS_APP)
 
+# === MKDIR APP ===
+
+MKDIR_SRCS := applications/ported/mkdir/mkdir.c
+MKDIR_OBJS := build/ported/mkdir.o \
+	build/app_entry_mkdir.o \
+	build/app_runtime_mkdir.o
+
+MKDIR_ELF := build/ported/mkdir.elf
+MKDIR_APP := build/ported/mkdir.app
+
+build/app_entry_mkdir.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"mkdir\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_mkdir.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/mkdir.o: $(MKDIR_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(MKDIR_ELF): $(MKDIR_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(MKDIR_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(MKDIR_APP): $(MKDIR_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Mkdir app: $@"
+
+ported-mkdir: $(MKDIR_APP)
+
 # === TRUE APP ===
 
 TRUE_SRCS := applications/ported/true/true.c
@@ -565,7 +602,7 @@ ported-printf: $(PRINTF_APP)
 
 # === SED APP ===
 
-SED_SRCS := $(wildcard applications/ported/sed/*.c)
+SED_SRCS := applications/ported/sed/vibe_sed.c
 SED_OBJS := $(patsubst applications/ported/sed/%.c,build/ported/sed/%.o,$(SED_SRCS)) \
 	build/app_entry_sed.o \
 	build/app_runtime_sed.o
@@ -586,7 +623,10 @@ build/app_runtime_sed.o: $(APP_RUNTIME) | build
 
 build/ported/sed/%.o: applications/ported/sed/%.c $(COMPAT_LIB) | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) -Iapplications/ported/sed $(INCLUDES) -DHAVE_CONFIG_H \
+		-Iapplications/ported/sed \
+		-Icompat/gnu/lib/libiberty/include \
+		-c $< -o $@
 
 $(SED_ELF): $(SED_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
@@ -637,6 +677,9 @@ ported-sed-clean:
 ported-loadkeys-clean:
 	rm -f $(LOADKEYS_OBJS) $(LOADKEYS_ELF) $(LOADKEYS_APP)
 
+ported-mkdir-clean:
+	rm -f $(MKDIR_OBJS) $(MKDIR_ELF) $(MKDIR_APP)
+
 ported-true-clean:
 	rm -f $(TRUE_OBJS) $(TRUE_ELF) $(TRUE_APP)
 
@@ -646,6 +689,25 @@ ported-false-clean:
 ported-printf-clean:
 	rm -f $(PRINTF_OBJS) $(PRINTF_ELF) $(PRINTF_APP)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-true-clean ported-false-clean ported-printf-clean
+PORTED_APP_TARGETS := \
+	$(ECHO_APP) \
+	$(CAT_APP) \
+	$(WC_APP) \
+	$(PWD_APP) \
+	$(HEAD_APP) \
+	$(SLEEP_APP) \
+	$(RMDIR_APP) \
+	$(TAIL_APP) \
+	$(GREP_APP) \
+	$(SED_APP) \
+	$(LOADKEYS_APP) \
+	$(MKDIR_APP) \
+	$(TRUE_APP) \
+	$(FALSE_APP) \
+	$(PRINTF_APP)
 
-.PHONY: ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-true ported-false ported-printf ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-true-clean ported-false-clean ported-printf-clean
+ported-all: $(PORTED_APP_TARGETS)
+
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean
+
+.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean

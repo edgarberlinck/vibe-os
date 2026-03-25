@@ -49,6 +49,61 @@ make run
 make run-debug
 ```
 
+### Run Headless CPU Regression Targets
+```bash
+make run-headless-core2duo-debug
+make run-headless-pentium-debug
+make run-headless-atom-debug
+```
+
+### Run Headless AHCI Regression
+```bash
+make run-headless-ahci-debug
+```
+
+### Run Headless USB BIOS Boot Validation
+```bash
+make run-headless-usb-debug
+```
+
+### Run Full Phase 6 Validation Matrix
+```bash
+make validate-phase6
+```
+Writes: `build/phase6-validation.md`
+
+### Build The Legacy Raw Data Image
+```bash
+make legacy-data-img
+```
+Builds: `build/data-partition.img` with the AppFS directory, app area, persistence area, and bundled raw assets in the same logical layout still used by the data partition.
+
+### Low-Wear Real Hardware Loop
+```bash
+make build/stage2.bin build/boot.bin
+python3 tools/patch_boot_sectors.py \
+  --target /dev/sdX \
+  --vbr build/boot.bin \
+  --stage2 build/stage2.bin
+```
+Writes only the FAT32 VBR plus the reserved `stage2` slot on the existing disk. This is the preferred loop for BIOS/bootloader debugging on fragile IDE media because it avoids rebuilding and reflashing the whole disk image.
+If you also changed `boot/mbr.asm`, add `--mbr build/mbr.bin`.
+
+### Dry Run For The Low-Wear Patch
+```bash
+python3 tools/patch_boot_sectors.py \
+  --target /dev/sdX \
+  --vbr build/boot.bin \
+  --stage2 build/stage2.bin \
+  --dry-run
+```
+Prints how many sectors would be touched before writing anything.
+
+### When To Use Full Image Rebuild
+- Use `make build/boot.img` when the FAT32 contents changed, such as `KERNEL.BIN`, manifests, or bundled boot assets.
+- Use the low-wear patch loop when only `boot/stage1.asm`, `boot/stage2.asm`, or BIOS-facing boot code changed.
+- If you patch `stage2` without patching `boot.bin`, keep the stage2 sector count unchanged; otherwise stage1 may load the wrong amount of data.
+
 ### GDB Debug Mode (stops at boot)
 ```bash
 make debug
@@ -69,9 +124,13 @@ vibe-os/
 │   └── libglibc.a    (27 KB)  - Shared C library
 ├── build/
 │   ├── boot.img      (1.4 MB) - Bootable image
+│   ├── data-partition.img - Raw legacy data/AppFS volume
 │   ├── kernel.bin    (179 KB) - Lean kernel
 │   ├── kernel.elf    (217 KB) - Kernel ELF
-│   └── userland-main.bin (167 KB)
+│   ├── boot-policy.txt - USB boot/loading strategy manifest copied to FAT32 as BOOTPOLICY.TXT
+│   ├── phase6-validation.md - Generated QEMU compatibility matrix report
+│   ├── lang/userland.app - External boot shell app autostarted by init
+│   └── userland-main.bin (optional legacy monolith)
 └── ...
 ```
 
@@ -79,19 +138,17 @@ vibe-os/
 
 ```
 ┌─────────────────┐
-│   Boot Sector   │ (512 B)
+│ FAT32 boot part │ (MBR/VBR/stage2/kernel/manifest)
 ├─────────────────┤
-│   Kernel        │ (179 KB, no glibc)
+│ Raw data part   │ (AppFS + persist + bundled assets)
 ├─────────────────┤
-│   Apps Embedded │ (hello, js)
-│   in AppFS      │
-├─────────────────┤
-│   Free Space    │
 └─────────────────┘
 
 At Runtime:
 ┌─────────────────┐
-│  /bin/hello     │ (links libglibc.a)
+│  /bin/userland  │ (autostarted AppFS shell app)
+│  /bin/hello     │
+│  /bin/mkdir     │
 │  /bin/js        │
 │  /bin/ruby      │ (when built)
 │  /bin/python    │ (when built)

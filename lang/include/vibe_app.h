@@ -8,10 +8,15 @@
 #define VIBE_APP_ABI_VERSION 1u
 #define VIBE_APP_NAME_MAX 16u
 
-#define VIBE_APP_LOAD_ADDR 0x00300000u
+#define VIBE_APP_LOAD_ADDR 0x10000000u
+#define VIBE_APP_DESKTOP_LOAD_ADDR 0x14000000u
+#define VIBE_APP_BOOT_LOAD_ADDR 0x18000000u
 #define VIBE_APP_ARENA_SIZE 0x01000000u
 #define VIBE_APP_STACK_SIZE 0x00010000u
 #define VIBE_APP_STACK_TOP (VIBE_APP_LOAD_ADDR + VIBE_APP_ARENA_SIZE)
+#define VIBE_APP_DESKTOP_STACK_TOP (VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_ARENA_SIZE)
+#define VIBE_APP_BOOT_STACK_TOP (VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_ARENA_SIZE)
+#define VIBE_APP_RESERVED_TOP VIBE_APP_BOOT_STACK_TOP
 
 struct vibe_app_stat {
     int size;
@@ -24,6 +29,7 @@ struct vibe_app_header {
     uint16_t header_size;
     uint32_t image_size;
     uint32_t memory_size;
+    uint32_t load_address;
     uint32_t entry_offset;
     uint32_t required_heap_size;
     char name[VIBE_APP_NAME_MAX];

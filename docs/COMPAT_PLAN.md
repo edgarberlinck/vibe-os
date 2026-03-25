@@ -409,6 +409,6 @@ Compat/bin ciclo incremental concluído:
 - [x] runtime externo ganhou API mínima para remoção de diretório (`rmdir`)
 
 Próximos alvos recomendados:
-- [ ] `mkdir` (depende de API de criação de diretório no runtime de apps)
+- [x] `mkdir` (integrado como app externa)
 - [ ] `sync` de `compat/bin`
-- [ ] utilitários de `compat/usr.bin` (`true`, `false`, `printf`, `uname`)
+- [ ] utilitários restantes de `compat/usr.bin` (`uname`)

@@ -3,18 +3,36 @@
 #include "sign.h"
 
 void sign_list_alloc(SignList *list, int capacity) {
+    if (!list) {
+        return;
+    }
     list->capacity = capacity;
     list->size = 0;
     list->data = (Sign *)calloc(capacity, sizeof(Sign));
+    if (!list->data) {
+        list->capacity = 0;
+    }
 }
 
 void sign_list_free(SignList *list) {
+    if (!list) {
+        return;
+    }
     free(list->data);
+    list->data = NULL;
+    list->capacity = 0;
+    list->size = 0;
 }
 
 void sign_list_grow(SignList *list) {
     SignList new_list;
+    if (!list || list->capacity == 0 || !list->data) {
+        return;
+    }
     sign_list_alloc(&new_list, list->capacity * 2);
+    if (!new_list.data) {
+        return;
+    }
     memcpy(new_list.data, list->data, list->size * sizeof(Sign));
     free(list->data);
     list->capacity = new_list.capacity;
@@ -22,8 +40,14 @@ void sign_list_grow(SignList *list) {
 }
 
 void _sign_list_add(SignList *list, Sign *sign) {
+    if (!list || !list->data || !sign) {
+        return;
+    }
     if (list->size == list->capacity) {
         sign_list_grow(list);
+        if (list->size == list->capacity || !list->data) {
+            return;
+        }
     }
     Sign *e = list->data + list->size++;
     memcpy(e, sign, sizeof(Sign));

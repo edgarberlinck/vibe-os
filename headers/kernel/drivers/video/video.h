@@ -16,6 +16,7 @@ struct framebuffer {
 
 /* Initialize video subsystem; chooses VESA first and falls back to VGA */
 void kernel_video_init(void);
+int vesa_init(struct video_mode *mode);
 
 /* Accessors for the currently‑selected mode */
 struct video_mode *kernel_video_get_mode(void);
@@ -38,6 +39,8 @@ void kernel_gfx_rect(int x, int y, int w, int h, uint8_t color);
 void kernel_gfx_clear(uint8_t color);
 void kernel_gfx_draw_text(int x, int y, const char *text, uint8_t color);
 void kernel_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale);
+void kernel_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
+                              int dst_x, int dst_y, int dst_w, int dst_h);
 
 /* VGA Text mode helpers */
 void kernel_text_init(void);

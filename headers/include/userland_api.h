@@ -41,7 +41,15 @@ enum syscall_id {
     SYSCALL_CLOSE = 34,
     SYSCALL_LSEEK = 35,
     SYSCALL_STAT = 36,
-    SYSCALL_FSTAT = 37
+    SYSCALL_FSTAT = 37,
+    SYSCALL_LAUNCH_INFO = 38,
+    SYSCALL_TEXT_WRITE = 39,
+    SYSCALL_SERVICE_RECV = 40,
+    SYSCALL_SERVICE_SEND = 41,
+    SYSCALL_SERVICE_BACKEND = 42,
+    SYSCALL_TASK_SNAPSHOT = 43,
+    SYSCALL_TASK_TERMINATE = 44,
+    SYSCALL_GFX_BLIT8_STRETCH = 45
 };
 
 enum input_keycode {
@@ -68,7 +76,7 @@ struct video_mode {
     uint8_t bpp;
 };
 
-#define VIDEO_MODE_LIST_MAX 5u
+#define VIDEO_MODE_LIST_MAX 16u
 
 enum video_capability_flags {
     VIDEO_CAPS_TEXT_ONLY = 1u << 0,
@@ -94,6 +102,55 @@ struct video_capabilities {
     uint32_t mode_count;
     uint16_t mode_width[VIDEO_MODE_LIST_MAX];
     uint16_t mode_height[VIDEO_MODE_LIST_MAX];
+};
+
+struct userland_launch_info {
+    uint32_t abi_version;
+    uint32_t pid;
+    uint32_t kind;
+    uint32_t service_type;
+    uint32_t flags;
+    uint32_t boot_flags;
+    uint32_t boot_partition_lba;
+    uint32_t boot_partition_sectors;
+    uint32_t data_partition_lba;
+    uint32_t data_partition_sectors;
+    char name[16];
+};
+
+#define TASK_SNAPSHOT_ABI_VERSION 1u
+#define TASK_SNAPSHOT_NAME_MAX 16u
+#define TASK_SNAPSHOT_MAX 32u
+
+struct task_snapshot_entry {
+    uint32_t pid;
+    uint32_t kind;
+    uint32_t state;
+    int32_t current_cpu;
+    int32_t preferred_cpu;
+    int32_t last_cpu;
+    uint32_t stack_size;
+    uint32_t runtime_ticks;
+    uint32_t context_switches;
+    uint32_t service_type;
+    uint32_t flags;
+    char name[TASK_SNAPSHOT_NAME_MAX];
+};
+
+struct task_snapshot_summary {
+    uint32_t abi_version;
+    uint32_t uptime_ticks;
+    uint32_t current_pid;
+    uint32_t cpu_count;
+    uint32_t started_cpu_count;
+    uint32_t running_tasks;
+    uint32_t ready_tasks;
+    uint32_t blocked_tasks;
+    uint32_t total_tasks;
+    uint32_t kernel_heap_used;
+    uint32_t kernel_heap_free;
+    uint32_t physmem_total_kb;
+    uint32_t physmem_free_kb;
 };
 
 typedef void (*userland_entry_t)(void);
