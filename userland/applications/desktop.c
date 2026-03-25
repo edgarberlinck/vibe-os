@@ -3483,21 +3483,11 @@ void desktop_main(void) {
                 dirty = 1;
             } else {
                 struct rect files_icon = ui_desktop_files_icon_rect();
-                struct rect image_icon = ui_desktop_image_icon_rect();
                 struct rect craft_icon = ui_desktop_craft_icon_rect();
                 struct rect trash_icon = ui_desktop_trash_icon_rect();
 
                 if (point_in_rect(&files_icon, click_x, click_y)) {
                     if (open_window_or_focus_existing(APP_FILEMANAGER, &focused) >= 0) {
-                        dirty = 1;
-                    }
-                    menu_open = 0;
-                    context_open = 0;
-                    fm_context_open = 0;
-                    app_context.open = 0;
-                    handled = 1;
-                } else if (point_in_rect(&image_icon, click_x, click_y)) {
-                    if (open_window_or_focus_existing(APP_IMAGEVIEWER, &focused) >= 0) {
                         dirty = 1;
                     }
                     menu_open = 0;
@@ -3792,16 +3782,24 @@ void desktop_main(void) {
                                 dirty = 1;
                             }
                         } else if (type == APP_TASKMANAGER) {
-                            int close_target = taskmgr_hit_test_close(&g_tms[g_windows[hit_window].instance],
-                                                                      g_windows,
-                                                                      MAX_WINDOWS,
-                                                                      click_x,
-                                                                      click_y);
-                            if (close_target >= 0) {
-                                free_window(close_target);
-                                if (close_target == hit_window) {
+                            struct taskmgr_action action =
+                                taskmgr_handle_click(&g_tms[g_windows[hit_window].instance],
+                                                     g_windows,
+                                                     MAX_WINDOWS,
+                                                     click_x,
+                                                     click_y,
+                                                     ticks);
+                            if (action.type == TASKMGR_ACTION_CLOSE_WINDOW && action.value >= 0) {
+                                free_window(action.value);
+                                if (action.value == hit_window) {
                                     focused = -1;
                                 }
+                                dirty = 1;
+                            } else if (action.type == TASKMGR_ACTION_TERMINATE_PID && action.value > 0) {
+                                if (sys_task_terminate((uint32_t)action.value) == 0) {
+                                    dirty = 1;
+                                }
+                            } else {
                                 dirty = 1;
                             }
                         } else if (type == APP_CALCULATOR) {

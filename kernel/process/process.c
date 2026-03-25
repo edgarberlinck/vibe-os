@@ -54,6 +54,9 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->kind = kind;
     p->service_type = service_type;
     p->stack_size = normalized_stack_size;
+    p->runtime_ticks = 0u;
+    p->last_start_tick = 0u;
+    p->context_switches = 0u;
     p->next = NULL;
 
     /* allocate stack memory and set initial register state */
@@ -80,6 +83,7 @@ void process_terminate(process_t *proc) {
     proc->state = PROCESS_TERMINATED;
     proc->current_cpu = -1;
     proc->preferred_cpu = -1;
+    proc->last_start_tick = 0u;
 }
 
 void process_destroy(process_t *proc) {

@@ -3,7 +3,7 @@ ENTRY(vibe_app_entry)
 
 SECTIONS
 {
-    . = 0x04000000;
+    . = 0x14000000;
     __app_load_start = .;
 
     .app_header : ALIGN(16)

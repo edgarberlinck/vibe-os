@@ -5,6 +5,7 @@
 #include <kernel/driver_manager.h>
 #include <kernel/memory/memory_init.h>  /* kernel/memory via CFLAGS */
 #include <kernel/memory/heap.h>
+#include <kernel/memory/paging.h>
 #include <kernel/memory/physmem.h>
 #include <kernel/fs.h>
 #include <kernel/hal.h>
@@ -132,11 +133,155 @@ static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
     return value & ~(align - 1u);
 }
 
+struct kernel_mem_range {
+    uintptr_t start;
+    uintptr_t end;
+};
+
+static void kernel_mem_range_clear(struct kernel_mem_range *range) {
+    if (range == 0) {
+        return;
+    }
+    range->start = 0u;
+    range->end = 0u;
+}
+
+static size_t kernel_mem_range_size(const struct kernel_mem_range *range) {
+    if (range == 0 || range->end <= range->start) {
+        return 0u;
+    }
+    return (size_t)(range->end - range->start);
+}
+
+static void kernel_mem_range_normalize(struct kernel_mem_range *range) {
+    if (range == 0 || range->end <= range->start) {
+        kernel_mem_range_clear(range);
+    }
+}
+
+static void kernel_mem_range_subtract(const struct kernel_mem_range *source,
+                                      const struct kernel_mem_range *reserved,
+                                      struct kernel_mem_range *left_out,
+                                      struct kernel_mem_range *right_out) {
+    struct kernel_mem_range left = {0u, 0u};
+    struct kernel_mem_range right = {0u, 0u};
+    uintptr_t overlap_start;
+    uintptr_t overlap_end;
+
+    if (source == 0 || reserved == 0) {
+        kernel_mem_range_clear(left_out);
+        kernel_mem_range_clear(right_out);
+        return;
+    }
+
+    if (source->end <= source->start ||
+        reserved->end <= reserved->start ||
+        reserved->end <= source->start ||
+        reserved->start >= source->end) {
+        left = *source;
+    } else {
+        overlap_start = reserved->start > source->start ? reserved->start : source->start;
+        overlap_end = reserved->end < source->end ? reserved->end : source->end;
+
+        left.start = source->start;
+        left.end = overlap_start;
+        right.start = overlap_end;
+        right.end = source->end;
+        kernel_mem_range_normalize(&left);
+        kernel_mem_range_normalize(&right);
+    }
+
+    if (left_out != 0) {
+        *left_out = left;
+    }
+    if (right_out != 0) {
+        *right_out = right;
+    }
+}
+
+static struct kernel_mem_range kernel_mem_pick_larger(const struct kernel_mem_range *a,
+                                                      const struct kernel_mem_range *b) {
+    size_t a_size = kernel_mem_range_size(a);
+    size_t b_size = kernel_mem_range_size(b);
+
+    if (b_size > a_size) {
+        return b != 0 ? *b : (struct kernel_mem_range){0u, 0u};
+    }
+    return a != 0 ? *a : (struct kernel_mem_range){0u, 0u};
+}
+
+static struct kernel_mem_range kernel_mem_find_largest_free_range(
+    struct kernel_mem_range usable,
+    const struct kernel_mem_range *reserved,
+    size_t reserved_count) {
+    struct kernel_mem_range best = usable;
+
+    for (size_t i = 0; i < reserved_count; ++i) {
+        struct kernel_mem_range current = reserved[i];
+        struct kernel_mem_range left;
+        struct kernel_mem_range right;
+
+        if (kernel_mem_range_size(&best) == 0u || kernel_mem_range_size(&current) == 0u) {
+            continue;
+        }
+        kernel_mem_range_subtract(&best, &current, &left, &right);
+        best = kernel_mem_pick_larger(&left, &right);
+    }
+
+    return best;
+}
+
+static int kernel_boot_framebuffer_range(uintptr_t *start_out, uintptr_t *end_out) {
+    const volatile struct bootinfo *bootinfo =
+        (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
+    uintptr_t start;
+    uintptr_t end;
+    size_t frame_bytes;
+
+    if (start_out != 0) {
+        *start_out = 0u;
+    }
+    if (end_out != 0) {
+        *end_out = 0u;
+    }
+
+    if (bootinfo->magic != BOOTINFO_MAGIC ||
+        bootinfo->version != BOOTINFO_VERSION ||
+        (bootinfo->flags & BOOTINFO_FLAG_VESA_VALID) == 0u ||
+        bootinfo->vesa.fb_addr < 0x00100000u ||
+        bootinfo->vesa.pitch == 0u ||
+        bootinfo->vesa.width < 640u ||
+        bootinfo->vesa.height < 480u ||
+        bootinfo->vesa.bpp != 8u) {
+        return 0;
+    }
+
+    frame_bytes = (size_t)bootinfo->vesa.pitch * (size_t)bootinfo->vesa.height;
+    if (frame_bytes == 0u) {
+        return 0;
+    }
+
+    start = align_down_uintptr((uintptr_t)bootinfo->vesa.fb_addr, 0x1000u);
+    end = align_up_uintptr((uintptr_t)bootinfo->vesa.fb_addr + frame_bytes, 0x1000u);
+    if (end <= start) {
+        return 0;
+    }
+
+    if (start_out != 0) {
+        *start_out = start;
+    }
+    if (end_out != 0) {
+        *end_out = end;
+    }
+    return 1;
+}
+
 __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     enum {
         USERLAND_STACK_RESERVE = 512 * 1024,
-        USERLAND_APP_ARENA_RESERVE = VIBE_APP_RESERVED_TOP,
-        HEAP_GUARD_BYTES = 64 * 1024
+        HEAP_GUARD_BYTES = 64 * 1024,
+        APP_ARENA_TOTAL_BYTES = VIBE_APP_ARENA_SIZE * 3u,
+        APP_BACKING_ALIGN = 0x00400000u
     };
     extern uint8_t __bss_end[];
     uintptr_t kernel_end;
@@ -144,6 +289,17 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     uintptr_t usable_end;
     uintptr_t heap_start;
     uintptr_t heap_end;
+    uintptr_t fb_start = 0u;
+    uintptr_t fb_end = 0u;
+    uintptr_t low_reserved_end;
+    uintptr_t app_backing_start = 0u;
+    uintptr_t app_backing_end = 0u;
+    struct kernel_mem_range usable_range;
+    struct kernel_mem_range reserved_ranges[3];
+    struct kernel_mem_range heap_range;
+    struct kernel_mem_range app_range;
+    size_t reserved_count = 0u;
+    uint32_t app_pde_snapshot[(APP_ARENA_TOTAL_BYTES / 0x00400000u)];
 
     /* zero kernel BSS */
     extern uint8_t __bss_start[];
@@ -197,18 +353,98 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     kernel_text_puts("Initializing memory...\n");
     memory_subsystem_init();
+    if (kernel_boot_framebuffer_range(&fb_start, &fb_end)) {
+        physmem_reserve_range(fb_start, (size_t)(fb_end - fb_start));
+        kernel_debug_printf("memory: reserved framebuffer [%x, %x) kb=%u\n",
+                            (uint32_t)fb_start,
+                            (uint32_t)fb_end,
+                            (unsigned int)((fb_end - fb_start) / 1024u));
+    }
     kernel_end = align_up_uintptr((uintptr_t)__bss_end, 0x1000u);
     usable_base = physmem_usable_base();
     usable_end = physmem_usable_end();
-    heap_start = kernel_end;
-    if (heap_start < usable_base) {
-        heap_start = usable_base;
+    low_reserved_end = align_up_uintptr(kernel_end + USERLAND_STACK_RESERVE + HEAP_GUARD_BYTES, 0x1000u);
+
+    usable_range.start = align_up_uintptr(usable_base, 0x1000u);
+    usable_range.end = align_down_uintptr(usable_end, 0x1000u);
+    kernel_mem_range_clear(&reserved_ranges[0]);
+    kernel_mem_range_clear(&reserved_ranges[1]);
+    kernel_mem_range_clear(&reserved_ranges[2]);
+
+    reserved_ranges[0].start = usable_range.start;
+    reserved_ranges[0].end = low_reserved_end;
+    kernel_mem_range_normalize(&reserved_ranges[0]);
+    if (kernel_mem_range_size(&reserved_ranges[0]) != 0u) {
+        physmem_reserve_range(reserved_ranges[0].start,
+                              (size_t)(reserved_ranges[0].end - reserved_ranges[0].start));
+        kernel_debug_printf("memory: reserved boot/core [%x, %x) kb=%u\n",
+                            (uint32_t)reserved_ranges[0].start,
+                            (uint32_t)reserved_ranges[0].end,
+                            (unsigned int)((reserved_ranges[0].end - reserved_ranges[0].start) / 1024u));
+        reserved_count = 1u;
     }
-    heap_start = align_up_uintptr(heap_start + USERLAND_STACK_RESERVE + HEAP_GUARD_BYTES, 0x1000u);
-    if (heap_start < align_up_uintptr((uintptr_t)USERLAND_APP_ARENA_RESERVE + HEAP_GUARD_BYTES, 0x1000u)) {
-        heap_start = align_up_uintptr((uintptr_t)USERLAND_APP_ARENA_RESERVE + HEAP_GUARD_BYTES, 0x1000u);
+
+    reserved_ranges[1].start = fb_start;
+    reserved_ranges[1].end = fb_end;
+    kernel_mem_range_normalize(&reserved_ranges[1]);
+    if (kernel_mem_range_size(&reserved_ranges[1]) != 0u) {
+        reserved_count = 2u;
     }
-    heap_end = align_down_uintptr(usable_end, 0x1000u);
+
+    app_range = kernel_mem_find_largest_free_range(usable_range, reserved_ranges, reserved_count);
+    if (kernel_mem_range_size(&app_range) >= APP_ARENA_TOTAL_BYTES + APP_BACKING_ALIGN) {
+        app_backing_end = align_down_uintptr(app_range.end, APP_BACKING_ALIGN);
+        app_backing_start = align_down_uintptr(app_backing_end - APP_ARENA_TOTAL_BYTES, APP_BACKING_ALIGN);
+        if (app_backing_start >= app_range.start && app_backing_end > app_backing_start) {
+            reserved_ranges[2].start = app_backing_start;
+            reserved_ranges[2].end = app_backing_end;
+            kernel_mem_range_normalize(&reserved_ranges[2]);
+        }
+    }
+
+    if (kernel_mem_range_size(&reserved_ranges[2]) != 0u) {
+        uintptr_t app_phys = reserved_ranges[2].start;
+        int mapped = 0;
+
+        physmem_reserve_range(reserved_ranges[2].start,
+                              (size_t)(reserved_ranges[2].end - reserved_ranges[2].start));
+        kernel_debug_printf("memory: reserved app backing [%x, %x) mb=%u\n",
+                            (uint32_t)reserved_ranges[2].start,
+                            (uint32_t)reserved_ranges[2].end,
+                            (unsigned int)((reserved_ranges[2].end - reserved_ranges[2].start) / (1024u * 1024u)));
+        if (paging_snapshot_large_region(VIBE_APP_LOAD_ADDR,
+                                         APP_ARENA_TOTAL_BYTES,
+                                         app_pde_snapshot,
+                                         sizeof(app_pde_snapshot) / sizeof(app_pde_snapshot[0])) == 0 &&
+            paging_map_large_region(VIBE_APP_LOAD_ADDR, app_phys, VIBE_APP_ARENA_SIZE) == 0 &&
+            paging_map_large_region(VIBE_APP_DESKTOP_LOAD_ADDR, app_phys + VIBE_APP_ARENA_SIZE, VIBE_APP_ARENA_SIZE) == 0 &&
+            paging_map_large_region(VIBE_APP_BOOT_LOAD_ADDR, app_phys + (VIBE_APP_ARENA_SIZE * 2u), VIBE_APP_ARENA_SIZE) == 0) {
+            kernel_debug_printf("memory: app arenas mapped v=%x/%x/%x p=%x/%x/%x\n",
+                                (uint32_t)VIBE_APP_LOAD_ADDR,
+                                (uint32_t)VIBE_APP_DESKTOP_LOAD_ADDR,
+                                (uint32_t)VIBE_APP_BOOT_LOAD_ADDR,
+                                (uint32_t)app_phys,
+                                (uint32_t)(app_phys + VIBE_APP_ARENA_SIZE),
+                                (uint32_t)(app_phys + (VIBE_APP_ARENA_SIZE * 2u)));
+            reserved_count = 3u;
+            mapped = 1;
+        } else {
+            kernel_debug_puts("memory: app arena remap failed, using identity mapping\n");
+            (void)paging_restore_large_region(VIBE_APP_LOAD_ADDR,
+                                              APP_ARENA_TOTAL_BYTES,
+                                              app_pde_snapshot,
+                                              sizeof(app_pde_snapshot) / sizeof(app_pde_snapshot[0]));
+        }
+        if (!mapped) {
+            physmem_release_range(reserved_ranges[2].start,
+                                  (size_t)(reserved_ranges[2].end - reserved_ranges[2].start));
+            kernel_mem_range_clear(&reserved_ranges[2]);
+        }
+    }
+
+    heap_range = kernel_mem_find_largest_free_range(usable_range, reserved_ranges, reserved_count);
+    heap_start = align_up_uintptr(heap_range.start, 0x1000u);
+    heap_end = align_down_uintptr(heap_range.end, 0x1000u);
     if (heap_end <= heap_start) {
         heap_start = 0x00500000u;
         heap_end = 0x00900000u;

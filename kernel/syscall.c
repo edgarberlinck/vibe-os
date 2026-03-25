@@ -7,9 +7,13 @@
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/fs.h>
 #include <kernel/microkernel.h>
+#include <kernel/microkernel/launch.h>
 #include <kernel/ipc.h>
 #include <kernel/process.h>
 #include <kernel/hal/io.h>
+#include <kernel/memory/heap.h>
+#include <kernel/memory/physmem.h>
+#include <kernel/cpu/cpu.h>
 #include <stdint.h>
 #include <include/userland_api.h> /* syscall IDs */
 #include <string.h>
@@ -388,6 +392,74 @@ static uint32_t sys_service_backend(uint32_t request_ptr, uint32_t reply_ptr, ui
         (struct mk_message *)(uintptr_t)reply_ptr);
 }
 
+static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, uint32_t max_entries,
+                                  uint32_t d, uint32_t e) {
+    struct task_snapshot_summary *summary;
+    struct task_snapshot_entry *entries;
+    uint32_t count;
+
+    (void)d; (void)e;
+    if (summary_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    summary = (struct task_snapshot_summary *)(uintptr_t)summary_ptr;
+    entries = entries_ptr != 0u ? (struct task_snapshot_entry *)(uintptr_t)entries_ptr : 0;
+    if (max_entries > TASK_SNAPSHOT_MAX) {
+        max_entries = TASK_SNAPSHOT_MAX;
+    }
+
+    count = scheduler_snapshot(entries, max_entries, summary);
+    summary->kernel_heap_used = (uint32_t)kernel_heap_used();
+    summary->kernel_heap_free = (uint32_t)kernel_heap_free();
+    summary->physmem_total_kb = (uint32_t)(physmem_usable_size() / 1024u);
+    summary->physmem_free_kb = (uint32_t)((physmem_free_pages() * PHYSMEM_PAGE_SIZE) / 1024u);
+
+    if (entries != 0) {
+        for (uint32_t i = 0u; i < count; ++i) {
+            const struct mk_launch_context *context = mk_launch_context_for_pid((int)entries[i].pid);
+
+            if (context != 0) {
+                memcpy(entries[i].name, context->name, sizeof(entries[i].name));
+                entries[i].flags = context->flags;
+                entries[i].service_type = context->service_type;
+            }
+        }
+    }
+
+    return count;
+}
+
+static uint32_t sys_task_terminate(uint32_t pid, uint32_t b, uint32_t c,
+                                   uint32_t d, uint32_t e) {
+    process_t *current;
+    process_t *task;
+    const struct mk_launch_context *context;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (pid == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    if (current != 0 && (uint32_t)current->pid == pid) {
+        return (uint32_t)-1;
+    }
+
+    task = scheduler_find_task_by_pid((int)pid);
+    if (task == 0) {
+        return (uint32_t)-1;
+    }
+
+    context = mk_launch_context_for_pid((int)pid);
+    if (context != 0 && (context->flags & MK_LAUNCH_FLAG_CRITICAL) != 0u) {
+        return (uint32_t)-1;
+    }
+
+    scheduler_terminate_task(task);
+    return 0u;
+}
+
 void syscall_init(void) {
     /* register new kernel syscalls; numbers are defined in
        include/userland_api.h */
@@ -433,6 +505,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SERVICE_RECV] = sys_service_receive;
     syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
     syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
+    syscall_table[SYSCALL_TASK_SNAPSHOT] = sys_task_snapshot;
+    syscall_table[SYSCALL_TASK_TERMINATE] = sys_task_terminate;
 }
 
 /* dispatch routine called by ISR */

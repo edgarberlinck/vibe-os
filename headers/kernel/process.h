@@ -45,6 +45,9 @@ typedef struct process {
     enum process_state state;
     enum process_kind kind;
     uint32_t service_type;
+    uint32_t runtime_ticks;
+    uint32_t last_start_tick;
+    uint32_t context_switches;
     struct process *next;   /* linked‑list pointer for scheduler */
 } process_t;
 

@@ -23,7 +23,8 @@
 #define DOOM_STDIN_FD 0
 #define DOOM_STDOUT_FD 1
 #define DOOM_STDERR_FD 2
-#define DOOM_EMBEDDED_WAD_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
+#define DOOM_WAD_IMAGE_LBA 131728u
+#define DOOM_EMBEDDED_WAD_LBA DOOM_WAD_IMAGE_LBA
 #define DOOM_SECTOR_SIZE 512u
 #define DOOM_EMBEDDED_FILE_NONE 0
 #define DOOM_EMBEDDED_FILE_WAD 1
@@ -222,6 +223,23 @@ static int doom_embedded_detect_wad(void) {
 }
 
 int doom_port_iwad_available(void) {
+    static const char *doom_wad_candidates[] = {
+        "/DOOM/DOOM.WAD",
+        "/doom/DOOM.WAD",
+        "/doom/doom.wad",
+        "/doom.wad",
+        "doom.wad",
+        "userland/applications/games/DOOM/DOOM.WAD",
+        "userland/applications/games/DOOM/doom.wad",
+        0
+    };
+
+    for (int i = 0; doom_wad_candidates[i] != 0; ++i) {
+        int node = doom_try_resolve_path(doom_wad_candidates[i]);
+        if (node >= 0 && !g_fs_nodes[node].is_dir) {
+            return 1;
+        }
+    }
     return doom_embedded_detect_wad();
 }
 

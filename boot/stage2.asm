@@ -3539,27 +3539,7 @@ realmode_apply_video_change:
     mov sp, REALMODE_STACK_TOP
     lidt [realmode_idtr]
 
-    mov al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX]
-    cmp al, BOOTINFO_VIDEO_INDEX_NONE
-    je .resume
-    xor bx, bx
-    mov bl, al
-    shl bx, 3
-    mov dx, [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODES + bx + BOOTINFO_VIDEO_MODE_FIELD_MODE]
-    DEBUG_CHAR 'x'
-    call vesa_set_mode_and_store_bootinfo
-    xor ax, ax
-    mov ds, ax
-    mov es, ax
-    jc .restore_selection
-    DEBUG_CHAR 'y'
-    call populate_legacy_vesa_info
-    jmp .resume
-
-.restore_selection:
-    mov al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_ACTIVE_INDEX]
-    mov [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX], al
-
+    call apply_selected_video_mode
 .resume:
     DEBUG_CHAR 'z'
     call enable_a20
@@ -3581,6 +3561,8 @@ realmode_boot_selected_kernel:
     mov sp, REALMODE_STACK_TOP
     cld
     lidt [realmode_idtr]
+
+    call apply_selected_video_mode
 
     call load_kernel_file
     jc disk_error
@@ -3607,6 +3589,33 @@ realmode_boot_selected_kernel:
     or eax, 1
     mov cr0, eax
     jmp CODE_SEG:pmode_kernel_resume
+
+apply_selected_video_mode:
+    mov al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX]
+    cmp al, BOOTINFO_VIDEO_INDEX_NONE
+    je .done
+    cmp al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_ACTIVE_INDEX]
+    je .done
+
+    xor bx, bx
+    mov bl, al
+    shl bx, 3
+    mov dx, [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODES + bx + BOOTINFO_VIDEO_MODE_FIELD_MODE]
+    DEBUG_CHAR 'x'
+    call vesa_set_mode_and_store_bootinfo
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    jc .restore_selection
+    DEBUG_CHAR 'y'
+    call populate_legacy_vesa_info
+    ret
+
+.restore_selection:
+    mov al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_ACTIVE_INDEX]
+    mov [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX], al
+.done:
+    ret
 
 realmode_debug_menu_fallback:
     DEBUG_BOOT_CHAR 'T'

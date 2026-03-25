@@ -3,12 +3,58 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
 
+#define CRAFT_EMBED_MAX_WIDTH 640
+#define CRAFT_EMBED_MAX_HEIGHT 480
+#define CRAFT_WINDOW_CHROME_W 8
+#define CRAFT_WINDOW_CHROME_H 22
+#define CRAFT_WINDOW_MARGIN 16
+
 static struct rect craft_client_rect(const struct craft_state *state) {
     return (struct rect){
         state->window.x + 4,
         state->window.y + 18,
         state->window.w - 8,
         state->window.h - 22
+    };
+}
+
+static int craft_clamp_dimension(int value, int minimum, int maximum) {
+    if (value < minimum) {
+        return minimum;
+    }
+    if (value > maximum) {
+        return maximum;
+    }
+    return value;
+}
+
+static void craft_embedded_render_size(const struct rect *client,
+                                       int *render_w,
+                                       int *render_h) {
+    int width = client ? client->w : 0;
+    int height = client ? client->h : 0;
+
+    width = craft_clamp_dimension(width, 64, CRAFT_EMBED_MAX_WIDTH);
+    height = craft_clamp_dimension(height, 64, CRAFT_EMBED_MAX_HEIGHT);
+    if (render_w) {
+        *render_w = width;
+    }
+    if (render_h) {
+        *render_h = height;
+    }
+}
+
+static struct rect craft_render_rect(const struct craft_state *state) {
+    struct rect client = craft_client_rect(state);
+    int render_w = 0;
+    int render_h = 0;
+
+    craft_embedded_render_size(&client, &render_w, &render_h);
+    return (struct rect){
+        client.x + ((client.w - render_w) / 2),
+        client.y + ((client.h - render_h) / 2),
+        render_w,
+        render_h
     };
 }
 
@@ -46,10 +92,34 @@ static int craft_storage_available(void) {
 }
 
 void craft_init_state(struct craft_state *state) {
-    state->window.x = 0;
-    state->window.y = 0;
-    state->window.w = (int)SCREEN_WIDTH;
-    state->window.h = (int)SCREEN_HEIGHT - 22;
+    int max_window_w = (int)SCREEN_WIDTH - (CRAFT_WINDOW_MARGIN * 2);
+    int max_window_h = (int)SCREEN_HEIGHT - (CRAFT_WINDOW_MARGIN * 2);
+    int window_w = CRAFT_EMBED_MAX_WIDTH + CRAFT_WINDOW_CHROME_W;
+    int window_h = CRAFT_EMBED_MAX_HEIGHT + CRAFT_WINDOW_CHROME_H;
+
+    if (max_window_w < 200) {
+        max_window_w = (int)SCREEN_WIDTH;
+    }
+    if (max_window_h < 120) {
+        max_window_h = (int)SCREEN_HEIGHT;
+    }
+    if (window_w > max_window_w) {
+        window_w = max_window_w;
+    }
+    if (window_h > max_window_h) {
+        window_h = max_window_h;
+    }
+
+    state->window.x = (((int)SCREEN_WIDTH - window_w) / 2);
+    state->window.y = (((int)SCREEN_HEIGHT - window_h) / 2);
+    if (state->window.x < 0) {
+        state->window.x = 0;
+    }
+    if (state->window.y < 0) {
+        state->window.y = 0;
+    }
+    state->window.w = window_w;
+    state->window.h = window_h;
     state->running = 0;
     state->last_code = 0;
     state->started = 0;
@@ -92,14 +162,20 @@ void craft_shutdown_state(struct craft_state *state) {
 
 int craft_step(struct craft_state *state, uint32_t ticks) {
     struct rect client = craft_client_rect(state);
-    int local_x = state->mouse_x - client.x;
-    int local_y = state->mouse_y - client.y;
-    int inside = point_in_rect(&client, state->mouse_x, state->mouse_y);
+    struct rect render = craft_render_rect(state);
+    int local_x = 0;
+    int local_y = 0;
+    int inside = point_in_rect(&render, state->mouse_x, state->mouse_y);
     (void)ticks;
 
     if (client.w < 64 || client.h < 64) {
         str_copy_limited(state->status, "Aumente a janela do Craft", (int)sizeof(state->status));
         return 1;
+    }
+
+    if (inside) {
+        local_x = craft_clamp_dimension(state->mouse_x - render.x, 0, render.w - 1);
+        local_y = craft_clamp_dimension(state->mouse_y - render.y, 0, render.h - 1);
     }
 
     if (!state->started && !craft_storage_available()) {
@@ -110,7 +186,7 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
 
     if (!state->started) {
         sys_write_debug("craft: start\n");
-        state->last_code = craft_upstream_start(client.w, client.h);
+        state->last_code = craft_upstream_start(render.w, render.h);
         craft_debug_int("craft: start rc=", state->last_code);
         state->started = (state->last_code == 0);
         state->running = state->started;
@@ -121,7 +197,7 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
         str_copy_limited(state->status, "Craft em execucao", (int)sizeof(state->status));
     }
 
-    craft_upstream_resize(client.w, client.h);
+    craft_upstream_resize(render.w, render.h);
     craft_upstream_set_mouse(local_x, local_y,
                              state->mouse_dx, state->mouse_dy,
                              state->mouse_buttons, state->focused, inside);
@@ -167,7 +243,9 @@ void craft_draw_window(struct craft_state *state, int active,
     ui_draw_surface(&client, ui_color_window_bg());
 
     if (state->started) {
-        craft_upstream_blit(client.x, client.y);
+        struct rect render = craft_render_rect(state);
+
+        craft_upstream_blit(render.x, render.y);
     } else {
         ui_draw_inset(&client, ui_color_window_bg());
         sys_text(client.x + 10, client.y + 10, theme->text, state->status);

@@ -9,7 +9,6 @@
 #define FS_PERSIST_VERSION 2u
 #define FS_SECTOR_SIZE 512u
 #define FS_STORAGE_DATA_START_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
-
 struct fs_persist_image {
     uint32_t magic;
     uint32_t version;
@@ -38,6 +37,7 @@ static void fs_ensure_craft_textures_registered(void);
 static void fs_ensure_wallpaper_registered(void);
 static uint32_t fs_storage_total_sectors(void);
 
+#define DOOM_WAD_IMAGE_LBA 131728u
 #define CRAFT_TEXTURE_IMAGE_LBA 30000u
 #define CRAFT_FONT_IMAGE_LBA 30128u
 #define CRAFT_SKY_IMAGE_LBA 30256u
@@ -1116,8 +1116,13 @@ static void fs_ensure_doom_wad_registered(void) {
         (void)fs_create("/DOOM", 1);
     }
 
-    if (fs_detect_doom_wad(FS_STORAGE_DATA_START_LBA, &doom_wad_sectors, &doom_wad_size) == 0) {
-        (void)fs_register_image_file("/DOOM/DOOM.WAD", FS_STORAGE_DATA_START_LBA, doom_wad_sectors, doom_wad_size);
+    if (fs_detect_doom_wad(DOOM_WAD_IMAGE_LBA,
+                           &doom_wad_sectors,
+                           &doom_wad_size) == 0) {
+        (void)fs_register_image_file("/DOOM/DOOM.WAD",
+                                     DOOM_WAD_IMAGE_LBA,
+                                     doom_wad_sectors,
+                                     doom_wad_size);
         fs_debug_asset_path("fs: asset file ", "/DOOM/DOOM.WAD");
     }
 }

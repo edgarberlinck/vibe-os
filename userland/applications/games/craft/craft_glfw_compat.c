@@ -49,7 +49,21 @@ static int g_window_focused = 0;
 static int g_pending_keys[128];
 static int g_pending_key_count = 0;
 
+#define CRAFT_GLFW_MAX_WIDTH 640
+#define CRAFT_GLFW_MAX_HEIGHT 480
 #define CRAFT_GLFW_KEY_HOLD_TICKS 6
+
+static void craft_glfw_clamp_window_size(int *width, int *height) {
+    if (!width || !height) {
+        return;
+    }
+    if (*width > CRAFT_GLFW_MAX_WIDTH) {
+        *width = CRAFT_GLFW_MAX_WIDTH;
+    }
+    if (*height > CRAFT_GLFW_MAX_HEIGHT) {
+        *height = CRAFT_GLFW_MAX_HEIGHT;
+    }
+}
 
 static void craft_glfw_debug(const char *message) {
     if (!message) {
@@ -106,12 +120,7 @@ void glfwTerminate(void) {}
 GLFWwindow *glfwCreateWindow(int width, int height, const char *title, GLFWmonitor *monitor, GLFWwindow *share) {
     (void)title; (void)monitor; (void)share;
     craft_glfw_debug("craft: glfwCreateWindow begin");
-    if (width > 640) {
-        width = 640;
-    }
-    if (height > 480) {
-        height = 480;
-    }
+    craft_glfw_clamp_window_size(&width, &height);
     g_window.width = width;
     g_window.height = height;
     g_window.cursor_mode = GLFW_CURSOR_NORMAL;
@@ -276,6 +285,7 @@ void craft_glfw_set_window_size(int width, int height) {
     if (width <= 0 || height <= 0) {
         return;
     }
+    craft_glfw_clamp_window_size(&width, &height);
     g_window.width = width;
     g_window.height = height;
     craft_gl_init_window(width, height);

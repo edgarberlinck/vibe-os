@@ -121,6 +121,21 @@ int sys_launch_info(struct userland_launch_info *info) {
     return syscall5(SYSCALL_LAUNCH_INFO, (int)(uintptr_t)info, 0, 0, 0, 0);
 }
 
+int sys_task_snapshot(struct task_snapshot_summary *summary,
+                      struct task_snapshot_entry *entries,
+                      uint32_t max_entries) {
+    return syscall5(SYSCALL_TASK_SNAPSHOT,
+                    (int)(uintptr_t)summary,
+                    (int)(uintptr_t)entries,
+                    (int)max_entries,
+                    0,
+                    0);
+}
+
+int sys_task_terminate(uint32_t pid) {
+    return syscall5(SYSCALL_TASK_TERMINATE, (int)pid, 0, 0, 0, 0);
+}
+
 void sys_sleep(void) {
     (void)syscall5(SYSCALL_SLEEP, 0, 0, 0, 0, 0);
 }

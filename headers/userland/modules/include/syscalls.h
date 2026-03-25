@@ -32,6 +32,10 @@ off_t sys_lseek(int fd, off_t offset, int whence);
 int sys_stat(const char *path, struct stat *buf);
 int sys_fstat(int fd, struct stat *buf);
 int sys_launch_info(struct userland_launch_info *info);
+int sys_task_snapshot(struct task_snapshot_summary *summary,
+                      struct task_snapshot_entry *entries,
+                      uint32_t max_entries);
+int sys_task_terminate(uint32_t pid);
 void sys_sleep(void);
 uint32_t sys_ticks(void);
 int sys_gfx_info(struct video_mode *mode);

@@ -257,9 +257,10 @@ static int craft_upstream_bootstrap(void) {
 
     g->mode = MODE_OFFLINE;
     doom_snprintf(g->db_path, MAX_PATH_LENGTH, "%s", DB_PATH);
-    g->create_radius = 1;
+    /* Embedded mode stays on a synchronous, low-footprint world update path. */
+    g->create_radius = 0;
     g->render_radius = 1;
-    g->delete_radius = 3;
+    g->delete_radius = 2;
     g->sign_radius = 1;
 
     craft_debug_stage("craft: before workers");

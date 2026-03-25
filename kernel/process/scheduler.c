@@ -9,6 +9,7 @@
 #include <kernel/cpu/cpu.h>
 #include <kernel/smp.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/timer/timer.h>
 
 /* prototype for the low‑level context switch routine (implemented in assembly) */
 extern void context_switch(void *old_task, void *new_task);
@@ -20,6 +21,17 @@ static process_t *g_cursor[32];
 static spinlock_t g_scheduler_lock;
 static int g_scheduler_boot_trace_emitted = 0;
 static int g_scheduler_switch_trace_budget = 24;
+
+static void scheduler_account_runtime(process_t *task, uint32_t now_ticks) {
+    if (task == NULL || task->state != PROCESS_RUNNING || task->last_start_tick == 0u) {
+        return;
+    }
+
+    if (now_ticks >= task->last_start_tick) {
+        task->runtime_ticks += (now_ticks - task->last_start_tick);
+    }
+    task->last_start_tick = 0u;
+}
 
 static void scheduler_trace_switch(uint32_t cpu_index,
                                    const process_t *old_task,
@@ -189,6 +201,7 @@ static process_t *find_next(uint32_t cpu_index, process_t *current) {
 
 void schedule(void) {
     uint32_t cpu_index = kernel_cpu_index();
+    uint32_t now_ticks = kernel_timer_get_ticks();
     process_t *current;
     process_t *next;
     uint32_t flags = spinlock_lock_irqsave(&g_scheduler_lock);
@@ -198,6 +211,7 @@ void schedule(void) {
     }
     current = g_current[cpu_index];
     if (current && current->state == PROCESS_RUNNING && current->current_cpu == (int)cpu_index) {
+        scheduler_account_runtime(current, now_ticks);
         current->state = PROCESS_READY;
         current->current_cpu = -1;
         current->last_cpu = (int)cpu_index;
@@ -220,6 +234,8 @@ void schedule(void) {
         next->state = PROCESS_RUNNING;
         next->current_cpu = (int)cpu_index;
         next->last_cpu = (int)cpu_index;
+        next->last_start_tick = now_ticks;
+        next->context_switches += 1u;
         g_current[cpu_index] = next;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         if (!g_scheduler_boot_trace_emitted) {
@@ -239,6 +255,8 @@ void schedule(void) {
         next->state = PROCESS_RUNNING;
         next->current_cpu = (int)cpu_index;
         next->last_cpu = (int)cpu_index;
+        next->last_start_tick = now_ticks;
+        next->context_switches += 1u;
         g_current[cpu_index] = next;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         scheduler_trace_switch(cpu_index, old, next);
@@ -247,6 +265,7 @@ void schedule(void) {
         current->state = PROCESS_RUNNING;
         current->current_cpu = (int)cpu_index;
         current->last_cpu = (int)cpu_index;
+        current->last_start_tick = now_ticks;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     }
 }
@@ -294,12 +313,15 @@ process_t *scheduler_find_task_by_pid(int pid) {
 void scheduler_terminate_task(process_t *task) {
     uint32_t flags;
     uint32_t cpu;
+    uint32_t now_ticks;
 
     if (task == NULL) {
         return;
     }
 
+    now_ticks = kernel_timer_get_ticks();
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    scheduler_account_runtime(task, now_ticks);
     task->state = PROCESS_TERMINATED;
     task->current_cpu = -1;
     task->preferred_cpu = -1;
@@ -318,4 +340,72 @@ void scheduler_terminate_task(process_t *task) {
     }
 
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+}
+
+uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
+                            uint32_t max_entries,
+                            struct task_snapshot_summary *summary) {
+    process_t *task;
+    uint32_t count = 0u;
+    uint32_t flags;
+    uint32_t now_ticks = kernel_timer_get_ticks();
+
+    if (summary != NULL) {
+        memset(summary, 0, sizeof(*summary));
+        summary->abi_version = TASK_SNAPSHOT_ABI_VERSION;
+        summary->uptime_ticks = now_ticks;
+        summary->cpu_count = kernel_cpu_count();
+        summary->current_pid = scheduler_current() != NULL ? (uint32_t)scheduler_current()->pid : 0u;
+        for (uint32_t cpu = 0u; cpu < summary->cpu_count; ++cpu) {
+            const struct kernel_cpu_state *state = kernel_cpu_state(cpu);
+
+            if (state != NULL && state->started != 0u) {
+                summary->started_cpu_count += 1u;
+            }
+        }
+    }
+
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    for (task = g_head; task != NULL; task = task->next) {
+        uint32_t runtime_ticks = task->runtime_ticks;
+
+        if (task->state == PROCESS_TERMINATED) {
+            continue;
+        }
+
+        if (task->state == PROCESS_RUNNING && task->last_start_tick != 0u && now_ticks >= task->last_start_tick) {
+            runtime_ticks += (now_ticks - task->last_start_tick);
+        }
+
+        if (summary != NULL) {
+            summary->total_tasks += 1u;
+            if (task->state == PROCESS_RUNNING) {
+                summary->running_tasks += 1u;
+            } else if (task->state == PROCESS_READY) {
+                summary->ready_tasks += 1u;
+            } else if (task->state == PROCESS_BLOCKED) {
+                summary->blocked_tasks += 1u;
+            }
+        }
+
+        if (entries != NULL && count < max_entries) {
+            struct task_snapshot_entry *entry = &entries[count];
+
+            memset(entry, 0, sizeof(*entry));
+            entry->pid = (uint32_t)task->pid;
+            entry->kind = (uint32_t)task->kind;
+            entry->state = (uint32_t)task->state;
+            entry->current_cpu = task->current_cpu;
+            entry->preferred_cpu = task->preferred_cpu;
+            entry->last_cpu = task->last_cpu;
+            entry->stack_size = task->stack_size;
+            entry->runtime_ticks = runtime_ticks;
+            entry->context_switches = task->context_switches;
+            entry->service_type = task->service_type;
+            count += 1u;
+        }
+    }
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+
+    return count;
 }
