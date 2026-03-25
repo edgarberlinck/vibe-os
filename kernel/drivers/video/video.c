@@ -595,6 +595,7 @@ void kernel_gfx_rect(int x, int y, int w, int h, uint8_t color) {
     int y1 = y + h;
     if (x1 > (int)mode->width) x1 = (int)mode->width;
     if (y1 > (int)mode->height) y1 = (int)mode->height;
+    if (x0 >= x1 || y0 >= y1) return;
     for (int py=y0; py<y1; ++py)
         for (int px=x0; px<x1; ++px)
             bb[(py * mode->pitch) + px] = color;

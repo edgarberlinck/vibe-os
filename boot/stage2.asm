@@ -3326,15 +3326,33 @@ menu_append_uint:
 
 draw_glyph:
     push ebp
-    push ebx
     push edi
+    push esi
+    push eax
+    push ebx
     push ecx
     push edx
-    push esi
+
     call glyph_ptr_from_char
     test esi, esi
     jz .done
+    test ecx, ecx
+    jz .done
+
     mov [glyph_ptr_tmp], esi
+    mov [glyph_draw_x], ebx
+    mov [glyph_draw_y], edi
+    mov [glyph_draw_scale], ecx
+    mov [glyph_draw_color], dl
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_VESA_FB]
+    mov [glyph_fb_ptr], eax
+    movzx eax, word [BOOTINFO_ADDR + BOOTINFO_VESA_PITCH]
+    mov [glyph_fb_pitch], eax
+    movzx eax, word [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH]
+    mov [glyph_fb_width], eax
+    movzx eax, word [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT]
+    mov [glyph_fb_height], eax
+
     xor ebp, ebp
 .row_loop:
     cmp ebp, 7
@@ -3342,44 +3360,88 @@ draw_glyph:
     mov esi, [glyph_ptr_tmp]
     mov al, [esi + ebp]
     mov [glyph_row_bits], al
-    xor edi, edi
+    test al, al
+    jz .next_row
+
+    xor esi, esi
+.vscale_loop:
+    mov eax, ebp
+    imul eax, [glyph_draw_scale]
+    add eax, [glyph_draw_y]
+    add eax, esi
+    cmp eax, [glyph_fb_height]
+    jae .next_vscale
+
+    mov edi, [glyph_fb_pitch]
+    imul eax, edi
+    add eax, [glyph_fb_ptr]
+    mov [glyph_row_ptr], eax
+
+    xor edx, edx
 .col_loop:
-    cmp edi, 5
-    jae .next_row
+    cmp edx, 5
+    jae .next_vscale
     mov al, [glyph_row_bits]
-    mov bl, [glyph_masks + edi]
+    mov bl, [glyph_masks + edx]
     test al, bl
-    jz .skip_pixel
+    jz .advance_col
 
-    mov eax, [esp + 16]
-    mov ecx, [esp + 8]
-    mov edx, edi
-    imul edx, ecx
-    add eax, edx
+    mov ecx, edx
+.run_scan:
+    inc edx
+    cmp edx, 5
+    jae .have_run
+    mov al, [glyph_row_bits]
+    mov bl, [glyph_masks + edx]
+    test al, bl
+    jnz .run_scan
 
-    mov ebx, [esp + 12]
-    mov edx, ebp
-    imul edx, ecx
-    add ebx, edx
+.have_run:
+    mov eax, ecx
+    imul eax, [glyph_draw_scale]
+    add eax, [glyph_draw_x]
+    cmp eax, [glyph_fb_width]
+    jae .col_loop
 
-    mov esi, ecx
-    mov edx, [esp + 4]
-    call draw_rect
+    mov ebx, edx
+    sub ebx, ecx
+    imul ebx, [glyph_draw_scale]
+    mov ecx, [glyph_fb_width]
+    sub ecx, eax
+    cmp ebx, ecx
+    jbe .width_ok
+    mov ebx, ecx
 
-.skip_pixel:
-    inc edi
+.width_ok:
+    test ebx, ebx
+    jz .col_loop
+    mov edi, [glyph_row_ptr]
+    add edi, eax
+    mov ecx, ebx
+    mov al, [glyph_draw_color]
+    rep stosb
     jmp .col_loop
+
+.advance_col:
+    inc edx
+    jmp .col_loop
+
+.next_vscale:
+    inc esi
+    cmp esi, [glyph_draw_scale]
+    jb .vscale_loop
 
 .next_row:
     inc ebp
     jmp .row_loop
 
 .done:
-    pop esi
     pop edx
     pop ecx
-    pop edi
     pop ebx
+    pop eax
+    pop esi
+    pop edi
     pop ebp
     ret
 
@@ -3673,7 +3735,16 @@ menu_last_scancode db 0
 menu_last_extended_flag db 0
 menu_last_action db ' '
 glyph_row_bits db 0
+glyph_draw_color db 0
 glyph_ptr_tmp dd 0
+glyph_draw_x dd 0
+glyph_draw_y dd 0
+glyph_draw_scale dd 0
+glyph_fb_ptr dd 0
+glyph_fb_pitch dd 0
+glyph_fb_width dd 0
+glyph_fb_height dd 0
+glyph_row_ptr dd 0
 pm_exception_vector db 0xFF
 
 vibeloader_title db 'VIBELOADER', 0
