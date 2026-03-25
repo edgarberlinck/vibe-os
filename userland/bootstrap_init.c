@@ -28,8 +28,10 @@ static void bootstrap_print_banner(void) {
 }
 
 static int bootstrap_run_startup_apps(void) {
-    char *argv[2];
+    char *userland_argv[2];
+    char *startx_argv[2];
     int rc;
+    int used_direct_startx = 0;
     struct userland_launch_info info;
     extern void kernel_debug_puts(const char *);
 
@@ -39,13 +41,41 @@ static int bootstrap_run_startup_apps(void) {
         return -2;
     }
 
-    argv[0] = "userland";
-    argv[1] = 0;
+    userland_argv[0] = "userland";
+    userland_argv[1] = 0;
+    startx_argv[0] = "startx";
+    startx_argv[1] = 0;
 
     kernel_debug_puts("init: startup app begin\n");
-    rc = lang_try_run(1, argv);
+    lang_invalidate_directory_cache();
+    rc = lang_try_run(1, userland_argv);
+    if (rc != 0) {
+        kernel_debug_puts("init: userland app first attempt failed, retrying\n");
+        sys_yield();
+        lang_invalidate_directory_cache();
+        rc = lang_try_run(1, userland_argv);
+    }
+    if (rc != 0 &&
+        (info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
+        (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
+        kernel_debug_puts("init: userland app unavailable, trying startx directly\n");
+        used_direct_startx = 1;
+        sys_yield();
+        lang_invalidate_directory_cache();
+        rc = lang_try_run(1, startx_argv);
+        if (rc != 0) {
+            kernel_debug_puts("init: direct startx failed, retrying\n");
+            sys_yield();
+            lang_invalidate_directory_cache();
+            rc = lang_try_run(1, startx_argv);
+        }
+    }
     if (rc == 0) {
-        kernel_debug_puts("init: userland app returned\n");
+        if (used_direct_startx) {
+            kernel_debug_puts("init: direct startx returned\n");
+        } else {
+            kernel_debug_puts("init: userland app returned\n");
+        }
     } else {
         kernel_debug_puts("init: userland app missing\n");
     }

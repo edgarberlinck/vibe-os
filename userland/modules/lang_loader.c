@@ -541,6 +541,11 @@ static int lang_load_address_valid(uint32_t load_address) {
            load_address == VIBE_APP_BOOT_LOAD_ADDR;
 }
 
+void lang_invalidate_directory_cache(void) {
+    g_cached_directory_valid = 0;
+    lang_memset(&g_cached_directory, 0, (uint32_t)sizeof(g_cached_directory));
+}
+
 static int lang_has_runtime_stub(const char *name) {
     static const char *prefixes[] = {
         "/bin/",

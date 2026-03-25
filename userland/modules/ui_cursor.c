@@ -39,9 +39,9 @@ void cursor_init(void) {
 static void cursor_glyph(int x, int y, uint8_t color) {
     int scale = 1;
 
-    if (SCREEN_WIDTH >= 1600u || SCREEN_HEIGHT >= 900u) {
-        scale = 3;
-    } else if (SCREEN_WIDTH >= 1024u || SCREEN_HEIGHT >= 768u) {
+    /* Keep the pointer visually stable on larger displays instead of
+       letting it balloon with the framebuffer resolution. */
+    if (SCREEN_WIDTH >= 1920u || SCREEN_HEIGHT >= 1080u) {
         scale = 2;
     }
 

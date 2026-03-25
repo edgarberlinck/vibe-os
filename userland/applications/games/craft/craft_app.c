@@ -230,6 +230,10 @@ int craft_handle_key(struct craft_state *state, int key) {
     if (!state->started) {
         return 0;
     }
+    if (key == 'q' || key == 'Q') {
+        craft_upstream_request_close();
+        return 1;
+    }
     craft_upstream_queue_key(key);
     return 1;
 }
