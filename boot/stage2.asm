@@ -4,8 +4,8 @@ ORG 0x9000
 %define KERNEL_LOAD_SEG 0x1000
 %define REALMODE_STACK_TOP 0xC000
 %define PMODE_FAULT_STACK_TOP 0x6F000
-%define BACKGROUND_LOAD_SEG 0x0200
-%define BACKGROUND_DRAW_ADDR 0x00002000
+%define BACKGROUND_LOAD_SEG 0x8000
+%define BACKGROUND_DRAW_ADDR 0x00080000
 %define BACKGROUND_SOURCE_WIDTH 192
 %define BACKGROUND_SOURCE_HEIGHT 144
 %define BACKGROUND_DRAW_BYTES (BACKGROUND_SOURCE_WIDTH * BACKGROUND_SOURCE_HEIGHT)
@@ -2140,6 +2140,7 @@ pm_exception_idtr:
     dd pm_exception_idt
 
 pmode:
+    cli
     mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
@@ -2163,6 +2164,8 @@ vibeloader_menu:
     cmp byte [BOOTINFO_ADDR + BOOTINFO_VESA_BPP], 8
     jne vibeloader_menu_default_boot
     DEBUG_PMODE_CHAR '2'
+    call graphics_bootinfo_sane32
+    jc vibeloader_menu_default_boot
 
 %ifndef VIBELOADER_SKIP_SET_PALETTE
     call set_desktop_palette
@@ -2243,8 +2246,8 @@ vibeloader_menu_boot_now:
 
 vibeloader_menu_default_boot:
     DEBUG_PMODE_CHAR 'D'
-    cli
-    jmp pmode_to_real_for_debug_halt
+    call menu_apply_selection
+    ret
 
 pm_text_debug_menu_fallback:
     push eax
@@ -3030,7 +3033,31 @@ set_desktop_palette:
 draw_rect:
     push edi
     push ebp
+    push edx
     cld
+    test ecx, ecx
+    jz .done
+    test esi, esi
+    jz .done
+
+    movzx ebp, word [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH]
+    cmp eax, ebp
+    jae .done
+    sub ebp, eax
+    cmp ecx, ebp
+    jbe .clip_height
+    mov ecx, ebp
+
+.clip_height:
+    movzx ebp, word [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT]
+    cmp ebx, ebp
+    jae .done
+    sub ebp, ebx
+    cmp esi, ebp
+    jbe .prepare
+    mov esi, ebp
+
+.prepare:
     mov edi, [BOOTINFO_ADDR + BOOTINFO_VESA_FB]
     movzx ebp, word [BOOTINFO_ADDR + BOOTINFO_VESA_PITCH]
     imul ebx, ebp
@@ -3046,8 +3073,55 @@ draw_rect:
     add edi, eax
     dec esi
     jnz .row
+
+.done:
+    pop edx
     pop ebp
     pop edi
+    ret
+
+graphics_bootinfo_sane32:
+    push eax
+    push edx
+
+    movzx eax, byte [BOOTINFO_ADDR + BOOTINFO_VESA_BPP]
+    cmp eax, 8
+    jne .fail
+
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_VESA_FB]
+    test eax, eax
+    jz .fail
+    cmp eax, GRAPHICS_MIN_FB_ADDR
+    jb .fail
+
+    movzx eax, word [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH]
+    cmp eax, 640
+    jb .fail
+    cmp eax, GRAPHICS_MAX_WIDTH
+    ja .fail
+    mov edx, eax
+
+    movzx eax, word [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT]
+    cmp eax, 480
+    jb .fail
+    cmp eax, GRAPHICS_MAX_HEIGHT
+    ja .fail
+
+    movzx eax, word [BOOTINFO_ADDR + BOOTINFO_VESA_PITCH]
+    cmp eax, edx
+    jb .fail
+    test eax, eax
+    jz .fail
+
+    clc
+    jmp .done
+
+.fail:
+    stc
+
+.done:
+    pop edx
+    pop eax
     ret
 
 draw_text:
@@ -3541,6 +3615,7 @@ realmode_debug_menu_fallback:
 BITS 32
 pmode_video_resume:
     DEBUG_PMODE_CHAR 'W'
+    cli
     mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
@@ -3554,10 +3629,12 @@ pmode_video_resume:
     call set_desktop_palette
     call menu_compute_layout
     mov byte [menu_dirty], 1
-    jmp vibeloader_menu_resume
+    call vibeloader_menu
+    jmp pmode_to_real_for_kernel_boot
 
 pmode_kernel_resume:
     DEBUG_PMODE_CHAR 'G'
+    cli
     mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
