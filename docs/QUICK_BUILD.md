@@ -78,6 +78,32 @@ make legacy-data-img
 ```
 Builds: `build/data-partition.img` with the AppFS directory, app area, persistence area, and bundled raw assets in the same logical layout still used by the data partition.
 
+### Low-Wear Real Hardware Loop
+```bash
+make build/stage2.bin build/boot.bin
+python3 tools/patch_boot_sectors.py \
+  --target /dev/sdX \
+  --vbr build/boot.bin \
+  --stage2 build/stage2.bin
+```
+Writes only the FAT32 VBR plus the reserved `stage2` slot on the existing disk. This is the preferred loop for BIOS/bootloader debugging on fragile IDE media because it avoids rebuilding and reflashing the whole disk image.
+If you also changed `boot/mbr.asm`, add `--mbr build/mbr.bin`.
+
+### Dry Run For The Low-Wear Patch
+```bash
+python3 tools/patch_boot_sectors.py \
+  --target /dev/sdX \
+  --vbr build/boot.bin \
+  --stage2 build/stage2.bin \
+  --dry-run
+```
+Prints how many sectors would be touched before writing anything.
+
+### When To Use Full Image Rebuild
+- Use `make build/boot.img` when the FAT32 contents changed, such as `KERNEL.BIN`, manifests, or bundled boot assets.
+- Use the low-wear patch loop when only `boot/stage1.asm`, `boot/stage2.asm`, or BIOS-facing boot code changed.
+- If you patch `stage2` without patching `boot.bin`, keep the stage2 sector count unchanged; otherwise stage1 may load the wrong amount of data.
+
 ### GDB Debug Mode (stops at boot)
 ```bash
 make debug

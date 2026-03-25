@@ -22,6 +22,7 @@ OBJCOPY_ORIGIN := $(origin OBJCOPY)
 AR_ORIGIN := $(origin AR)
 RANLIB_ORIGIN := $(origin RANLIB)
 AS_ORIGIN := $(origin AS)
+TOOLCHAIN_OVERRIDE := 0
 
 # GNU make built-ins (cc, ld, ar...) should not block our auto-detection.
 ifeq ($(CC_ORIGIN),default)
@@ -45,65 +46,121 @@ endif
 ifeq ($(AS_ORIGIN),default)
 AS :=
 endif
+ifneq ($(CC_ORIGIN),default)
+ifneq ($(CC_ORIGIN),undefined)
+TOOLCHAIN_OVERRIDE := 1
+endif
+endif
+ifneq ($(LD_ORIGIN),default)
+ifneq ($(LD_ORIGIN),undefined)
+TOOLCHAIN_OVERRIDE := 1
+endif
+endif
+ifneq ($(NM_ORIGIN),default)
+ifneq ($(NM_ORIGIN),undefined)
+TOOLCHAIN_OVERRIDE := 1
+endif
+endif
+ifneq ($(OBJCOPY_ORIGIN),default)
+ifneq ($(OBJCOPY_ORIGIN),undefined)
+TOOLCHAIN_OVERRIDE := 1
+endif
+endif
+ifneq ($(AR_ORIGIN),default)
+ifneq ($(AR_ORIGIN),undefined)
+TOOLCHAIN_OVERRIDE := 1
+endif
+endif
+ifneq ($(RANLIB_ORIGIN),default)
+ifneq ($(RANLIB_ORIGIN),undefined)
+TOOLCHAIN_OVERRIDE := 1
+endif
+endif
 
 ifeq ($(strip $(AS)),)
 AS := nasm
+BOOT_NASM_DEFINES ?=
 endif
 ifeq ($(strip $(QEMU)),)
 QEMU := qemu-system-i386
 endif
 QEMU_MEMORY_MB ?= 3072
 QEMU_SERIAL_LOG ?= build/qemu-serial.log
+QEMU_IMAGE_OPTS ?= format=raw,file=$(IMAGE),snapshot=on
 ifeq ($(strip $(PYTHON)),)
 PYTHON := python3
 endif
 CPU_ARCH_CFLAGS := -march=i586 -mtune=generic -mno-mmx -mno-sse -mno-sse2
 
 ifeq ($(strip $(CC)),)
+ifneq ($(TOOLCHAIN_PREFIX),i686-elf-)
+CC := $(TOOLCHAIN_PREFIX)gcc
+else
 ifeq ($(HAS_CROSS_TOOLCHAIN),1)
 CC := $(TOOLCHAIN_PREFIX)gcc
 else
 CC := gcc
 endif
 endif
+endif
 
 ifeq ($(strip $(LD)),)
+ifneq ($(TOOLCHAIN_PREFIX),i686-elf-)
+LD := $(TOOLCHAIN_PREFIX)ld
+else
 ifeq ($(HAS_CROSS_TOOLCHAIN),1)
 LD := $(TOOLCHAIN_PREFIX)ld
 else
 LD := ld
 endif
 endif
+endif
 
 ifeq ($(strip $(NM)),)
+ifneq ($(TOOLCHAIN_PREFIX),i686-elf-)
+NM := $(TOOLCHAIN_PREFIX)nm
+else
 ifeq ($(HAS_CROSS_TOOLCHAIN),1)
 NM := $(TOOLCHAIN_PREFIX)nm
 else
 NM := nm
 endif
 endif
+endif
 
 ifeq ($(strip $(OBJCOPY)),)
+ifneq ($(TOOLCHAIN_PREFIX),i686-elf-)
+OBJCOPY := $(TOOLCHAIN_PREFIX)objcopy
+else
 ifeq ($(HAS_CROSS_TOOLCHAIN),1)
 OBJCOPY := $(TOOLCHAIN_PREFIX)objcopy
 else
 OBJCOPY := objcopy
 endif
 endif
+endif
 
 ifeq ($(strip $(AR)),)
+ifneq ($(TOOLCHAIN_PREFIX),i686-elf-)
+AR := $(TOOLCHAIN_PREFIX)ar
+else
 ifeq ($(HAS_CROSS_TOOLCHAIN),1)
 AR := $(TOOLCHAIN_PREFIX)ar
 else
 AR := ar
 endif
 endif
+endif
 
 ifeq ($(strip $(RANLIB)),)
+ifneq ($(TOOLCHAIN_PREFIX),i686-elf-)
+RANLIB := $(TOOLCHAIN_PREFIX)ranlib
+else
 ifeq ($(HAS_CROSS_TOOLCHAIN),1)
 RANLIB := $(TOOLCHAIN_PREFIX)ranlib
 else
 RANLIB := ranlib
+endif
 endif
 endif
 
@@ -111,11 +168,33 @@ TOOLCHAIN_MODE := host
 ifeq ($(HAS_CROSS_TOOLCHAIN),1)
 TOOLCHAIN_MODE := cross
 endif
+ifneq ($(TOOLCHAIN_OVERRIDE),0)
+TOOLCHAIN_MODE := custom
+endif
+
+MKFS_FAT_TOOL := $(shell command -v mkfs.fat 2>/dev/null || command -v newfs_msdos 2>/dev/null)
+ifeq ($(strip $(MKFS_FAT_TOOL)),)
+MKFS_FAT_TOOL := mkfs.fat
+endif
+MCOPY_TOOL := $(shell command -v mcopy 2>/dev/null)
+ifeq ($(strip $(MCOPY_TOOL)),)
+MCOPY_TOOL := mcopy
+endif
+MMD_TOOL := $(shell command -v mmd 2>/dev/null)
+ifeq ($(strip $(MMD_TOOL)),)
+MMD_TOOL := mmd
+endif
 
 ifeq ($(UNAME_S),Darwin)
 ifneq ($(HAS_CROSS_TOOLCHAIN),1)
 ifneq ($(ALLOW_HOST_TOOLCHAIN),1)
-$(error Toolchain 'i686-elf-*' nao encontrada no macOS. Instale com 'brew install i686-elf-gcc' (ou rode com ALLOW_HOST_TOOLCHAIN=1 e toolchain host por sua conta))
+ifeq ($(TOOLCHAIN_OVERRIDE),0)
+ifneq ($(TOOLCHAIN_PREFIX),i686-elf-)
+TOOLCHAIN_MODE := custom
+else
+$(error Toolchain cruzada 32-bit nao encontrada no macOS. Configure TOOLCHAIN_PREFIX para sua toolchain i686-elf/x86_64-elf, ou exporte CC/LD/OBJCOPY/NM/AR/RANLIB, ou rode com ALLOW_HOST_TOOLCHAIN=1 por sua conta)
+endif
+endif
 endif
 endif
 endif
@@ -766,7 +845,7 @@ LANG_APP_BINS := $(APP_CATALOG_APP_BINS)
 include Build.compat.mk
 
 REQUIRED_BUILD_TOOLS := $(AS) $(CC) $(LD) $(NM) $(OBJCOPY) $(AR) $(RANLIB) $(PYTHON)
-REQUIRED_IMAGE_TOOLS := mkfs.fat mcopy mmd
+REQUIRED_IMAGE_TOOLS := $(MKFS_FAT_TOOL) $(MCOPY_TOOL) $(MMD_TOOL)
 
 all: check-tools $(IMAGE)
 # Optional legacy monolithic payload for experiments outside the default image.
@@ -783,7 +862,7 @@ check-tools:
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
 			if [ "$(UNAME_S)" = "Darwin" ]; then \
-				echo "macOS (Homebrew): brew install nasm i686-elf-gcc qemu"; \
+				echo "macOS: use uma cross-toolchain i686-elf/x86_64-elf e instale nasm/qemu/mtools."; \
 			else \
 				echo "Linux: instale binutils/gcc 32-bit + nasm + qemu-system-x86"; \
 				echo "Ou use toolchain cruzada i686-elf-*."; \
@@ -794,7 +873,12 @@ check-tools:
 	for tool in $(REQUIRED_IMAGE_TOOLS); do \
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
-			echo "Instale os utilitarios de imagem FAT32/mtools (ex.: dosfstools + mtools)."; \
+			if [ "$(UNAME_S)" = "Darwin" ]; then \
+				echo "macOS: newfs_msdos ja pode vir no sistema, mas mtools (mcopy/mmd) ainda sao necessarios."; \
+				echo "Homebrew: brew install mtools"; \
+			else \
+				echo "Instale os utilitarios de imagem FAT32/mtools (ex.: dosfstools + mtools)."; \
+			fi; \
 			exit 1; \
 		fi; \
 	done
@@ -803,7 +887,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
-	$(AS) -f bin \
+	$(AS) -f bin $(BOOT_NASM_DEFINES) \
 		-DIMAGE_TOTAL_SECTORS=$(IMAGE_TOTAL_SECTORS) \
 		-DBOOT_PARTITION_START_LBA=$(BOOT_PARTITION_START_LBA) \
 		-DBOOT_PARTITION_SECTORS=$(BOOT_PARTITION_SECTORS) \
@@ -817,7 +901,7 @@ $(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
 	fi
 
 $(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
-	$(AS) -f bin $< -o $@
+	$(AS) -f bin $(BOOT_NASM_DEFINES) $< -o $@
 	@stage2_size=$$(wc -c < $@); \
 	stage2_sectors=$$(((stage2_size + 511) / 512)); \
 	if [ "$$stage2_sectors" -ge "$(BOOT_KERNEL_START_SECTOR)" ]; then \
@@ -1155,6 +1239,9 @@ $(BOOT_POLICY_MANIFEST): $(KERNEL_BIN) $(STAGE2_BIN) $(DATA_IMAGE)
 $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOOT_VOLUME_MANIFEST) $(BOOT_POLICY_MANIFEST) $(BOOTLOADER_BG_BIN)
 	$(PYTHON) tools/build_partitioned_image.py \
 		--image $@ \
+		--mkfs-fat $(MKFS_FAT_TOOL) \
+		--mcopy $(MCOPY_TOOL) \
+		--mmd $(MMD_TOOL) \
 		--mbr $(MBR_BIN) \
 		--vbr $(BOOT_BIN) \
 		--stage2 $(STAGE2_BIN) \
@@ -1178,12 +1265,12 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 
 run: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c; \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64"; \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c; \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
@@ -1198,10 +1285,10 @@ run-debug-gui: $(IMAGE)
 	@rm -f $(QEMU_SERIAL_LOG)
 	@echo "QEMU GUI debug ativo. Serial do kernel: $(QEMU_SERIAL_LOG)"
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1210,10 +1297,10 @@ run-debug-gui: $(IMAGE)
 
 run-headless-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1222,10 +1309,10 @@ run-headless-debug: $(IMAGE)
 
 run-headless-core2duo-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -cpu core2duo -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -cpu core2duo -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -cpu core2duo -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -cpu core2duo -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1234,10 +1321,10 @@ run-headless-core2duo-debug: $(IMAGE)
 
 run-headless-pentium-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -cpu pentium -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -cpu pentium -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -cpu pentium -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -cpu pentium -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1246,10 +1333,10 @@ run-headless-pentium-debug: $(IMAGE)
 
 run-headless-atom-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -cpu n270 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -cpu n270 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -cpu n270 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -cpu n270 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1259,14 +1346,14 @@ run-headless-atom-debug: $(IMAGE)
 run-headless-ahci-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
 		$(QEMU) -machine q35 -m $(QEMU_MEMORY_MB) \
-			-drive if=none,id=bootdisk,format=raw,file=$(IMAGE) \
+			-drive if=none,id=bootdisk,$(QEMU_IMAGE_OPTS) \
 			-device ahci,id=ahci \
 			-device ide-hd,drive=bootdisk,bus=ahci.0,bootindex=0 \
 			-boot c -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			qemu-system-x86_64 -machine q35 -m $(QEMU_MEMORY_MB) \
-				-drive if=none,id=bootdisk,format=raw,file=$(IMAGE) \
+				-drive if=none,id=bootdisk,$(QEMU_IMAGE_OPTS) \
 				-device ahci,id=ahci \
 				-device ide-hd,drive=bootdisk,bus=ahci.0,bootindex=0 \
 				-boot c -display none -serial stdio -monitor none; \
@@ -1279,14 +1366,14 @@ run-headless-ahci-debug: $(IMAGE)
 run-headless-usb-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
 		$(QEMU) -m $(QEMU_MEMORY_MB) \
-			-drive if=none,id=usbdisk,format=raw,file=$(IMAGE) \
+			-drive if=none,id=usbdisk,$(QEMU_IMAGE_OPTS) \
 			-usb \
 			-device usb-storage,drive=usbdisk,bootindex=0 \
 			-boot menu=off -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) \
-				-drive if=none,id=usbdisk,format=raw,file=$(IMAGE) \
+				-drive if=none,id=usbdisk,$(QEMU_IMAGE_OPTS) \
 				-usb \
 				-device usb-storage,drive=usbdisk,bootindex=0 \
 				-boot menu=off -display none -serial stdio -monitor none; \
@@ -1305,12 +1392,12 @@ validate-modular-apps: $(IMAGE)
 debug: $(IMAGE)
 	@echo "QEMU pausado para GDB em tcp::1234. Serial do kernel no terminal."
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio -monitor none -s -S; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -serial stdio -monitor none -s -S; \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64 com debug"; \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio -monitor none -s -S; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -serial stdio -monitor none -s -S; \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \

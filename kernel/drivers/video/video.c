@@ -67,7 +67,8 @@ static uint32_t kernel_video_mode_bit(uint16_t width, uint16_t height) {
     if (width == 1024u && height == 768u) {
         return VIDEO_RES_1024X768;
     }
-    if (width == 1360u && height == 720u) {
+    if ((width == 1360u && height == 720u) ||
+        (width == 1366u && height == 768u)) {
         return VIDEO_RES_1360X720;
     }
     if (width == 1920u && height == 1080u) {

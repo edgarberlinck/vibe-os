@@ -73,7 +73,7 @@ struct video_mode {
     uint8_t bpp;
 };
 
-#define VIDEO_MODE_LIST_MAX 5u
+#define VIDEO_MODE_LIST_MAX 16u
 
 enum video_capability_flags {
     VIDEO_CAPS_TEXT_ONLY = 1u << 0,

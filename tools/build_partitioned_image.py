@@ -16,8 +16,8 @@ def write_file(path, data, offset=0):
         handle.write(data)
 
 
-def ensure_mtools_path(part_path, destination):
-    mmd = shutil.which("mmd") or "mmd"
+def ensure_mtools_path(part_path, destination, mmd_tool):
+    mmd = shutil.which(mmd_tool) or mmd_tool
     normalized = destination.strip()
 
     if not normalized:
@@ -38,8 +38,8 @@ def ensure_mtools_path(part_path, destination):
         )
 
 
-def copy_boot_file(part_path, source_path, destination):
-    mcopy = shutil.which("mcopy") or "mcopy"
+def copy_boot_file(part_path, source_path, destination, mcopy_tool, mmd_tool):
+    mcopy = shutil.which(mcopy_tool) or mcopy_tool
     normalized = destination.strip().replace("\\", "/")
 
     if not normalized:
@@ -47,13 +47,46 @@ def copy_boot_file(part_path, source_path, destination):
     if not normalized.startswith("/"):
         normalized = "/" + normalized
 
-    ensure_mtools_path(part_path, normalized)
+    ensure_mtools_path(part_path, normalized, mmd_tool)
     run([mcopy, "-i", part_path, "-o", source_path, f"::{normalized}"])
+
+
+def mkfs_fat_command(args, part_path):
+    tool = shutil.which(args.mkfs_fat) or args.mkfs_fat
+    if os.path.basename(tool) == "newfs_msdos":
+        return [
+            tool,
+            "-F",
+            "32",
+            "-L",
+            "VIBEBOOT",
+            "-o",
+            str(args.boot_partition_start_lba),
+            "-r",
+            str(args.boot_partition_reserved_sectors),
+            part_path,
+        ]
+
+    return [
+        tool,
+        "-F",
+        "32",
+        "-n",
+        "VIBEBOOT",
+        "-R",
+        str(args.boot_partition_reserved_sectors),
+        "-h",
+        str(args.boot_partition_start_lba),
+        part_path,
+    ]
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True)
+    parser.add_argument("--mkfs-fat", default="mkfs.fat")
+    parser.add_argument("--mcopy", default="mcopy")
+    parser.add_argument("--mmd", default="mmd")
     parser.add_argument("--mbr", required=True)
     parser.add_argument("--vbr", required=True)
     parser.add_argument("--stage2", required=True)
@@ -82,20 +115,7 @@ def main():
         with open(part_path, "wb") as part:
             part.truncate(args.boot_partition_sectors * 512)
 
-        run(
-            [
-                shutil.which("mkfs.fat") or "mkfs.fat",
-                "-F",
-                "32",
-                "-n",
-                "VIBEBOOT",
-                "-R",
-                str(args.boot_partition_reserved_sectors),
-                "-h",
-                str(args.boot_partition_start_lba),
-                part_path,
-            ]
-        )
+        run(mkfs_fat_command(args, part_path))
 
         with open(part_path, "r+b") as part, open(args.vbr, "rb") as vbr_handle:
             vbr = bytearray(part.read(512))
@@ -142,7 +162,7 @@ def main():
 
             if separator == "" or not source_path or not destination:
                 raise SystemExit(f"invalid --boot-file spec: {spec!r}")
-            copy_boot_file(part_path, source_path, destination)
+            copy_boot_file(part_path, source_path, destination, args.mcopy, args.mmd)
 
         with open(part_path, "rb") as part:
             write_file(args.image, part.read(), args.boot_partition_start_lba * 512)

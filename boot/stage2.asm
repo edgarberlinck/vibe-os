@@ -3,6 +3,7 @@ ORG 0x9000
 
 %define KERNEL_LOAD_SEG 0x1000
 %define REALMODE_STACK_TOP 0xC000
+%define PMODE_FAULT_STACK_TOP 0x6F000
 %define BACKGROUND_LOAD_SEG 0x0200
 %define BACKGROUND_DRAW_ADDR 0x00002000
 %define BACKGROUND_SOURCE_WIDTH 192
@@ -14,6 +15,8 @@ ORG 0x9000
 %define VBE_INFO_ADDR 0x0A00
 %define VBE_MODE_INFO_ADDR 0x0C00
 %define BOOTINFO_ADDR 0x8D00
+%define BOOTINFO_MAGIC 0x544F4256
+%define BOOTINFO_VERSION 2
 %define BOOTINFO_FLAGS 8
 %define BOOTINFO_FLAG_VESA_VALID 0x00000001
 %define BOOTINFO_FLAG_MEMINFO_VALID 0x00000002
@@ -40,7 +43,11 @@ ORG 0x9000
 %define BOOTINFO_VIDEO_MODE_FIELD_WIDTH 2
 %define BOOTINFO_VIDEO_MODE_FIELD_HEIGHT 4
 %define BOOTINFO_VIDEO_MODE_FIELD_BPP 6
-%define BOOTINFO_MAX_VESA_MODES 8
+%define BOOTINFO_MAX_VESA_MODES 16
+%define BOOTINFO_VIDEO_CATALOG_SIZE (4 + (BOOTINFO_MAX_VESA_MODES * BOOTINFO_VIDEO_MODE_SIZE))
+%define BOOTINFO_VIDEO_CATALOG_WORDS (BOOTINFO_VIDEO_CATALOG_SIZE / 2)
+%define BOOTINFO_SIZE (64 + BOOTINFO_VIDEO_CATALOG_SIZE)
+%define BOOTINFO_WORDS (BOOTINFO_SIZE / 2)
 %define BOOTINFO_VIDEO_INDEX_NONE 0xFF
 %define ROOT_NAME_LEN 11
 
@@ -55,6 +62,28 @@ ORG 0x9000
 %define MENU_TIMEOUT_SECONDS 5
 %define PIT_COUNTS_PER_SECOND 1193182
 %define MENU_TIMEOUT_COUNTS (PIT_COUNTS_PER_SECOND * MENU_TIMEOUT_SECONDS)
+%define GRAPHICS_MIN_FB_ADDR 0x00100000
+%define GRAPHICS_MAX_WIDTH 4096
+%define GRAPHICS_MAX_HEIGHT 2160
+%define DEBUG_TRACE_MAX 48
+%define A20_TEST_LOW 0x0500
+%define A20_TEST_HIGH_SEG 0xFFFF
+%define A20_TEST_HIGH_OFF 0x0510
+%define A20_TEST_ALT_LOW 0x7DFE
+%define A20_TEST_ALT_HIGH_SEG 0xFFFF
+%define A20_TEST_ALT_HIGH_OFF 0x7E0E
+%define A20_WAIT_LOOPS 0xFFFF
+%define BOOTDEBUG_ADDR 0x1000
+%define BOOTDEBUG_MAGIC 0x47444256
+%define BOOTDEBUG_DIRTY 4
+%define BOOTDEBUG_LEN 5
+%define BOOTDEBUG_LAST 6
+%define BOOTDEBUG_TRACE 7
+%define BOOTDEBUG_TRACE_MAX 48
+%define BOOTDEBUG_KEY_HI (BOOTDEBUG_TRACE + BOOTDEBUG_TRACE_MAX)
+%define BOOTDEBUG_KEY_LO (BOOTDEBUG_KEY_HI + 1)
+%define BOOTDEBUG_EXT (BOOTDEBUG_KEY_HI + 2)
+%define BOOTDEBUG_ACT (BOOTDEBUG_KEY_HI + 3)
 
 %macro DEBUG_CHAR 1
     mov al, %1
@@ -62,6 +91,32 @@ ORG 0x9000
 %ifdef VIBELOADER_DEBUG_TRACE
     out 0xE9, al
 %endif
+%endmacro
+
+%macro DEBUG_BOOT_CHAR 1
+    ; Real-mode only: this also calls debug_log_char, which is assembled in BITS 16.
+    DEBUG_CHAR %1
+    call debug_log_char
+%endmacro
+
+%macro DEBUG_PMODE_CHAR 1
+    ; Protected-mode safe variant that uses the BITS 32 logger below.
+    DEBUG_CHAR %1
+    call debug_log_char32
+%endmacro
+
+%macro IDT_GATE 1
+    dw %1
+    dw CODE_SEG
+    db 0
+    db 0x8E
+    dw %1 >> 16
+%endmacro
+
+%macro EXCEPTION_STUB 1
+pm_exception_stub_%1:
+    push dword %1
+    jmp pm_exception_common
 %endmacro
 
 stage2_entry:
@@ -72,35 +127,74 @@ stage2_entry:
     mov ss, ax
     mov sp, REALMODE_STACK_TOP
     cld
+    mov ax, 0x0003
+    int 0x10
+    call init_bootinfo
+    call debug_log_reset
+    call a20_debug_reset
 
-    DEBUG_CHAR '2'
+    DEBUG_BOOT_CHAR '2'
+    call print_char
     mov [boot_drive], dl
     call parse_bpb
 
-    mov si, kernel_name
-    call find_root_entry
-    jc disk_error
-
-    DEBUG_CHAR 'F'
-    mov word [load_segment], KERNEL_LOAD_SEG
-    call load_file_to_memory
-    jc disk_error
-
-    DEBUG_CHAR 'K'
+    DEBUG_BOOT_CHAR 'F'
+    call print_char
     call load_optional_background
-    DEBUG_CHAR 'V'
+    DEBUG_BOOT_CHAR 'V'
+    call print_char
     call detect_vesa_modes
-    DEBUG_CHAR 'B'
+    DEBUG_BOOT_CHAR 'B'
+    call print_char
     call detect_memory
     call populate_legacy_vesa_info
     call enable_a20
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    call a20_is_enabled
+    cmp ax, 1
+    je .a20_ready
+    call a20_is_enabled_alt
+    cmp ax, 1
+    je .a20_ready
+    call a20_capture_bios_state
+    cmp byte [a20_bios_state_char], '1'
+    jne a20_error
+
+.a20_ready:
 
     DEBUG_CHAR 'P'
+    mov al, 'P'
+    call print_char
     lgdt [gdt_descriptor]
     mov eax, cr0
     or eax, 1
     mov cr0, eax
     jmp CODE_SEG:pmode
+
+init_bootinfo:
+    push ax
+    push cx
+    push di
+
+    xor ax, ax
+    mov es, ax
+    mov di, BOOTINFO_ADDR
+    mov cx, BOOTINFO_WORDS
+    cld
+    rep stosw
+
+    mov dword [BOOTINFO_ADDR + 0], BOOTINFO_MAGIC
+    mov dword [BOOTINFO_ADDR + 4], BOOTINFO_VERSION
+    mov byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_ACTIVE_INDEX], BOOTINFO_VIDEO_INDEX_NONE
+    mov byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_FALLBACK_INDEX], BOOTINFO_VIDEO_INDEX_NONE
+    mov byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX], BOOTINFO_VIDEO_INDEX_NONE
+
+    pop di
+    pop cx
+    pop ax
+    ret
 
 parse_bpb:
     mov ax, [0x7C0E]
@@ -390,6 +484,19 @@ load_optional_background:
     clc
     ret
 
+load_kernel_file:
+    mov si, kernel_name
+    call find_root_entry
+    jc .fail
+
+    mov word [load_segment], KERNEL_LOAD_SEG
+    call load_file_to_memory
+    ret
+
+.fail:
+    stc
+    ret
+
 detect_memory:
     and dword [BOOTINFO_ADDR + BOOTINFO_FLAGS], ~BOOTINFO_FLAG_MEMINFO_VALID
     mov dword [BOOTINFO_ADDR + BOOTINFO_MEM_LARGEST_BASE], 0
@@ -491,7 +598,7 @@ clear_video_catalog:
     xor ax, ax
     mov es, ax
     mov di, BOOTINFO_ADDR + BOOTINFO_VIDEO_MODE_COUNT
-    mov cx, 34
+    mov cx, BOOTINFO_VIDEO_CATALOG_WORDS
     cld
     rep stosw
     mov byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_ACTIVE_INDEX], BOOTINFO_VIDEO_INDEX_NONE
@@ -507,6 +614,7 @@ detect_vesa_modes:
     call clear_video_catalog
 
     xor ax, ax
+    mov ds, ax
     mov es, ax
     mov di, VBE_INFO_ADDR
     mov cx, 256
@@ -519,30 +627,42 @@ detect_vesa_modes:
     cmp ax, 0x004F
     jne .after_enum
 
-    push ds
-    mov ax, [VBE_INFO_ADDR + 0x10]
+    xor ax, ax
     mov ds, ax
-    mov si, [VBE_INFO_ADDR + 0x0E]
+    mov es, ax
+    mov ax, [VBE_INFO_ADDR + 0x10]
+    mov [vesa_mode_list_seg], ax
+    mov ax, [VBE_INFO_ADDR + 0x0E]
+    mov [vesa_mode_list_off], ax
     cld
 .enum_loop:
-    lodsw
+    mov ax, [vesa_mode_list_seg]
+    mov es, ax
+    mov si, [vesa_mode_list_off]
+    mov ax, [es:si]
+    add si, 2
+    mov [vesa_mode_list_off], si
     cmp ax, 0xFFFF
-    je .enum_done
+    je .after_enum
     mov dx, ax
-    push si
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     call catalog_try_add_mode
-    pop si
     jmp .enum_loop
-.enum_done:
-    pop ds
 
 .after_enum:
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     test dword [BOOTINFO_ADDR + BOOTINFO_FLAGS], BOOTINFO_FLAG_VESA_VALID
     jz .finalize
     mov dx, [BOOTINFO_ADDR + BOOTINFO_VESA_MODE]
     call catalog_try_add_mode
 
 .finalize:
+    call catalog_sort_modes_by_area
+    call catalog_rebuild_fallback_index
     call catalog_finalize_selection
     call ensure_boot_video_mode
     ret
@@ -580,7 +700,14 @@ catalog_try_add_mode:
 
     mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_MODE]
     cmp dx, ax
-    jne .maybe_mark_fallback
+    je .replace_mode
+    mov ax, [di + BOOTINFO_VIDEO_MODE_FIELD_MODE]
+    test ax, ax
+    je .replace_mode
+    cmp dx, ax
+    jae .maybe_mark_fallback
+
+.replace_mode:
     mov [di + BOOTINFO_VIDEO_MODE_FIELD_MODE], dx
 
 .maybe_mark_fallback:
@@ -696,6 +823,133 @@ catalog_finalize_selection:
 .done:
     ret
 
+catalog_sort_modes_by_area:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    xor cx, cx
+    mov cl, [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODE_COUNT]
+    cmp cx, 2
+    jb .done
+    dec cx
+    mov bp, cx
+
+.outer:
+    xor si, si
+    mov dx, bp
+.inner:
+    cmp dx, 0
+    je .next_pass
+
+    mov di, si
+    shl di, 3
+    add di, BOOTINFO_ADDR + BOOTINFO_VIDEO_MODES
+
+    mov bx, si
+    inc bx
+    shl bx, 3
+    add bx, BOOTINFO_ADDR + BOOTINFO_VIDEO_MODES
+
+    movzx eax, word [di + BOOTINFO_VIDEO_MODE_FIELD_WIDTH]
+    movzx ecx, word [di + BOOTINFO_VIDEO_MODE_FIELD_HEIGHT]
+    imul eax, ecx
+    mov [catalog_area_left], eax
+
+    movzx eax, word [bx + BOOTINFO_VIDEO_MODE_FIELD_WIDTH]
+    movzx ecx, word [bx + BOOTINFO_VIDEO_MODE_FIELD_HEIGHT]
+    imul eax, ecx
+    mov [catalog_area_right], eax
+
+    mov eax, [catalog_area_left]
+    cmp eax, [catalog_area_right]
+    ja .swap
+    jb .advance
+
+    mov ax, [di + BOOTINFO_VIDEO_MODE_FIELD_WIDTH]
+    cmp ax, [bx + BOOTINFO_VIDEO_MODE_FIELD_WIDTH]
+    ja .swap
+    jb .advance
+
+    mov ax, [di + BOOTINFO_VIDEO_MODE_FIELD_HEIGHT]
+    cmp ax, [bx + BOOTINFO_VIDEO_MODE_FIELD_HEIGHT]
+    jbe .advance
+
+.swap:
+    mov ax, [di + 0]
+    xchg ax, [bx + 0]
+    mov [di + 0], ax
+
+    mov ax, [di + 2]
+    xchg ax, [bx + 2]
+    mov [di + 2], ax
+
+    mov ax, [di + 4]
+    xchg ax, [bx + 4]
+    mov [di + 4], ax
+
+    mov ax, [di + 6]
+    xchg ax, [bx + 6]
+    mov [di + 6], ax
+
+.advance:
+    inc si
+    dec dx
+    jmp .inner
+
+.next_pass:
+    dec bp
+    jnz .outer
+
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+catalog_rebuild_fallback_index:
+    push ax
+    push bx
+    push cx
+    push di
+
+    mov byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_FALLBACK_INDEX], BOOTINFO_VIDEO_INDEX_NONE
+    xor bx, bx
+    xor cx, cx
+    mov cl, [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODE_COUNT]
+
+.loop:
+    cmp bx, cx
+    jae .done
+    mov di, bx
+    shl di, 3
+    add di, BOOTINFO_ADDR + BOOTINFO_VIDEO_MODES
+    cmp word [di + BOOTINFO_VIDEO_MODE_FIELD_WIDTH], 640
+    jne .next
+    cmp word [di + BOOTINFO_VIDEO_MODE_FIELD_HEIGHT], 480
+    jne .next
+    mov [BOOTINFO_ADDR + BOOTINFO_VIDEO_FALLBACK_INDEX], bl
+    jmp .done
+
+.next:
+    inc bx
+    jmp .loop
+
+.done:
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ensure_boot_video_mode:
     test dword [BOOTINFO_ADDR + BOOTINFO_FLAGS], BOOTINFO_FLAG_VESA_VALID
     jz .apply_selected
@@ -735,8 +989,11 @@ vesa_query_mode_info:
     push bx
     push cx
     push di
+    push ds
+    push es
 
     xor ax, ax
+    mov ds, ax
     mov es, ax
     mov di, VBE_MODE_INFO_ADDR
     mov cx, 128
@@ -749,25 +1006,39 @@ vesa_query_mode_info:
     cmp ax, 0x004F
     jne .fail
 
-    test word [VBE_MODE_INFO_ADDR + 0], 0x0001
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    test word [ds:VBE_MODE_INFO_ADDR + 0], 0x0001
     jz .fail
-    test word [VBE_MODE_INFO_ADDR + 0], 0x0010
+    test word [ds:VBE_MODE_INFO_ADDR + 0], 0x0010
     jz .fail
-    test word [VBE_MODE_INFO_ADDR + 0], 0x0080
+    test word [ds:VBE_MODE_INFO_ADDR + 0], 0x0080
     jz .fail
-    cmp byte [VBE_MODE_INFO_ADDR + 0x19], 8
+    cmp byte [ds:VBE_MODE_INFO_ADDR + 0x19], 8
     jne .fail
-    cmp byte [VBE_MODE_INFO_ADDR + 0x1B], 4
+    cmp byte [ds:VBE_MODE_INFO_ADDR + 0x1B], 4
     jne .fail
-    cmp word [VBE_MODE_INFO_ADDR + 0x12], 640
+    cmp word [ds:VBE_MODE_INFO_ADDR + 0x12], 640
     jb .fail
-    cmp word [VBE_MODE_INFO_ADDR + 0x14], 480
+    cmp word [ds:VBE_MODE_INFO_ADDR + 0x14], 480
     jb .fail
-    cmp word [VBE_MODE_INFO_ADDR + 0x10], 0
+    cmp word [ds:VBE_MODE_INFO_ADDR + 0x12], GRAPHICS_MAX_WIDTH
+    ja .fail
+    cmp word [ds:VBE_MODE_INFO_ADDR + 0x14], GRAPHICS_MAX_HEIGHT
+    ja .fail
+    cmp word [ds:VBE_MODE_INFO_ADDR + 0x10], 0
     je .fail
-    cmp dword [VBE_MODE_INFO_ADDR + 0x28], 0
+    mov ax, [ds:VBE_MODE_INFO_ADDR + 0x10]
+    cmp ax, [ds:VBE_MODE_INFO_ADDR + 0x12]
+    jb .fail
+    cmp dword [ds:VBE_MODE_INFO_ADDR + 0x28], GRAPHICS_MIN_FB_ADDR
+    jb .fail
+    cmp dword [ds:VBE_MODE_INFO_ADDR + 0x28], 0
     je .fail
 
+    pop es
+    pop ds
     pop di
     pop cx
     pop bx
@@ -776,6 +1047,8 @@ vesa_query_mode_info:
     ret
 
 .fail:
+    pop es
+    pop ds
     pop di
     pop cx
     pop bx
@@ -784,24 +1057,34 @@ vesa_query_mode_info:
     ret
 
 vesa_store_bootinfo_from_mode_info:
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_MODE], dx
-    mov eax, [VBE_MODE_INFO_ADDR + 0x28]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_FB], eax
-    mov ax, [VBE_MODE_INFO_ADDR + 0x10]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_PITCH], ax
-    mov ax, [VBE_MODE_INFO_ADDR + 0x12]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH], ax
-    mov ax, [VBE_MODE_INFO_ADDR + 0x14]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT], ax
-    mov al, [VBE_MODE_INFO_ADDR + 0x19]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_BPP], al
-    or dword [BOOTINFO_ADDR + BOOTINFO_FLAGS], BOOTINFO_FLAG_VESA_VALID
+    push es
+    xor ax, ax
+    mov es, ax
+
+    mov [es:BOOTINFO_ADDR + BOOTINFO_VESA_MODE], dx
+    mov eax, [es:VBE_MODE_INFO_ADDR + 0x28]
+    mov [es:BOOTINFO_ADDR + BOOTINFO_VESA_FB], eax
+    mov ax, [es:VBE_MODE_INFO_ADDR + 0x10]
+    mov [es:BOOTINFO_ADDR + BOOTINFO_VESA_PITCH], ax
+    mov ax, [es:VBE_MODE_INFO_ADDR + 0x12]
+    mov [es:BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH], ax
+    mov ax, [es:VBE_MODE_INFO_ADDR + 0x14]
+    mov [es:BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT], ax
+    mov al, [es:VBE_MODE_INFO_ADDR + 0x19]
+    mov [es:BOOTINFO_ADDR + BOOTINFO_VESA_BPP], al
+    or dword [es:BOOTINFO_ADDR + BOOTINFO_FLAGS], BOOTINFO_FLAG_VESA_VALID
+    pop es
     ret
 
 vesa_set_mode_and_store_bootinfo:
     push ax
     push bx
+    push ds
+    push es
 
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     call vesa_query_mode_info
     jc .fail
 
@@ -812,6 +1095,9 @@ vesa_set_mode_and_store_bootinfo:
     cmp ax, 0x004F
     jne .fail
 
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     call vesa_query_mode_info
     jc .fail
     call vesa_store_bootinfo_from_mode_info
@@ -822,12 +1108,16 @@ vesa_set_mode_and_store_bootinfo:
     mov [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX], al
 
 .success:
+    pop es
+    pop ds
     pop bx
     pop ax
     clc
     ret
 
 .fail:
+    pop es
+    pop ds
     pop bx
     pop ax
     stc
@@ -860,24 +1150,611 @@ populate_legacy_vesa_info:
 .done:
     ret
 
+debug_log_reset:
+    mov byte [debug_last_code], '?'
+    mov byte [debug_trace_len], 0
+    mov byte [debug_trace_buf], 0
+    mov byte [pm_exception_vector], 0xFF
+    ret
+
+hex_nibble_to_ascii:
+    and al, 0x0F
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    ret
+.digit:
+    add al, '0'
+    ret
+
+debug_log_char:
+    push ax
+    push bx
+
+    xor bx, bx
+    mov bl, [debug_trace_len]
+    cmp bx, DEBUG_TRACE_MAX - 1
+    jae .done
+    mov [debug_trace_buf + bx], al
+    inc bl
+    mov [debug_trace_len], bl
+    mov byte [debug_trace_buf + bx], 0
+
+.persist:
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .done
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    jne .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_LAST], al
+    xor bx, bx
+    mov bl, [BOOTDEBUG_ADDR + BOOTDEBUG_LEN]
+    cmp bl, BOOTDEBUG_TRACE_MAX - 1
+    jae .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_TRACE + bx], al
+    inc bl
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_LEN], bl
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_TRACE + bx], 0
+
+.done:
+    pop bx
+    pop ax
+    ret
+
+bootdebug_store_key16:
+    push ax
+    push bx
+
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .done
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    jne .done
+
+    mov ah, al
+    shr al, 4
+    call hex_nibble_to_ascii
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_KEY_HI], al
+    mov al, ah
+    call hex_nibble_to_ascii
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_KEY_LO], al
+
+    mov al, '0'
+    test bl, bl
+    jz .store_ext
+    mov al, '1'
+.store_ext:
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_EXT], al
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_ACT], '?'
+
+.done:
+    pop bx
+    pop ax
+    ret
+
+bootdebug_store_action16:
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .done
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    jne .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_ACT], al
+.done:
+    ret
+
+a20_debug_reset:
+    mov byte [a20_status_pre], '?'
+    mov byte [a20_status_bios], '?'
+    mov byte [a20_status_fast], '?'
+    mov byte [a20_status_kbc], '?'
+    mov byte [a20_alt_status_pre], '?'
+    mov byte [a20_alt_status_bios], '?'
+    mov byte [a20_alt_status_fast], '?'
+    mov byte [a20_alt_status_kbc], '?'
+    mov byte [a20_bios_cf], '?'
+    mov byte [a20_bios_state_char], '?'
+    mov byte [a20_bios_state_cf], '?'
+    mov byte [a20_bios_support_cf], '?'
+    mov byte [a20_port92_before], 0
+    mov byte [a20_port92_value], 0
+    mov byte [a20_kbc_path], '?'
+    mov byte [a20_kbc_step], '?'
+    mov byte [a20_kbc_outport_read], 0
+    mov byte [a20_kbc_outport_write], 0
+    mov word [a20_bios_ax], 0
+    mov word [a20_bios_state_ax], 0
+    mov word [a20_bios_support_ax], 0
+    mov word [a20_bios_support_bx], 0
+    ret
+
 enable_a20:
+    push ds
+    push es
+    push bx
+    push dx
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    call a20_capture_bios_support
+    DEBUG_BOOT_CHAR 'a'
+    mov si, a20_status_pre
+    mov di, a20_alt_status_pre
+    call a20_record_check
+    cmp ax, 1
+    je .done
+
+    DEBUG_BOOT_CHAR 'b'
+    mov ax, 0x2401
+    int 0x15
+    mov dx, ax
+    pushf
+    pop bx
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov [a20_bios_ax], dx
+    mov byte [a20_bios_cf], '0'
+    test bx, 1
+    jz .bios_cf_done
+    mov byte [a20_bios_cf], '1'
+.bios_cf_done:
+    mov si, a20_status_bios
+    mov di, a20_alt_status_bios
+    call a20_record_check
+    cmp ax, 1
+    je .done
+
+    DEBUG_BOOT_CHAR 'c'
     in al, 0x92
+    mov [a20_port92_before], al
+    and al, 0xFE
     or al, 2
+    mov [a20_port92_value], al
     out 0x92, al
+    mov si, a20_status_fast
+    mov di, a20_alt_status_fast
+    call a20_record_check
+    cmp ax, 1
+    je .done
+
+    DEBUG_BOOT_CHAR 'd'
+    call a20_enable_kbc
+    mov si, a20_status_kbc
+    mov di, a20_alt_status_kbc
+    call a20_record_check
+    cmp ax, 1
+    je .done
+
+.capture_bios_state:
+    call a20_capture_bios_state
+    cmp byte [a20_bios_state_char], '1'
+    jne .done
+    DEBUG_BOOT_CHAR 'q'
+    jmp .done
+.done:
+    pop dx
+    pop bx
+    pop es
+    pop ds
+    ret
+
+a20_record_check:
+    push bx
+
+    call a20_is_enabled
+    mov byte [si], '0'
+    cmp ax, 1
+    jne .primary_done
+    mov byte [si], '1'
+.primary_done:
+    mov bx, ax
+    call a20_is_enabled_alt
+    mov byte [di], '0'
+    cmp ax, 1
+    jne .alt_done
+    mov byte [di], '1'
+.alt_done:
+    or ax, bx
+
+    pop bx
+    ret
+
+a20_capture_bios_support:
+    push ax
+    push bx
+    push cx
+
+    mov ax, 0x2403
+    int 0x15
+    mov cx, ax
+    pushf
+    pop ax
+    xor dx, dx
+    mov ds, dx
+    mov es, dx
+    mov [a20_bios_support_ax], cx
+    mov [a20_bios_support_bx], bx
+    mov byte [a20_bios_support_cf], '0'
+    test ax, 1
+    jz .done
+    mov byte [a20_bios_support_cf], '1'
+
+.done:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+a20_capture_bios_state:
+    push ax
+    push bx
+
+    mov ax, 0x2402
+    int 0x15
+    mov bx, ax
+    pushf
+    pop ax
+    xor dx, dx
+    mov ds, dx
+    mov es, dx
+    mov [a20_bios_state_ax], bx
+    mov byte [a20_bios_state_cf], '0'
+    mov byte [a20_bios_state_char], 'X'
+    test ax, 1
+    jz .cf_done
+    mov byte [a20_bios_state_cf], '1'
+    mov byte [a20_bios_state_char], 'E'
+    jmp .done
+
+.cf_done:
+    mov al, bl
+    cmp al, 0
+    je .disabled
+    cmp al, 1
+    je .enabled
+    jmp .done
+
+.disabled:
+    mov byte [a20_bios_state_char], '0'
+    jmp .done
+
+.enabled:
+    mov byte [a20_bios_state_char], '1'
+
+.done:
+    pop bx
+    pop ax
+    ret
+
+a20_is_enabled:
+    pushf
+    cli
+    push ds
+    push es
+    push si
+    push di
+
+    xor ax, ax
+    mov ds, ax
+    mov si, A20_TEST_LOW
+    mov ax, A20_TEST_HIGH_SEG
+    mov es, ax
+    mov di, A20_TEST_HIGH_OFF
+
+    mov al, [ds:si]
+    mov ah, [es:di]
+    push ax
+
+    mov byte [ds:si], 0x00
+    mov byte [es:di], 0xFF
+
+    cmp byte [ds:si], 0xFF
+
+    pop ax
+    mov [es:di], ah
+    mov [ds:si], al
+
+    xor ax, ax
+    je .done
+    mov ax, 1
+
+.done:
+    pop di
+    pop si
+    pop es
+    pop ds
+    popf
+    ret
+
+a20_is_enabled_alt:
+    pushf
+    cli
+    push ds
+    push es
+    push si
+    push di
+
+    xor ax, ax
+    mov ds, ax
+    mov si, A20_TEST_ALT_LOW
+    mov ax, A20_TEST_ALT_HIGH_SEG
+    mov es, ax
+    mov di, A20_TEST_ALT_HIGH_OFF
+
+    mov al, [ds:si]
+    mov ah, [es:di]
+    push ax
+
+    mov byte [ds:si], 0x55
+    mov byte [es:di], 0xAA
+
+    cmp byte [ds:si], 0xAA
+
+    pop ax
+    mov [es:di], ah
+    mov [ds:si], al
+
+    xor ax, ax
+    je .done
+    mov ax, 1
+
+.done:
+    pop di
+    pop si
+    pop es
+    pop ds
+    popf
+    ret
+
+a20_wait_input_empty:
+    push cx
+    mov cx, A20_WAIT_LOOPS
+.loop:
+    in al, 0x64
+    test al, 0x02
+    jz .ready
+    loop .loop
+    stc
+    pop cx
+    ret
+.ready:
+    clc
+    pop cx
+    ret
+
+a20_wait_output_full:
+    push cx
+    mov cx, A20_WAIT_LOOPS
+.loop:
+    in al, 0x64
+    test al, 0x01
+    jnz .ready
+    loop .loop
+    stc
+    pop cx
+    ret
+.ready:
+    clc
+    pop cx
+    ret
+
+a20_flush_output:
+    push cx
+    mov cx, A20_WAIT_LOOPS
+.loop:
+    in al, 0x64
+    test al, 0x01
+    jz .done
+    in al, 0x60
+    loop .loop
+.done:
+    pop cx
+    ret
+
+a20_enable_kbc_direct:
+    mov byte [a20_kbc_path], 'D'
+    mov byte [a20_kbc_step], '1'
+    call a20_wait_input_empty
+    jc .done
+    mov al, 0xD1
+    out 0x64, al
+
+    mov byte [a20_kbc_step], '2'
+    call a20_wait_input_empty
+    jc .done
+    mov al, 0xDF
+    mov [a20_kbc_outport_write], al
+    out 0x60, al
+    mov byte [a20_kbc_step], '3'
+    call a20_wait_input_empty
+
+.done:
+    ret
+
+a20_enable_kbc:
+    mov byte [a20_kbc_path], 'R'
+    mov byte [a20_kbc_step], 'A'
+    call a20_wait_input_empty
+    jc .done
+    call a20_flush_output
+    mov al, 0xAD
+    out 0x64, al
+
+    mov byte [a20_kbc_step], 'B'
+    call a20_wait_input_empty
+    jc .reenable
+    call a20_flush_output
+    mov al, 0xD0
+    out 0x64, al
+
+    mov byte [a20_kbc_step], 'C'
+    call a20_wait_output_full
+    jc .try_direct
+    in al, 0x60
+    mov [a20_kbc_outport_read], al
+    push ax
+
+    mov byte [a20_kbc_step], 'D'
+    call a20_wait_input_empty
+    jc .pop_try_direct
+    mov al, 0xD1
+    out 0x64, al
+
+    mov byte [a20_kbc_step], 'E'
+    call a20_wait_input_empty
+    jc .pop_try_direct
+    pop ax
+    or al, 0x03
+    mov [a20_kbc_outport_write], al
+    out 0x60, al
+    call a20_wait_input_empty
+    jmp .reenable
+
+.pop_try_direct:
+    pop ax
+.try_direct:
+    call a20_enable_kbc_direct
+
+.reenable:
+    mov byte [a20_kbc_step], 'F'
+    call a20_wait_input_empty
+    mov al, 0xAE
+    out 0x64, al
+    mov byte [a20_kbc_step], 'G'
+
+.done:
     ret
 
 disk_error:
-    DEBUG_CHAR 'X'
+    DEBUG_BOOT_CHAR 'X'
     mov ax, 0x0003
     int 0x10
     mov si, disk_error_msg
     call print_string
+    call print_newline
+    mov si, last_label
+    call print_string
     mov al, [debug_last_code]
     call print_char
-    mov al, 0x0D
+    call print_newline
+    mov si, trace_label
+    call print_string
+    mov si, debug_trace_buf
+    call print_string
+.halt:
+    hlt
+    jmp .halt
+
+a20_error:
+    DEBUG_BOOT_CHAR 'A'
+    mov ax, 0x0003
+    int 0x10
+    mov si, a20_error_msg
+    call print_string
+    call print_newline
+    mov si, last_label
+    call print_string
+    mov al, [debug_last_code]
     call print_char
-    mov al, 0x0A
+    call print_newline
+    mov si, trace_label
+    call print_string
+    mov si, debug_trace_buf
+    call print_string
+    call print_newline
+    mov si, a20_status_label
+    call print_string
+    mov al, [a20_status_pre]
     call print_char
+    mov si, a20_status_bios_label
+    call print_string
+    mov al, [a20_status_bios]
+    call print_char
+    mov si, a20_status_fast_label
+    call print_string
+    mov al, [a20_status_fast]
+    call print_char
+    mov si, a20_status_kbc_label
+    call print_string
+    mov al, [a20_status_kbc]
+    call print_char
+    call print_newline
+    mov si, a20_alt_status_label
+    call print_string
+    mov al, [a20_alt_status_pre]
+    call print_char
+    mov si, a20_alt_status_bios_label
+    call print_string
+    mov al, [a20_alt_status_bios]
+    call print_char
+    mov si, a20_alt_status_fast_label
+    call print_string
+    mov al, [a20_alt_status_fast]
+    call print_char
+    mov si, a20_alt_status_kbc_label
+    call print_string
+    mov al, [a20_alt_status_kbc]
+    call print_char
+    call print_newline
+    mov si, a20_bios_label
+    call print_string
+    mov ax, [a20_bios_ax]
+    call print_hex_word
+    mov si, a20_cf_label
+    call print_string
+    mov al, [a20_bios_cf]
+    call print_char
+    mov si, a20_port92_label
+    call print_string
+    mov al, [a20_port92_before]
+    call print_hex_byte
+    mov al, '>'
+    call print_char
+    mov al, [a20_port92_value]
+    call print_hex_byte
+    mov si, a20_kbc_label
+    call print_string
+    mov al, [a20_kbc_path]
+    call print_char
+    call print_newline
+    mov si, a20_bios_state_label
+    call print_string
+    mov al, [a20_bios_state_char]
+    call print_char
+    mov si, a20_bios_ax_label
+    call print_string
+    mov ax, [a20_bios_state_ax]
+    call print_hex_word
+    mov si, a20_cf_label
+    call print_string
+    mov al, [a20_bios_state_cf]
+    call print_char
+    call print_newline
+    mov si, a20_bios_support_label
+    call print_string
+    mov ax, [a20_bios_support_ax]
+    call print_hex_word
+    mov si, a20_bx_label
+    call print_string
+    mov ax, [a20_bios_support_bx]
+    call print_hex_word
+    mov si, a20_cf_label
+    call print_string
+    mov al, [a20_bios_support_cf]
+    call print_char
+    call print_newline
+    mov si, a20_kbc_debug_label
+    call print_string
+    mov al, [a20_kbc_step]
+    call print_char
+    mov si, a20_kbc_read_label
+    call print_string
+    mov al, [a20_kbc_outport_read]
+    call print_hex_byte
+    mov si, a20_kbc_write_label
+    call print_string
+    mov al, [a20_kbc_outport_write]
+    call print_hex_byte
+    call print_newline
+    mov si, a20_legend_msg
+    call print_string
 .halt:
     hlt
     jmp .halt
@@ -902,6 +1779,49 @@ print_char:
     pop bx
     ret
 
+print_newline:
+    mov al, 0x0D
+    call print_char
+    mov al, 0x0A
+    call print_char
+    ret
+
+print_hex_nibble:
+    and al, 0x0F
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    jmp print_char
+.digit:
+    add al, '0'
+    jmp print_char
+
+print_hex_byte:
+    push ax
+    mov ah, al
+    shr al, 4
+    call print_hex_nibble
+    mov al, ah
+    call print_hex_nibble
+    pop ax
+    ret
+
+print_hex_word:
+    push ax
+    mov al, ah
+    call print_hex_byte
+    pop ax
+    call print_hex_byte
+    ret
+
+print_hex_dword:
+    push eax
+    shr eax, 16
+    call print_hex_word
+    pop eax
+    call print_hex_word
+    ret
+
 align 8
 gdt_start:
     dq 0
@@ -918,9 +1838,57 @@ gdt_descriptor:
 kernel_name db 'KERNEL  BIN'
 background_name db 'VIBEBG  BIN'
 disk_error_msg db 'VIBELOADER ERROR ', 0
+a20_error_msg db 'VIBELOADER A20 FAIL', 0
+last_label db 'LAST ', 0
+trace_label db 'TRACE ', 0
+a20_status_label db 'A20 P', 0
+a20_status_bios_label db ' B', 0
+a20_status_fast_label db ' C', 0
+a20_status_kbc_label db ' D', 0
+a20_alt_status_label db 'ALT P', 0
+a20_alt_status_bios_label db ' B', 0
+a20_alt_status_fast_label db ' C', 0
+a20_alt_status_kbc_label db ' D', 0
+a20_bios_label db 'BIOS ', 0
+a20_cf_label db ' CF', 0
+a20_port92_label db ' P92 ', 0
+a20_kbc_label db ' KBC ', 0
+a20_bios_state_label db '2402 ', 0
+a20_bios_ax_label db ' AX', 0
+a20_bios_support_label db '2403 AX', 0
+a20_bx_label db ' BX', 0
+a20_kbc_debug_label db 'KDBG ', 0
+a20_kbc_read_label db ' R', 0
+a20_kbc_write_label db ' W', 0
+a20_legend_msg db 'P=PRE B=INT15 C=92 D=8042', 0
 boot_drive db 0
 background_available db 0
 debug_last_code db '?'
+debug_trace_len db 0
+debug_trace_buf times DEBUG_TRACE_MAX db 0
+a20_status_pre db '?'
+a20_status_bios db '?'
+a20_status_fast db '?'
+a20_status_kbc db '?'
+a20_alt_status_pre db '?'
+a20_alt_status_bios db '?'
+a20_alt_status_fast db '?'
+a20_alt_status_kbc db '?'
+a20_bios_cf db '?'
+a20_bios_state_char db '?'
+a20_bios_state_cf db '?'
+a20_bios_support_cf db '?'
+a20_port92_before db 0
+a20_port92_value db 0
+a20_kbc_path db '?'
+a20_kbc_step db '?'
+a20_kbc_outport_read db 0
+a20_kbc_outport_write db 0
+align 2
+a20_bios_ax dw 0
+a20_bios_state_ax dw 0
+a20_bios_support_ax dw 0
+a20_bios_support_bx dw 0
 reserved_sectors dw 0
 fat_count dw 0
 fat_size_sectors dd 0
@@ -938,6 +1906,11 @@ file_remaining_sectors dd 0
 sectors_per_cluster db 0
 load_segment dw KERNEL_LOAD_SEG
 search_name_ptr dw 0
+vesa_mode_list_seg dw 0
+vesa_mode_list_off dw 0
+align 4
+catalog_area_left dd 0
+catalog_area_right dd 0
 
 dap:
     db 16
@@ -954,6 +1927,215 @@ dap:
     dd 0
 
 BITS 32
+debug_log_char32:
+    push eax
+    push ebx
+
+    xor ebx, ebx
+    mov bl, [debug_trace_len]
+    cmp ebx, DEBUG_TRACE_MAX - 1
+    jae .persist
+    mov [debug_trace_buf + ebx], al
+    inc bl
+    mov [debug_trace_len], bl
+    mov byte [debug_trace_buf + ebx], 0
+
+.persist:
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .done
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    jne .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_LAST], al
+    xor ebx, ebx
+    mov bl, [BOOTDEBUG_ADDR + BOOTDEBUG_LEN]
+    cmp bl, BOOTDEBUG_TRACE_MAX - 1
+    jae .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_TRACE + ebx], al
+    inc bl
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_LEN], bl
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_TRACE + ebx], 0
+
+.done:
+    pop ebx
+    pop eax
+    ret
+
+hex_nibble_to_ascii32:
+    and al, 0x0F
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    ret
+.digit:
+    add al, '0'
+    ret
+
+bootdebug_store_key32:
+    push eax
+    push ebx
+
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .done
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    jne .done
+
+    mov ah, al
+    shr al, 4
+    call hex_nibble_to_ascii32
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_KEY_HI], al
+    mov al, ah
+    call hex_nibble_to_ascii32
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_KEY_LO], al
+
+    mov al, '0'
+    test bl, bl
+    jz .store_ext
+    mov al, '1'
+.store_ext:
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_EXT], al
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_ACT], '?'
+
+.done:
+    pop ebx
+    pop eax
+    ret
+
+bootdebug_store_action32:
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .done
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    jne .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_ACT], al
+.done:
+    ret
+
+pmode_install_idt:
+    push eax
+    push ecx
+    push esi
+    push edi
+
+    lea esi, [pm_exception_stub_ptrs]
+    lea edi, [pm_exception_idt]
+    mov ecx, 32
+.fill:
+    lodsd
+    mov word [edi + 0], ax
+    mov word [edi + 2], CODE_SEG
+    mov byte [edi + 4], 0
+    mov byte [edi + 5], 0x8E
+    shr eax, 16
+    mov word [edi + 6], ax
+    add edi, 8
+    loop .fill
+
+    lidt [pm_exception_idtr]
+    pop edi
+    pop esi
+    pop ecx
+    pop eax
+    ret
+
+pm_exception_common:
+    cli
+    xor eax, eax
+    mov al, [esp]
+    mov [pm_exception_vector], al
+    mov esp, PMODE_FAULT_STACK_TOP
+
+    mov al, 'X'
+    mov [debug_last_code], al
+    call debug_log_char32
+
+    mov al, [pm_exception_vector]
+    shr al, 4
+    call hex_nibble_to_ascii32
+    mov [debug_last_code], al
+    call debug_log_char32
+
+    mov al, [pm_exception_vector]
+    call hex_nibble_to_ascii32
+    mov [debug_last_code], al
+    call debug_log_char32
+
+    jmp pmode_to_real_for_debug_halt
+
+EXCEPTION_STUB 0
+EXCEPTION_STUB 1
+EXCEPTION_STUB 2
+EXCEPTION_STUB 3
+EXCEPTION_STUB 4
+EXCEPTION_STUB 5
+EXCEPTION_STUB 6
+EXCEPTION_STUB 7
+EXCEPTION_STUB 8
+EXCEPTION_STUB 9
+EXCEPTION_STUB 10
+EXCEPTION_STUB 11
+EXCEPTION_STUB 12
+EXCEPTION_STUB 13
+EXCEPTION_STUB 14
+EXCEPTION_STUB 15
+EXCEPTION_STUB 16
+EXCEPTION_STUB 17
+EXCEPTION_STUB 18
+EXCEPTION_STUB 19
+EXCEPTION_STUB 20
+EXCEPTION_STUB 21
+EXCEPTION_STUB 22
+EXCEPTION_STUB 23
+EXCEPTION_STUB 24
+EXCEPTION_STUB 25
+EXCEPTION_STUB 26
+EXCEPTION_STUB 27
+EXCEPTION_STUB 28
+EXCEPTION_STUB 29
+EXCEPTION_STUB 30
+EXCEPTION_STUB 31
+
+align 8
+pm_exception_stub_ptrs:
+    dd pm_exception_stub_0
+    dd pm_exception_stub_1
+    dd pm_exception_stub_2
+    dd pm_exception_stub_3
+    dd pm_exception_stub_4
+    dd pm_exception_stub_5
+    dd pm_exception_stub_6
+    dd pm_exception_stub_7
+    dd pm_exception_stub_8
+    dd pm_exception_stub_9
+    dd pm_exception_stub_10
+    dd pm_exception_stub_11
+    dd pm_exception_stub_12
+    dd pm_exception_stub_13
+    dd pm_exception_stub_14
+    dd pm_exception_stub_15
+    dd pm_exception_stub_16
+    dd pm_exception_stub_17
+    dd pm_exception_stub_18
+    dd pm_exception_stub_19
+    dd pm_exception_stub_20
+    dd pm_exception_stub_21
+    dd pm_exception_stub_22
+    dd pm_exception_stub_23
+    dd pm_exception_stub_24
+    dd pm_exception_stub_25
+    dd pm_exception_stub_26
+    dd pm_exception_stub_27
+    dd pm_exception_stub_28
+    dd pm_exception_stub_29
+    dd pm_exception_stub_30
+    dd pm_exception_stub_31
+
+pm_exception_idt:
+    times (32 * 8) db 0
+pm_exception_idt_end:
+
+pm_exception_idtr:
+    dw pm_exception_idt_end - pm_exception_idt - 1
+    dd pm_exception_idt
+
 pmode:
     mov ax, DATA_SEG
     mov ds, ax
@@ -963,25 +2145,30 @@ pmode:
     mov ss, ax
     mov esp, 0x70000
     cld
+    call pmode_install_idt
 
     mov byte [menu_initialized], 0
-    DEBUG_CHAR 'Q'
+    DEBUG_PMODE_CHAR 'Q'
     call vibeloader_menu
-    DEBUG_CHAR 'G'
-    jmp CODE_SEG:0x10000
+    jmp pmode_to_real_for_kernel_boot
 
 vibeloader_menu:
-    DEBUG_CHAR 'M'
+    DEBUG_PMODE_CHAR 'M'
     test dword [BOOTINFO_ADDR + BOOTINFO_FLAGS], BOOTINFO_FLAG_VESA_VALID
     jz vibeloader_menu_default_boot
+    DEBUG_PMODE_CHAR '1'
     cmp byte [BOOTINFO_ADDR + BOOTINFO_VESA_BPP], 8
     jne vibeloader_menu_default_boot
+    DEBUG_PMODE_CHAR '2'
 
+%ifndef VIBELOADER_SKIP_SET_PALETTE
     call set_desktop_palette
-    DEBUG_CHAR 'C'
+%endif
+    DEBUG_PMODE_CHAR 'C'
     call menu_compute_layout
     cmp byte [menu_initialized], 0
     jne vibeloader_menu_resume
+    call menu_flush_keyboard_buffer
     mov dword [menu_selection], 0
     mov byte [menu_initialized], 1
     call menu_restart_timer
@@ -1026,29 +2213,208 @@ vibeloader_menu_check_keys:
 
 vibeloader_menu_maybe_draw:
     cmp byte [menu_dirty], 0
+    jne .draw
+    cmp byte [menu_first_render_done], 0
     je vibeloader_menu_loop
-    DEBUG_CHAR 'R'
+    cmp byte [menu_loop_stable_logged], 0
+    jne vibeloader_menu_loop
+    DEBUG_PMODE_CHAR 'I'
+    mov byte [menu_loop_stable_logged], 1
+    jmp vibeloader_menu_loop
+
+.draw:
+    DEBUG_PMODE_CHAR 'R'
     call menu_render
-    DEBUG_CHAR 'r'
+    DEBUG_PMODE_CHAR 'r'
     mov byte [menu_dirty], 0
     jmp vibeloader_menu_loop
 
 vibeloader_menu_change_video:
-    DEBUG_CHAR 'v'
+    DEBUG_PMODE_CHAR 'v'
     jmp pmode_to_real_for_video_change
 
 vibeloader_menu_boot_now:
-    DEBUG_CHAR 'g'
+    DEBUG_PMODE_CHAR 'g'
     call menu_apply_selection
     ret
 
 vibeloader_menu_default_boot:
-    DEBUG_CHAR 'D'
-    mov dword [menu_base_x], 0
-    mov dword [menu_base_y], 0
-    mov dword [menu_selection], 0
-    call menu_apply_selection
+    DEBUG_PMODE_CHAR 'D'
+    cli
+    jmp pmode_to_real_for_debug_halt
+
+pm_text_debug_menu_fallback:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+
+    call pm_text_clear
+
+    mov esi, text_no_vesa_title
+    call pm_text_puts
+    call pm_text_newline
+
+    mov esi, text_last_label
+    call pm_text_puts
+    mov al, [debug_last_code]
+    call pm_text_putc
+    call pm_text_newline
+
+    mov esi, text_flags_label
+    call pm_text_puts
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+    call pm_text_put_hex_dword
+    call pm_text_newline
+
+    mov esi, text_mode_label
+    call pm_text_puts
+    xor eax, eax
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_MODE]
+    call pm_text_put_hex_word
+    call pm_text_newline
+
+    mov esi, text_bpp_label
+    call pm_text_puts
+    xor eax, eax
+    mov al, [BOOTINFO_ADDR + BOOTINFO_VESA_BPP]
+    call pm_text_put_hex_byte
+    call pm_text_newline
+
+    mov esi, text_width_label
+    call pm_text_puts
+    xor eax, eax
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH]
+    call pm_text_put_hex_word
+    mov esi, text_height_label
+    call pm_text_puts
+    xor eax, eax
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT]
+    call pm_text_put_hex_word
+    call pm_text_newline
+
+    mov esi, text_hint_enter
+    call pm_text_puts
+    call pm_text_newline
+
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
     ret
+
+pm_text_clear:
+    push eax
+    push ecx
+    push edi
+
+    mov edi, 0xB8000
+    mov ax, 0x0720
+    mov ecx, 80 * 25
+    cld
+    rep stosw
+    mov dword [pm_text_row], 0
+    mov dword [pm_text_col], 0
+
+    pop edi
+    pop ecx
+    pop eax
+    ret
+
+pm_text_puts:
+    cld
+.next:
+    lodsb
+    test al, al
+    jz .done
+    call pm_text_putc
+    jmp .next
+.done:
+    ret
+
+pm_text_putc:
+    push eax
+    push ebx
+    push edx
+    push edi
+
+    cmp al, 0x0A
+    jne .not_newline
+    call pm_text_newline
+    jmp .done
+
+.not_newline:
+    mov edx, [pm_text_row]
+    imul edx, 80
+    add edx, [pm_text_col]
+    lea edi, [edx * 2 + 0xB8000]
+    mov ah, 0x07
+    mov [edi], ax
+
+    inc dword [pm_text_col]
+    cmp dword [pm_text_col], 80
+    jb .done
+    call pm_text_newline
+
+.done:
+    pop edi
+    pop edx
+    pop ebx
+    pop eax
+    ret
+
+pm_text_newline:
+    mov dword [pm_text_col], 0
+    inc dword [pm_text_row]
+    cmp dword [pm_text_row], 25
+    jb .done
+    mov dword [pm_text_row], 24
+.done:
+    ret
+
+pm_text_put_hex_nibble:
+    and al, 0x0F
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    jmp pm_text_putc
+.digit:
+    add al, '0'
+    jmp pm_text_putc
+
+pm_text_put_hex_byte:
+    push eax
+    mov ah, al
+    shr al, 4
+    call pm_text_put_hex_nibble
+    mov al, ah
+    call pm_text_put_hex_nibble
+    pop eax
+    ret
+
+pm_text_put_hex_word:
+    push eax
+    mov al, ah
+    call pm_text_put_hex_byte
+    pop eax
+    call pm_text_put_hex_byte
+    ret
+
+pm_text_put_hex_dword:
+    push eax
+    shr eax, 16
+    call pm_text_put_hex_word
+    pop eax
+    call pm_text_put_hex_word
+    ret
+
+pm_text_halt:
+    cli
+.halt:
+    hlt
+    jmp .halt
 
 menu_compute_layout:
     xor eax, eax
@@ -1121,7 +2487,7 @@ menu_restart_timer:
     mov [menu_prev_pit], ax
     mov dword [menu_elapsed_counts], 0
     mov dword [menu_seconds_left], MENU_TIMEOUT_SECONDS
-    mov byte [menu_timeout_paused], 0
+    mov byte [menu_timeout_paused], 1
     ret
 
 pit_read_counter:
@@ -1131,6 +2497,17 @@ pit_read_counter:
     mov ah, al
     in al, 0x40
     xchg al, ah
+    ret
+
+menu_flush_keyboard_buffer:
+.poll:
+    in al, 0x64
+    test al, 1
+    jz .done
+    in al, 0x60
+    jmp .poll
+.done:
+    mov byte [menu_extended], 0
     ret
 
 menu_poll_keyboard:
@@ -1151,6 +2528,10 @@ menu_poll_keyboard:
     mov byte [menu_extended], 0
     test al, 0x80
     jnz .poll
+    mov [menu_last_scancode], al
+    mov [menu_last_extended_flag], bl
+    call bootdebug_store_key32
+    mov byte [menu_dirty], 1
 
     cmp byte [menu_timeout_paused], 0
     jne .classify
@@ -1183,6 +2564,9 @@ menu_poll_keyboard:
     jmp .poll
 
 .move_up:
+    mov al, 'U'
+    mov [menu_last_action], al
+    call bootdebug_store_action32
     mov eax, [menu_selection]
     test eax, eax
     jz .wrap_up
@@ -1196,6 +2580,9 @@ menu_poll_keyboard:
     ret
 
 .move_down:
+    mov al, 'D'
+    mov [menu_last_action], al
+    call bootdebug_store_action32
     mov eax, [menu_selection]
     inc eax
     cmp eax, MENU_ENTRY_COUNT
@@ -1207,6 +2594,10 @@ menu_poll_keyboard:
     ret
 
 .video_prev:
+    mov al, 'L'
+    mov [menu_last_action], al
+    call bootdebug_store_action32
+    DEBUG_PMODE_CHAR '<'
     call menu_select_previous_video_mode
     cmp eax, 0
     je .poll
@@ -1214,6 +2605,10 @@ menu_poll_keyboard:
     ret
 
 .video_next:
+    mov al, 'R'
+    mov [menu_last_action], al
+    call bootdebug_store_action32
+    DEBUG_PMODE_CHAR '>'
     call menu_select_next_video_mode
     cmp eax, 0
     je .poll
@@ -1221,6 +2616,10 @@ menu_poll_keyboard:
     ret
 
 .confirm:
+    mov al, 'B'
+    mov [menu_last_action], al
+    call bootdebug_store_action32
+    DEBUG_PMODE_CHAR '!'
     mov eax, 2
     ret
 
@@ -1305,7 +2704,13 @@ menu_apply_selection:
     ret
 
 menu_render:
+    cmp byte [menu_first_render_done], 0
+    jne .draw_frame
+    DEBUG_PMODE_CHAR 'm'
+
+.draw_frame:
     call draw_background
+    DEBUG_PMODE_CHAR '3'
 
     mov eax, 148
     add eax, [menu_base_x]
@@ -1315,6 +2720,7 @@ menu_render:
     mov esi, 272
     mov dl, 1
     call draw_rect
+    DEBUG_PMODE_CHAR '4'
 
     mov eax, 152
     add eax, [menu_base_x]
@@ -1324,6 +2730,7 @@ menu_render:
     mov esi, 264
     mov dl, 8
     call draw_rect
+    DEBUG_PMODE_CHAR '5'
 
     mov eax, 152
     add eax, [menu_base_x]
@@ -1333,6 +2740,7 @@ menu_render:
     mov esi, 24
     mov dl, 3
     call draw_rect
+    DEBUG_PMODE_CHAR '6'
 
     mov esi, vibeloader_title
     mov eax, 230
@@ -1342,22 +2750,55 @@ menu_render:
     mov ecx, 3
     mov edx, 15
     call draw_text
+    DEBUG_PMODE_CHAR '7'
 
+    cmp byte [menu_first_render_done], 0
+    jne .draw_entry_one
+    DEBUG_PMODE_CHAR 'n'
+
+.draw_entry_one:
+    cmp byte [menu_first_render_done], 0
+    jne .draw_entry_one_call
+    DEBUG_PMODE_CHAR 'o'
+.draw_entry_one_call:
     mov eax, 0
     mov ebx, 188
     mov esi, menu_entry_vibeos
     call draw_menu_entry
 
+    cmp byte [menu_first_render_done], 0
+    jne .draw_entry_two
+    DEBUG_PMODE_CHAR 'p'
+
+.draw_entry_two:
+    cmp byte [menu_first_render_done], 0
+    jne .draw_entry_two_call
+    DEBUG_PMODE_CHAR 'q'
+.draw_entry_two_call:
     mov eax, 1
     mov ebx, 226
     mov esi, menu_entry_safe
     call draw_menu_entry
 
+    cmp byte [menu_first_render_done], 0
+    jne .draw_entry_three
+    DEBUG_PMODE_CHAR 'r'
+
+.draw_entry_three:
+    cmp byte [menu_first_render_done], 0
+    jne .draw_entry_three_call
+    DEBUG_PMODE_CHAR 's'
+.draw_entry_three_call:
     mov eax, 2
     mov ebx, 264
     mov esi, menu_entry_rescue
     call draw_menu_entry
 
+    cmp byte [menu_first_render_done], 0
+    jne .countdown_prepare
+    DEBUG_PMODE_CHAR 't'
+
+.countdown_prepare:
     cmp byte [menu_timeout_paused], 0
     jne .draw_paused
 
@@ -1406,6 +2847,23 @@ menu_render:
     mov ecx, 1
     mov edx, 15
     call draw_text
+
+    call menu_build_debug_text
+    mov esi, menu_debug_text
+    mov eax, 180
+    add eax, [menu_base_x]
+    mov ebx, 388
+    add ebx, [menu_base_y]
+    mov ecx, 1
+    mov edx, 15
+    call draw_text
+
+    cmp byte [menu_first_render_done], 0
+    jne .done
+    DEBUG_PMODE_CHAR 'u'
+    mov byte [menu_first_render_done], 1
+
+.done:
     ret
 
 draw_menu_entry:
@@ -1669,6 +3127,69 @@ menu_build_video_text:
     pop eax
     ret
 
+menu_build_debug_text:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+
+    mov edi, menu_debug_text
+    mov esi, menu_debug_prefix
+    call menu_append_cstring
+
+    mov al, [debug_last_code]
+    call menu_append_debug_char
+
+    mov al, ' '
+    stosb
+    mov esi, menu_key_prefix
+    call menu_append_cstring
+
+    xor eax, eax
+    mov al, [menu_last_scancode]
+    call menu_append_uint
+
+    mov al, ' '
+    stosb
+    mov esi, menu_ext_prefix
+    call menu_append_cstring
+
+    xor eax, eax
+    mov al, [menu_last_extended_flag]
+    call menu_append_uint
+
+    mov al, ' '
+    stosb
+    mov esi, menu_act_prefix
+    call menu_append_cstring
+
+    mov al, [menu_last_action]
+    call menu_append_debug_char
+
+    mov al, 0
+    stosb
+
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+menu_append_debug_char:
+    cmp al, 'a'
+    jb .store
+    cmp al, 'z'
+    ja .store
+    sub al, 32
+
+.store:
+    stosb
+    ret
+
 menu_append_cstring:
     cld
 .copy:
@@ -1806,9 +3327,19 @@ glyph_ptr_from_char:
     ret
 
 pmode_to_real_for_video_change:
-    DEBUG_CHAR 'v'
+    DEBUG_PMODE_CHAR 'v'
     cli
     jmp CODE16_SEG:pmode16_to_real
+
+pmode_to_real_for_kernel_boot:
+    DEBUG_PMODE_CHAR 'g'
+    cli
+    jmp CODE16_SEG:pmode16_to_real_for_kernel_boot
+
+pmode_to_real_for_debug_halt:
+    DEBUG_PMODE_CHAR 'd'
+    cli
+    jmp CODE16_SEG:pmode16_to_real_for_debug_halt
 
 BITS 16
 pmode16_to_real:
@@ -1824,6 +3355,34 @@ pmode16_to_real:
     and eax, 0xFFFFFFFE
     mov cr0, eax
     jmp 0x0000:realmode_apply_video_change
+
+pmode16_to_real_for_kernel_boot:
+    DEBUG_CHAR 'h'
+    mov ax, DATA16_SEG
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov sp, REALMODE_STACK_TOP
+    mov eax, cr0
+    and eax, 0xFFFFFFFE
+    mov cr0, eax
+    jmp 0x0000:realmode_boot_selected_kernel
+
+pmode16_to_real_for_debug_halt:
+    DEBUG_CHAR 'e'
+    mov ax, DATA16_SEG
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov sp, REALMODE_STACK_TOP
+    mov eax, cr0
+    and eax, 0xFFFFFFFE
+    mov cr0, eax
+    jmp 0x0000:realmode_debug_menu_fallback
 
 realmode_apply_video_change:
     DEBUG_CHAR 'w'
@@ -1842,6 +3401,9 @@ realmode_apply_video_change:
     mov dx, [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODES + bx + BOOTINFO_VIDEO_MODE_FIELD_MODE]
     DEBUG_CHAR 'x'
     call vesa_set_mode_and_store_bootinfo
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     jc .restore_selection
     DEBUG_CHAR 'y'
     call populate_legacy_vesa_info
@@ -1854,15 +3416,125 @@ realmode_apply_video_change:
 .resume:
     DEBUG_CHAR 'z'
     call enable_a20
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     lgdt [gdt_descriptor]
     mov eax, cr0
     or eax, 1
     mov cr0, eax
     jmp CODE_SEG:pmode_video_resume
 
+realmode_boot_selected_kernel:
+    DEBUG_BOOT_CHAR 'K'
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, REALMODE_STACK_TOP
+    cld
+
+    call load_kernel_file
+    jc disk_error
+
+    DEBUG_BOOT_CHAR 'k'
+    call enable_a20
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    call a20_is_enabled
+    cmp ax, 1
+    je .a20_ready
+    call a20_is_enabled_alt
+    cmp ax, 1
+    je .a20_ready
+    call a20_capture_bios_state
+    cmp byte [a20_bios_state_char], '1'
+    jne a20_error
+
+.a20_ready:
+    DEBUG_BOOT_CHAR 'P'
+    lgdt [gdt_descriptor]
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    jmp CODE_SEG:pmode_kernel_resume
+
+realmode_debug_menu_fallback:
+    DEBUG_BOOT_CHAR 'T'
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, REALMODE_STACK_TOP
+    cld
+
+    mov ax, 0x0003
+    int 0x10
+
+    mov si, text_no_vesa_title
+    call print_string
+    call print_newline
+
+    mov si, last_label
+    call print_string
+    mov al, [debug_last_code]
+    call print_char
+    call print_newline
+
+    mov si, trace_label
+    call print_string
+    mov si, debug_trace_buf
+    call print_string
+    call print_newline
+
+    cmp byte [pm_exception_vector], 0xFF
+    je .print_flags
+    mov si, text_exc_label
+    call print_string
+    mov al, [pm_exception_vector]
+    call print_hex_byte
+    call print_newline
+
+.print_flags:
+
+    mov si, text_flags_label
+    call print_string
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+    call print_hex_dword
+    call print_newline
+
+    mov si, text_mode_label
+    call print_string
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_MODE]
+    call print_hex_word
+    call print_newline
+
+    mov si, text_bpp_label
+    call print_string
+    mov al, [BOOTINFO_ADDR + BOOTINFO_VESA_BPP]
+    call print_hex_byte
+    call print_newline
+
+    mov si, text_width_label
+    call print_string
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH]
+    call print_hex_word
+    mov si, text_height_label
+    call print_string
+    mov ax, [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT]
+    call print_hex_word
+    call print_newline
+
+    mov si, text_hint_enter
+    call print_string
+.halt:
+    hlt
+    jmp .halt
+
 BITS 32
 pmode_video_resume:
-    DEBUG_CHAR 'W'
+    DEBUG_PMODE_CHAR 'W'
     mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
@@ -1871,11 +3543,24 @@ pmode_video_resume:
     mov ss, ax
     mov esp, 0x70000
     cld
+    call pmode_install_idt
     mov byte [menu_extended], 0
     call set_desktop_palette
     call menu_compute_layout
     mov byte [menu_dirty], 1
     jmp vibeloader_menu_resume
+
+pmode_kernel_resume:
+    DEBUG_PMODE_CHAR 'G'
+    mov ax, DATA_SEG
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov esp, 0x70000
+    cld
+    jmp CODE_SEG:0x10000
 
 menu_selection dd 0
 menu_elapsed_counts dd 0
@@ -1889,9 +3574,15 @@ background_scale dd 1
 menu_dirty db 0
 menu_initialized db 0
 menu_timeout_paused db 0
+menu_first_render_done db 0
+menu_loop_stable_logged db 0
 menu_extended db 0
+menu_last_scancode db 0
+menu_last_extended_flag db 0
+menu_last_action db ' '
 glyph_row_bits db 0
 glyph_ptr_tmp dd 0
+pm_exception_vector db 0xFF
 
 vibeloader_title db 'VIBELOADER', 0
 menu_entry_vibeos db 'VIBEOS', 0
@@ -1904,9 +3595,26 @@ menu_video_unknown db 'UNKNOWN', 0
 menu_hint_top db 'UP/DOWN SELECT  ENTER BOOT', 0
 menu_hint_bottom db 'LEFT/RIGHT VIDEO', 0
 menu_video_text times 24 db 0
+menu_debug_prefix db 'DBG ', 0
+menu_key_prefix db 'KEY ', 0
+menu_ext_prefix db 'EXT ', 0
+menu_act_prefix db 'ACT ', 0
+menu_debug_text times 32 db 0
 menu_number_buffer times 6 db 0
+text_no_vesa_title db 'VIBELOADER DEBUG HALT', 0
+text_last_label db 'LAST ', 0
+text_exc_label db 'EXC ', 0
+text_flags_label db 'FLAGS ', 0
+text_mode_label db 'MODE ', 0
+text_bpp_label db 'BPP ', 0
+text_width_label db 'W ', 0
+text_height_label db ' H ', 0
+text_hint_enter db 'HALTED FOR DEBUG', 0
 
 glyph_masks db 16, 8, 4, 2, 1
+
+pm_text_row dd 0
+pm_text_col dd 0
 
 ega_palette_6bit:
     db 0, 0, 0

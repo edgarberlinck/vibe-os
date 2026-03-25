@@ -7,7 +7,7 @@
 #define BOOTINFO_ADDR 0x8D00u
 #define BOOTINFO_MAGIC 0x544F4256u
 #define BOOTINFO_VERSION 2u
-#define BOOTINFO_MAX_VESA_MODES 8u
+#define BOOTINFO_MAX_VESA_MODES 16u
 #define BOOTINFO_VIDEO_INDEX_NONE 0xFFu
 
 #define BOOTINFO_FLAG_VESA_VALID 0x00000001u
@@ -75,7 +75,9 @@ _Static_assert(offsetof(struct bootinfo, disk) == 48u, "bootinfo disk offset mis
 _Static_assert(offsetof(struct bootinfo, video) == 64u, "bootinfo video offset mismatch");
 _Static_assert(sizeof(struct bootinfo_vesa) == 16u, "bootinfo_vesa size mismatch");
 _Static_assert(sizeof(struct bootinfo_video_mode) == 8u, "bootinfo_video_mode size mismatch");
-_Static_assert(sizeof(struct bootinfo_video_catalog) == 68u, "bootinfo_video_catalog size mismatch");
-_Static_assert(sizeof(struct bootinfo) == 132u, "bootinfo size mismatch");
+_Static_assert(sizeof(struct bootinfo_video_catalog) == (4u + (BOOTINFO_MAX_VESA_MODES * sizeof(struct bootinfo_video_mode))),
+               "bootinfo_video_catalog size mismatch");
+_Static_assert(sizeof(struct bootinfo) == (64u + sizeof(struct bootinfo_video_catalog)),
+               "bootinfo size mismatch");
 
 #endif

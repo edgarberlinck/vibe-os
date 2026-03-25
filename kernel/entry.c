@@ -21,6 +21,44 @@
 #include <lang/include/vibe_app.h>
 #include <stdint.h>
 
+#define BOOTDEBUG_ADDR 0x00001000u
+#define BOOTDEBUG_MAGIC 0x47444256u
+#define BOOTDEBUG_DIRTY 1u
+#define BOOTDEBUG_TRACE_MAX 48u
+
+struct bootdebug_persist {
+    uint32_t magic;
+    uint8_t dirty;
+    uint8_t len;
+    uint8_t last;
+    char trace[BOOTDEBUG_TRACE_MAX];
+};
+
+static volatile struct bootdebug_persist *const bootdebug_persist =
+    (volatile struct bootdebug_persist *)(uintptr_t)BOOTDEBUG_ADDR;
+
+static void kernel_bootdebug_append(uint8_t code) {
+    if (bootdebug_persist->magic != BOOTDEBUG_MAGIC ||
+        bootdebug_persist->dirty != BOOTDEBUG_DIRTY) {
+        return;
+    }
+
+    bootdebug_persist->last = code;
+    if (bootdebug_persist->len >= (BOOTDEBUG_TRACE_MAX - 1u)) {
+        return;
+    }
+
+    bootdebug_persist->trace[bootdebug_persist->len] = (char)code;
+    bootdebug_persist->len++;
+    bootdebug_persist->trace[bootdebug_persist->len] = '\0';
+}
+
+static void kernel_bootdebug_mark_stable(void) {
+    if (bootdebug_persist->magic == BOOTDEBUG_MAGIC) {
+        bootdebug_persist->dirty = 0u;
+    }
+}
+
 static inline void kernel_early_post(uint8_t code) {
     __asm__ volatile("outb %0, $0x80" : : "a"(code));
     __asm__ volatile("outb %0, $0xE9" : : "a"(code));
@@ -65,10 +103,19 @@ static void kernel_early_fill_rect(uint8_t color, uint16_t x0, uint16_t y0, uint
 }
 
 static void kernel_early_mark(uint8_t code, uint8_t color) {
-    uint16_t x0 = (uint16_t)((code & 0x0Fu) * 8u);
-    uint16_t y0 = (uint16_t)(((code >> 4) & 0x0Fu) * 8u);
+    uint8_t stage = (uint8_t)(code & 0x0Fu);
+    uint8_t stage_char;
+    uint16_t x0 = (uint16_t)(16u + ((uint16_t)stage * 36u));
+    uint16_t progress = (uint16_t)((stage + 1u) * 36u);
+    if (stage < 10u) {
+        stage_char = (uint8_t)('0' + stage);
+    } else {
+        stage_char = (uint8_t)('A' + (stage - 10u));
+    }
+    kernel_bootdebug_append(stage_char);
     kernel_early_post(code);
-    kernel_early_fill_rect(color, x0, y0, 8u, 8u);
+    kernel_early_fill_rect(color, x0, 16u, 28u, 24u);
+    kernel_early_fill_rect(color, 16u, 48u, progress, 6u);
 }
 
 static uintptr_t align_up_uintptr(uintptr_t value, uintptr_t align) {
@@ -169,6 +216,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_mm_init(heap_start, heap_end - heap_start);
     mk_transfer_init();
     kernel_text_puts("Memory OK\n");
+    kernel_bootdebug_mark_stable();
 
     kernel_text_puts("Initializing storage...\n");
     kernel_storage_init();

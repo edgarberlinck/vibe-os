@@ -5,7 +5,11 @@ ORG 0x7C00
 %define RELOC_OFF 0x0000
 %define RELOC_ADDR 0x7000
 %define BOOTINFO_ADDR 0x8D00
-%define BOOTINFO_WORDS 66
+%define BOOTINFO_VIDEO_MODE_SIZE 8
+%define BOOTINFO_MAX_VESA_MODES 16
+%define BOOTINFO_VIDEO_CATALOG_SIZE (4 + (BOOTINFO_MAX_VESA_MODES * BOOTINFO_VIDEO_MODE_SIZE))
+%define BOOTINFO_SIZE (64 + BOOTINFO_VIDEO_CATALOG_SIZE)
+%define BOOTINFO_WORDS (BOOTINFO_SIZE / 2)
 %define BOOTINFO_MAGIC 0x544F4256
 %define BOOTINFO_VERSION 2
 %define BOOTINFO_FLAG_VESA_VALID 0x00000001
@@ -36,10 +40,6 @@ ORG 0x7C00
 %ifndef SOFTWARE_PARTITION_SECTORS
 %define SOFTWARE_PARTITION_SECTORS IMAGE_TOTAL_SECTORS - SOFTWARE_PARTITION_START_LBA
 %endif
-%define VBE_MODE_INFO_ADDR 0x0600
-%define VBE_LFB_ENABLE 0x4000
-%define VBE_MODE_640X480X8  0x0101
-
 %macro TRACE_CHAR 1
 %ifdef VIBELOADER_DEBUG_TRACE
     mov al, %1
@@ -66,8 +66,7 @@ relocated_start:
 
     TRACE_CHAR 'M'
     call init_bootinfo
-    call setup_vesa
-    TRACE_CHAR 'V'
+    TRACE_CHAR 'I'
     call load_active_vbr
     jc disk_error
     TRACE_CHAR 'J'
@@ -117,80 +116,6 @@ load_active_vbr:
     mov di, 0x7C00
     mov cx, 256
     rep movsw
-    clc
-    ret
-
-.fail:
-    stc
-    ret
-
-setup_vesa:
-    xor ax, ax
-    mov es, ax
-
-    mov dx, VBE_MODE_640X480X8
-    call try_vbe_mode
-    jnc .mode_ready
-    jmp .done
-
-.mode_ready:
-    mov si, VBE_MODE_INFO_ADDR
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_MODE], dx
-    mov ax, [si + 0x28]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_FB], ax
-    mov ax, [si + 0x2A]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_FB + 2], ax
-    mov ax, [si + 0x10]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_PITCH], ax
-    mov ax, [si + 0x12]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_WIDTH], ax
-    mov ax, [si + 0x14]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_HEIGHT], ax
-    mov al, [si + 0x19]
-    mov [BOOTINFO_ADDR + BOOTINFO_VESA_BPP], al
-    or dword [BOOTINFO_ADDR + 8], BOOTINFO_FLAG_VESA_VALID
-.done:
-    ret
-
-try_vbe_mode:
-    xor ax, ax
-    mov es, ax
-    mov di, VBE_MODE_INFO_ADDR
-    mov cx, 128
-    rep stosw
-
-    mov ax, 0x4F01
-    mov cx, dx
-    mov di, VBE_MODE_INFO_ADDR
-    int 0x10
-    cmp ax, 0x004F
-    jne .fail
-
-    test word [VBE_MODE_INFO_ADDR + 0], 0x0001
-    jz .fail
-    test word [VBE_MODE_INFO_ADDR + 0], 0x0010
-    jz .fail
-    test word [VBE_MODE_INFO_ADDR + 0], 0x0080
-    jz .fail
-    cmp word [VBE_MODE_INFO_ADDR + 0x10], 0
-    je .fail
-    cmp word [VBE_MODE_INFO_ADDR + 0x12], 640
-    jne .fail
-    cmp word [VBE_MODE_INFO_ADDR + 0x14], 480
-    jne .fail
-    cmp byte [VBE_MODE_INFO_ADDR + 0x19], 8
-    jne .fail
-    cmp byte [VBE_MODE_INFO_ADDR + 0x1B], 4
-    jne .fail
-    cmp dword [VBE_MODE_INFO_ADDR + 0x28], 0
-    je .fail
-
-    mov ax, 0x4F02
-    mov bx, dx
-    or bx, VBE_LFB_ENABLE
-    int 0x10
-    cmp ax, 0x004F
-    jne .fail
     clc
     ret
 
