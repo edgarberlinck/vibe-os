@@ -14,6 +14,13 @@ struct framebuffer {
     uint8_t  bpp;
 };
 
+struct kernel_video_rect {
+    int x;
+    int y;
+    int w;
+    int h;
+};
+
 /* Initialize video subsystem; chooses VESA first and falls back to VGA */
 void kernel_video_init(void);
 int vesa_init(struct video_mode *mode);
@@ -29,9 +36,16 @@ size_t kernel_video_get_pixel_count(void);
 /* Simple pixel operations */
 void kernel_video_clear(uint8_t color);
 void kernel_video_flip(void);
+void kernel_video_flip_mode(uint32_t mode);
+void kernel_video_set_present_policy(uint32_t policy);
+void kernel_video_set_present_copy_override(uint32_t kind);
+void kernel_video_present_full(void);
+void kernel_video_present_dirty(void);
+void kernel_video_mark_dirty(int x, int y, int w, int h);
 void kernel_video_leave_graphics(void);
 int kernel_video_set_mode(uint32_t width, uint32_t height);
 void kernel_video_get_capabilities(struct video_capabilities *caps);
+void kernel_video_get_benchmarks(struct video_bench_info *bench);
 int kernel_video_set_palette(const uint8_t *rgb_triplets);
 int kernel_video_get_palette(uint8_t *rgb_triplets);
 
@@ -41,8 +55,11 @@ void kernel_gfx_rect(int x, int y, int w, int h, uint8_t color);
 void kernel_gfx_clear(uint8_t color);
 void kernel_gfx_draw_text(int x, int y, const char *text, uint8_t color);
 void kernel_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale);
+void kernel_gfx_blit8_present(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale);
 void kernel_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
                               int dst_x, int dst_y, int dst_w, int dst_h);
+void kernel_gfx_blit8_stretch_present(const uint8_t *src, int src_w, int src_h,
+                                      int dst_x, int dst_y, int dst_w, int dst_h);
 
 /* VGA Text mode helpers */
 void kernel_text_init(void);

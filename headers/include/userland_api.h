@@ -49,7 +49,12 @@ enum syscall_id {
     SYSCALL_SERVICE_BACKEND = 42,
     SYSCALL_TASK_SNAPSHOT = 43,
     SYSCALL_TASK_TERMINATE = 44,
-    SYSCALL_GFX_BLIT8_STRETCH = 45
+    SYSCALL_GFX_BLIT8_STRETCH = 45,
+    SYSCALL_GFX_SET_PRESENT_POLICY = 46,
+    SYSCALL_GFX_BLIT8_STRETCH_PRESENT = 47,
+    SYSCALL_GFX_BLIT8_PRESENT = 48,
+    SYSCALL_GFX_BENCH = 49,
+    SYSCALL_GFX_SET_PRESENT_COPY_OVERRIDE = 50
 };
 
 enum input_keycode {
@@ -89,8 +94,49 @@ enum video_resolution_bits {
     VIDEO_RES_640X480 = 1u << 0,
     VIDEO_RES_800X600 = 1u << 1,
     VIDEO_RES_1024X768 = 1u << 2,
-    VIDEO_RES_1360X720 = 1u << 3,
-    VIDEO_RES_1920X1080 = 1u << 4
+    VIDEO_RES_1360X768 = 1u << 3,
+    VIDEO_RES_1366X768 = 1u << 4,
+    VIDEO_RES_1920X1080 = 1u << 5
+};
+
+enum video_present_mode {
+    VIDEO_PRESENT_AUTO = 0,
+    VIDEO_PRESENT_DIRTY = 1,
+    VIDEO_PRESENT_FULL = 2
+};
+
+enum video_present_policy {
+    VIDEO_PRESENT_POLICY_DEFAULT = 0,
+    VIDEO_PRESENT_POLICY_DESKTOP = 1,
+    VIDEO_PRESENT_POLICY_FULLSCREEN = 2
+};
+
+enum video_backend_kind {
+    VIDEO_BACKEND_NONE = 0,
+    VIDEO_BACKEND_LEGACY_LFB = 1,
+    VIDEO_BACKEND_FAST_LFB = 2
+};
+
+enum video_native_backend_kind {
+    VIDEO_NATIVE_BACKEND_NONE = 0,
+    VIDEO_NATIVE_BACKEND_BGA = 1,
+    VIDEO_NATIVE_BACKEND_I915 = 2,
+    VIDEO_NATIVE_BACKEND_RADEON = 3,
+    VIDEO_NATIVE_BACKEND_NOUVEAU = 4,
+    VIDEO_NATIVE_BACKEND_UNKNOWN = 5
+};
+
+enum video_present_copy_kind {
+    VIDEO_PRESENT_COPY_BYTE_LOOP = 0,
+    VIDEO_PRESENT_COPY_REP_MOVSD = 1,
+    VIDEO_PRESENT_COPY_MOVNTDQ = 2
+};
+
+enum video_present_copy_override_kind {
+    VIDEO_PRESENT_COPY_OVERRIDE_AUTO = 0,
+    VIDEO_PRESENT_COPY_OVERRIDE_BYTE_LOOP = 1,
+    VIDEO_PRESENT_COPY_OVERRIDE_REP_MOVSD = 2,
+    VIDEO_PRESENT_COPY_OVERRIDE_MOVNTDQ = 3
 };
 
 struct video_capabilities {
@@ -102,6 +148,43 @@ struct video_capabilities {
     uint32_t mode_count;
     uint16_t mode_width[VIDEO_MODE_LIST_MAX];
     uint16_t mode_height[VIDEO_MODE_LIST_MAX];
+};
+
+struct video_bench_info {
+    uint32_t active_width;
+    uint32_t active_height;
+    uint32_t active_pitch;
+    uint32_t gpu_vendor_id;
+    uint32_t gpu_device_id;
+    uint32_t gpu_revision;
+    uint32_t detected_gpu_vendor_id;
+    uint32_t detected_gpu_device_id;
+    uint32_t detected_gpu_revision;
+    uint32_t cpu_family;
+    uint32_t cpu_model;
+    uint32_t cpu_stepping;
+    uint32_t fill_ticks;
+    uint32_t present_ticks;
+    uint32_t frame_ticks;
+    uint32_t fullscreen_direct_ticks;
+    uint32_t fullscreen_blit_present_ticks;
+    uint32_t microkernel_frame_ticks;
+    uint32_t microkernel_flip_ticks;
+    uint32_t microkernel_blit_ticks;
+    uint32_t microkernel_stretch_ticks;
+    uint32_t frame_bytes;
+    uint32_t backbuffer_bytes;
+    uint32_t heap_free_before;
+    uint32_t heap_free_after;
+    uint32_t cpu_has_pat;
+    uint32_t cpu_has_sse2;
+    uint32_t wc_enabled;
+    uint32_t backend_kind;
+    uint32_t present_copy_kind;
+    uint32_t present_copy_override_kind;
+    uint32_t native_backend_kind;
+    uint32_t detected_native_backend_kind;
+    char cpu_vendor[13];
 };
 
 struct userland_launch_info {

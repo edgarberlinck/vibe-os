@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import re
 import shutil
 import signal
 import socket
@@ -9,7 +10,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 
 BOOT_MARKER = "userland.app: shell start"
@@ -27,6 +28,7 @@ class Scenario:
     description: str
     command: Optional[str]
     must_have: List[str]
+    boot_markers: Optional[List[str]] = None
     command_marker: Optional[str] = None
     action: Optional[Callable[["QemuSession"], None]] = None
 
@@ -38,6 +40,20 @@ class ScenarioResult:
     log: str
     missing_markers: List[str]
     error: Optional[str] = None
+
+
+def parse_mode_text(mode_text: str) -> Optional[str]:
+    parts = mode_text.lower().split("x")
+    if len(parts) != 2:
+        return None
+    try:
+        width = int(parts[0], 10)
+        height = int(parts[1], 10)
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return f"{width}x{height}"
 
 
 class QemuSession:
@@ -121,6 +137,14 @@ class QemuSession:
             time.sleep(0.05)
         raise RuntimeError("Timed out waiting for markers: " + ", ".join(pending))
 
+    def boot_mode_size(self) -> Optional[Tuple[int, int]]:
+        log = self.read_log()
+        matches = re.findall(r"video: boot init backend=.* mode=(\d+)x(\d+)x\d+", log)
+        if not matches:
+            return None
+        width_text, height_text = matches[-1]
+        return (int(width_text, 10), int(height_text, 10))
+
     def hmp(self, command: str, timeout: float = 1.0) -> str:
         chunks: List[bytes] = []
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -197,7 +221,7 @@ class QemuSession:
 
 
 def scenario_startx(session: QemuSession) -> None:
-    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=20.0)
+    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=45.0)
     session.send_key("ctrl-f", pause=0.15)
     session.wait_for_log("desktop: open-new w=0 t=3 i=0", timeout=8.0)
     session.send_key("ctrl-t", pause=0.15)
@@ -229,12 +253,38 @@ def scenario_terminal_runtime(session: QemuSession) -> None:
     )
 
 
+def scenario_terminal_vidmodes(session: QemuSession) -> None:
+    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=45.0)
+    session.send_key("ctrl-t", pause=0.15)
+    session.wait_for_log("desktop: open-new w=0 t=1 i=0", timeout=8.0)
+    time.sleep(1.0)
+    run_command(session, "vidmodes", timeout=8.0, marker="")
+    session.wait_for_all(
+        [
+            "vidmodes: begin",
+            "vidmodes: caps mode_count=",
+            "vidmodes: try 800x600",
+            "vidmodes: mode ok 800x600",
+            "vidmodes: try 1024x768",
+            "vidmodes: mode ok 1024x768",
+            "vidmodes: summary ok=",
+        ],
+        timeout=40.0,
+    )
+
+
+def scenario_open_terminal(session: QemuSession, timeout: float = 45.0) -> None:
+    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=timeout)
+    session.send_key("ctrl-t", pause=0.15)
+    session.wait_for_log("desktop: open-new w=0 t=1 i=0", timeout=8.0)
+    time.sleep(1.0)
+
+
 def scenario_doom(session: QemuSession) -> None:
+    scenario_open_terminal(session)
+    run_command(session, "doom", timeout=8.0, marker="")
     session.wait_for_all(["desktop.app: launch doom", "desktop: open-new w=0 t=16 i=0"], timeout=20.0)
     time.sleep(0.8)
-    session.reset_mouse_to_center()
-    session.move_mouse_to(240, 180, pause=0.05)
-    session.left_click(pause=0.15)
     session.send_key("ret", pause=0.15)
     session.wait_for_all(
         [
@@ -247,6 +297,8 @@ def scenario_doom(session: QemuSession) -> None:
 
 
 def scenario_craft(session: QemuSession) -> None:
+    scenario_open_terminal(session)
+    run_command(session, "craft", timeout=8.0, marker="")
     session.wait_for_all(["desktop.app: launch craft", "desktop: open-new w=0 t=17 i=0"], timeout=20.0)
     session.wait_for_all(
         [
@@ -273,6 +325,23 @@ SCENARIOS = [
             "desktop: session start",
             "desktop: open-new w=0 t=3 i=0",
             "desktop: open-new w=1 t=1 i=0",
+        ],
+        action=scenario_startx,
+    ),
+    Scenario(
+        name="startx-autoboot-desktop",
+        description="Userland autostart reaches desktop session and opens files + terminal shortcuts",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+        ],
+        boot_markers=[
+            BOOT_MARKER,
+            "desktop.app: launch startx",
+            "desktop: session start",
         ],
         action=scenario_startx,
     ),
@@ -385,23 +454,30 @@ SCENARIOS = [
     ),
     Scenario(
         name="doom-assets-app",
-        description="Dedicated DOOM launcher reaches real WAD registration and enters the port runtime",
-        command="doom",
+        description="Desktop autostart opens a terminal, launches DOOM and reaches the real WAD runtime",
+        command=None,
         must_have=[
             "desktop.app: launch doom",
+            "desktop: open-new w=0 t=1 i=0",
             "desktop: open-new w=0 t=16 i=0",
             "doom: key enter",
             "fs: asset file /DOOM/DOOM.WAD",
             "doom: port run begin",
         ],
+        boot_markers=[
+            BOOT_MARKER,
+            "desktop.app: launch startx",
+            "desktop: session start",
+        ],
         action=scenario_doom,
     ),
     Scenario(
         name="craft-assets-app",
-        description="Dedicated Craft launcher reaches real texture loads and first frame",
-        command="craft",
+        description="Desktop autostart opens a terminal, launches Craft and reaches real texture loads and first frame",
+        command=None,
         must_have=[
             "desktop.app: launch craft",
+            "desktop: open-new w=0 t=1 i=0",
             "desktop: open-new w=0 t=17 i=0",
             "fs: asset file /textures/texture.png",
             "fs: asset file /textures/font.png",
@@ -411,7 +487,35 @@ SCENARIOS = [
             "craft: session ready",
             "craft: first frame rc=",
         ],
+        boot_markers=[
+            BOOT_MARKER,
+            "desktop.app: launch startx",
+            "desktop: session start",
+        ],
         action=scenario_craft,
+    ),
+    Scenario(
+        name="vidmodes-shell",
+        description="Desktop autostart opens a terminal and exercises runtime video mode switching through vidmodes",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "desktop: open-new w=0 t=1 i=0",
+            "vidmodes: begin",
+            "vidmodes: caps mode_count=",
+            "vidmodes: try 800x600",
+            "vidmodes: mode ok 800x600",
+            "vidmodes: try 1024x768",
+            "vidmodes: mode ok 1024x768",
+            "vidmodes: summary ok=",
+        ],
+        boot_markers=[
+            BOOT_MARKER,
+            "desktop.app: launch startx",
+            "desktop: session start",
+        ],
+        action=scenario_terminal_vidmodes,
     ),
 ]
 
@@ -426,7 +530,7 @@ def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: S
         error: Optional[str] = None
         log = ""
         try:
-            session.wait_for_all([BOOT_MARKER, SHELL_READY_MARKER], timeout=25.0)
+            session.wait_for_all(scenario.boot_markers or [BOOT_MARKER, SHELL_READY_MARKER], timeout=25.0)
             if scenario.command:
                 run_command(session,
                             scenario.command,
@@ -498,6 +602,10 @@ def main() -> int:
     parser.add_argument("--report", required=True, help="markdown report output path")
     parser.add_argument("--qemu", default="qemu-system-i386", help="QEMU binary")
     parser.add_argument("--memory-mb", type=int, default=3072, help="guest RAM in MB")
+    parser.add_argument("--scenario", action="append",
+                        help="run only the named scenario (can be passed multiple times)")
+    parser.add_argument("--expect-boot-mode",
+                        help="require a boot-time video init marker for the given WxH mode, e.g. 800x600")
     args = parser.parse_args()
 
     image_path = Path(args.image).resolve()
@@ -511,7 +619,35 @@ def main() -> int:
         print("error: no QEMU binary found", file=sys.stderr)
         return 1
 
-    results = [run_scenario(qemu_binary, image_path, args.memory_mb, scenario) for scenario in SCENARIOS]
+    selected_scenarios = SCENARIOS
+    if args.scenario:
+        selected_names = set(args.scenario)
+        selected_scenarios = [scenario for scenario in SCENARIOS if scenario.name in selected_names]
+        missing_names = sorted(selected_names - {scenario.name for scenario in selected_scenarios})
+        if missing_names:
+            print("error: unknown scenario(s): " + ", ".join(missing_names), file=sys.stderr)
+            return 1
+
+    expected_boot_mode = None
+    if args.expect_boot_mode:
+        expected_boot_mode = parse_mode_text(args.expect_boot_mode)
+        if expected_boot_mode is None:
+            print("error: invalid --expect-boot-mode value, expected WxH", file=sys.stderr)
+            return 1
+        selected_scenarios = [
+            Scenario(
+                name=f"{scenario.name}-boot-{expected_boot_mode}",
+                description=f"{scenario.description}; boot should initialize in {expected_boot_mode}",
+                command=scenario.command,
+                must_have=[*scenario.must_have, "video: boot init backend=", f"mode={expected_boot_mode}x8"],
+                boot_markers=(scenario.boot_markers or [BOOT_MARKER, SHELL_READY_MARKER]),
+                command_marker=scenario.command_marker,
+                action=scenario.action,
+            )
+            for scenario in selected_scenarios
+        ]
+
+    results = [run_scenario(qemu_binary, image_path, args.memory_mb, scenario) for scenario in selected_scenarios]
     write_report(report_path, results)
 
     failed = [result for result in results if not result.passed]

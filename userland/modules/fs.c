@@ -8,6 +8,7 @@
 #define FS_PERSIST_MAGIC 0x56465331u
 #define FS_PERSIST_VERSION 2u
 #define FS_SECTOR_SIZE 512u
+#define FS_STORAGE_RETRY_COUNT 4u
 #define FS_STORAGE_DATA_START_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
 struct fs_persist_image {
     uint32_t magic;
@@ -38,11 +39,12 @@ static void fs_ensure_wallpaper_registered(void);
 static uint32_t fs_storage_total_sectors(void);
 
 #define DOOM_WAD_IMAGE_LBA 131728u
-#define CRAFT_TEXTURE_IMAGE_LBA 30000u
-#define CRAFT_FONT_IMAGE_LBA 30128u
-#define CRAFT_SKY_IMAGE_LBA 30256u
-#define CRAFT_SIGN_IMAGE_LBA 30416u
-#define WALLPAPER_IMAGE_LBA 30720u
+/* Keep these LBAs aligned with the asset layout in the Makefile. */
+#define CRAFT_TEXTURE_IMAGE_LBA 156304u
+#define CRAFT_FONT_IMAGE_LBA 156432u
+#define CRAFT_SKY_IMAGE_LBA 156560u
+#define CRAFT_SIGN_IMAGE_LBA 156816u
+#define WALLPAPER_IMAGE_LBA 156944u
 
 static void fs_reset_node(int idx) {
     int i;
@@ -90,6 +92,30 @@ static uint32_t fs_read_u32_be(const uint8_t *src) {
          | (uint32_t)src[3];
 }
 
+static int fs_storage_read_sector_verified(uint32_t lba, uint8_t *dst) {
+    uint8_t verify[FS_SECTOR_SIZE];
+
+    if (!dst) {
+        return -1;
+    }
+
+    for (uint32_t attempt = 0u; attempt < FS_STORAGE_RETRY_COUNT; ++attempt) {
+        if (sys_storage_read_sectors(lba, dst, 1u) != 0) {
+            continue;
+        }
+        if (sys_storage_read_sectors(lba, verify, 1u) != 0) {
+            continue;
+        }
+        if (memcmp(dst, verify, FS_SECTOR_SIZE) == 0) {
+            return 0;
+        }
+        sys_sleep();
+        sys_yield();
+    }
+
+    return -1;
+}
+
 static int fs_read_image_bytes(uint32_t lba, uint32_t offset, void *dst, uint32_t size) {
     uint8_t sector[FS_SECTOR_SIZE];
     uint8_t *out = (uint8_t *)dst;
@@ -101,7 +127,7 @@ static int fs_read_image_bytes(uint32_t lba, uint32_t offset, void *dst, uint32_
         if (chunk > size) {
             chunk = size;
         }
-        if (sys_storage_read_sectors(lba + sector_index, sector, 1u) != 0) {
+        if (fs_storage_read_sector_verified(lba + sector_index, sector) != 0) {
             return -1;
         }
         for (uint32_t i = 0; i < chunk; ++i) {
@@ -231,11 +257,13 @@ static void fs_maybe_register_boot_assets_for_path(const char *path) {
     if (fs_path_matches_root_prefix(path, "/textures") && !g_fs_texture_assets_scanned) {
         g_fs_texture_assets_scanned = 1;
         fs_ensure_craft_textures_registered();
+        g_fs_texture_assets_scanned = 0;
     }
 
     if (fs_path_matches_root_prefix(path, "/wallpaper.png") && !g_fs_wallpaper_asset_scanned) {
         g_fs_wallpaper_asset_scanned = 1;
         fs_ensure_wallpaper_registered();
+        g_fs_wallpaper_asset_scanned = 0;
     }
 }
 
@@ -380,6 +408,30 @@ static int fs_detect_png_file(uint32_t lba, uint32_t *sector_count_out, int *siz
         offset += chunk_size;
     }
     return -1;
+}
+
+static int fs_detect_bmp_file(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
+    uint8_t header[54];
+    uint32_t total_size;
+
+    if (!sector_count_out || !size_out) {
+        return -1;
+    }
+    if (fs_read_image_bytes(lba, 0u, header, (uint32_t)sizeof(header)) != 0) {
+        return -1;
+    }
+    if (header[0] != 'B' || header[1] != 'M') {
+        return -1;
+    }
+
+    total_size = fs_read_u32_le(header + 2);
+    if (total_size < sizeof(header)) {
+        return -1;
+    }
+
+    *size_out = (int)total_size;
+    *sector_count_out = (total_size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+    return 0;
 }
 
 static int fs_validate_loaded_tree(void) {
@@ -1128,11 +1180,12 @@ static void fs_ensure_doom_wad_registered(void) {
     }
 }
 
-static void fs_register_png_asset(const char *path, uint32_t lba) {
+static void fs_register_image_asset(const char *path, uint32_t lba) {
     uint32_t sectors = 0u;
     int size = 0;
 
-    if (fs_detect_png_file(lba, &sectors, &size) == 0) {
+    if (fs_detect_png_file(lba, &sectors, &size) == 0 ||
+        fs_detect_bmp_file(lba, &sectors, &size) == 0) {
         (void)fs_register_image_file(path, lba, sectors, size);
         fs_debug_asset_path("fs: asset file ", path);
     }
@@ -1147,10 +1200,10 @@ static void fs_ensure_craft_textures_registered(void) {
         (void)fs_create("/textures", 1);
     }
 
-    fs_register_png_asset("/textures/texture.png", CRAFT_TEXTURE_IMAGE_LBA);
-    fs_register_png_asset("/textures/font.png", CRAFT_FONT_IMAGE_LBA);
-    fs_register_png_asset("/textures/sky.png", CRAFT_SKY_IMAGE_LBA);
-    fs_register_png_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
+    fs_register_image_asset("/textures/texture.png", CRAFT_TEXTURE_IMAGE_LBA);
+    fs_register_image_asset("/textures/font.png", CRAFT_FONT_IMAGE_LBA);
+    fs_register_image_asset("/textures/sky.png", CRAFT_SKY_IMAGE_LBA);
+    fs_register_image_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
 }
 
 static void fs_ensure_wallpaper_registered(void) {
@@ -1158,7 +1211,7 @@ static void fs_ensure_wallpaper_registered(void) {
         return;
     }
 
-    fs_register_png_asset("/wallpaper.png", WALLPAPER_IMAGE_LBA);
+    fs_register_image_asset("/wallpaper.png", WALLPAPER_IMAGE_LBA);
 }
 
 void fs_build_path(int node, char *out, int max_len) {

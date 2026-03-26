@@ -162,6 +162,24 @@ static char g_launch_editor_path[80];
 static int g_launch_terminal_pending = 0;
 static char g_launch_terminal_command[INPUT_MAX + 1];
 static int g_fm_context_has_wallpaper_action = 0;
+struct app_cycle_request {
+    int active;
+    enum app_type type;
+    uint32_t remaining;
+    uint32_t hold_ticks;
+    uint32_t next_ticks;
+    int window_open;
+};
+static struct app_cycle_request g_app_cycle = {0, APP_NONE, 0u, 0u, 0u, 0};
+struct drag_stress_request {
+    int active;
+    uint32_t remaining_steps;
+    uint32_t hold_ticks;
+    uint32_t next_ticks;
+    uint32_t seed;
+    int open_index;
+};
+static struct drag_stress_request g_drag_stress = {0, 0u, 0u, 0u, 0u, 0};
 struct resolution_option {
     uint16_t width;
     uint16_t height;
@@ -320,6 +338,10 @@ static int raise_window_to_front(int widx, int *focused);
 static int open_imageviewer_window_for_node(int node, int *focused);
 static int open_window_or_focus_existing(enum app_type type, int *focused);
 static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused);
+static int desktop_process_app_cycle(int *focused, uint32_t ticks);
+static int desktop_process_drag_stress(int *focused, uint32_t ticks);
+static void free_window(int widx);
+static void clamp_window_rect(struct rect *r);
 static void append_uint_limited(char *buf, unsigned value, int max_len);
 static void debug_window_event(const char *tag, int widx, enum app_type type, int instance);
 static void clamp_mouse_state(struct mouse_state *mouse);
@@ -1674,6 +1696,30 @@ void desktop_request_open_app(enum app_type type) {
     g_launch_app_type = type;
 }
 
+void desktop_request_cycle_app(enum app_type type, uint32_t iterations, uint32_t hold_ticks) {
+    if (!app_type_valid(type) || iterations == 0u || hold_ticks == 0u) {
+        return;
+    }
+    g_app_cycle.active = 1;
+    g_app_cycle.type = type;
+    g_app_cycle.remaining = iterations;
+    g_app_cycle.hold_ticks = hold_ticks;
+    g_app_cycle.next_ticks = 0u;
+    g_app_cycle.window_open = 0;
+}
+
+void desktop_request_drag_stress(uint32_t steps, uint32_t hold_ticks) {
+    if (steps == 0u || hold_ticks == 0u) {
+        return;
+    }
+    g_drag_stress.active = 1;
+    g_drag_stress.remaining_steps = steps;
+    g_drag_stress.hold_ticks = hold_ticks;
+    g_drag_stress.next_ticks = 0u;
+    g_drag_stress.seed = 0u;
+    g_drag_stress.open_index = 0;
+}
+
 static void desktop_request_open_terminal_command(const char *command) {
     if (!command) {
         return;
@@ -1727,6 +1773,148 @@ static int desktop_process_pending_launches(int *focused) {
     }
 
     return dirty;
+}
+
+static int desktop_process_app_cycle(int *focused, uint32_t ticks) {
+    int idx;
+
+    if (!focused || !g_app_cycle.active) {
+        return 0;
+    }
+    if (g_app_cycle.next_ticks != 0u && (int32_t)(ticks - g_app_cycle.next_ticks) < 0) {
+        return 0;
+    }
+
+    idx = find_window_by_type(g_app_cycle.type);
+    if (!g_app_cycle.window_open) {
+        if (open_window_or_focus_existing(g_app_cycle.type, focused) >= 0) {
+            g_app_cycle.window_open = 1;
+            g_app_cycle.next_ticks = ticks + g_app_cycle.hold_ticks;
+            return 1;
+        }
+        g_app_cycle.active = 0;
+        return 0;
+    }
+
+    if (idx >= 0) {
+        free_window(idx);
+        if (*focused == idx) {
+            *focused = -1;
+        }
+    }
+    g_app_cycle.window_open = 0;
+    if (g_app_cycle.remaining > 0u) {
+        g_app_cycle.remaining -= 1u;
+    }
+    if (g_app_cycle.remaining == 0u) {
+        g_app_cycle.active = 0;
+        g_app_cycle.next_ticks = 0u;
+    } else {
+        g_app_cycle.next_ticks = ticks + g_app_cycle.hold_ticks;
+    }
+    return 1;
+}
+
+static int desktop_process_drag_stress(int *focused, uint32_t ticks) {
+    static const enum app_type preload_apps[] = {
+        APP_TERMINAL,
+        APP_CLOCK,
+        APP_FILEMANAGER,
+        APP_EDITOR,
+        APP_TASKMANAGER,
+        APP_CALCULATOR,
+        APP_IMAGEVIEWER,
+        APP_SKETCHPAD,
+        APP_DOOM,
+        APP_CRAFT,
+        APP_PERSONALIZE,
+        APP_TRASH
+    };
+    int active_indices[MAX_WINDOWS];
+    int active_count = 0;
+    int target_index;
+    struct rect *r;
+    int max_x;
+    int max_y;
+
+    if (!focused || !g_drag_stress.active) {
+        return 0;
+    }
+    if (g_drag_stress.next_ticks != 0u && (int32_t)(ticks - g_drag_stress.next_ticks) < 0) {
+        return 0;
+    }
+
+    if (g_drag_stress.open_index < (int)(sizeof(preload_apps) / sizeof(preload_apps[0]))) {
+        if (open_window_or_focus_existing(preload_apps[g_drag_stress.open_index], focused) >= 0) {
+            g_drag_stress.next_ticks = ticks + g_drag_stress.hold_ticks;
+            g_drag_stress.open_index += 1;
+            return 1;
+        }
+        g_drag_stress.open_index += 1;
+        g_drag_stress.next_ticks = ticks + g_drag_stress.hold_ticks;
+        return 0;
+    }
+
+    for (int i = 0; i < MAX_WINDOWS; ++i) {
+        if (g_windows[i].active && !g_windows[i].minimized) {
+            active_indices[active_count++] = i;
+        }
+    }
+    if (active_count == 0) {
+        g_drag_stress.active = 0;
+        return 0;
+    }
+
+    target_index = active_indices[(int)(g_drag_stress.seed % (uint32_t)active_count)];
+    *focused = raise_window_to_front(target_index, focused);
+    r = &g_windows[*focused].rect;
+    max_x = (int)SCREEN_WIDTH - r->w;
+    max_y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT - r->h;
+    if (max_x < 0) {
+        max_x = 0;
+    }
+    if (max_y < 0) {
+        max_y = 0;
+    }
+
+    switch (g_drag_stress.seed & 3u) {
+    case 0u:
+        r->x = 0;
+        r->y = 0;
+        break;
+    case 1u:
+        r->x = max_x;
+        r->y = 0;
+        break;
+    case 2u:
+        r->x = max_x;
+        r->y = max_y;
+        break;
+    default:
+        r->x = 0;
+        r->y = max_y;
+        break;
+    }
+    if ((g_drag_stress.seed & 1u) != 0u) {
+        r->x = max_x > 0 ? (r->x / 2) + ((int)(g_drag_stress.seed * 23u) % (max_x + 1)) / 2 : 0;
+    }
+    if ((g_drag_stress.seed & 2u) != 0u) {
+        r->y = max_y > 0 ? (r->y / 2) + ((int)(g_drag_stress.seed * 17u) % (max_y + 1)) / 2 : 0;
+    }
+    clamp_window_rect(r);
+    sync_window_instance_rect(*focused);
+
+    g_drag_stress.seed += 1u;
+    if (g_drag_stress.remaining_steps > 0u) {
+        g_drag_stress.remaining_steps -= 1u;
+    }
+    if (g_drag_stress.remaining_steps == 0u) {
+        g_drag_stress.active = 0;
+        g_drag_stress.next_ticks = 0u;
+    } else {
+        g_drag_stress.next_ticks = ticks + g_drag_stress.hold_ticks;
+    }
+    return 1;
 }
 
 static void sync_window_instance_rect(int widx) {
@@ -2180,7 +2368,12 @@ static struct rect personalize_window_resolution_button_rect(const struct rect *
 }
 
 static struct rect personalize_color_picker_rect(void) {
-    struct rect r = {(int)SCREEN_WIDTH / 2 - 98, (int)SCREEN_HEIGHT / 2 - 100, 200, 220};
+    struct rect r = {
+        g_pers.window.x + ((g_pers.window.w - 200) / 2),
+        g_pers.window.y + ((g_pers.window.h - 220) / 2),
+        200,
+        220
+    };
     return r;
 }
 
@@ -2889,6 +3082,7 @@ void desktop_main(void) {
     int running = 1;
 
     ui_init();
+    (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
     sys_write_debug("desktop: session start\n");
     start_button = ui_taskbar_start_button_rect();
     menu_rect = ui_start_menu_rect();
@@ -2926,6 +3120,8 @@ void desktop_main(void) {
         fs_tick();
         dirty |= desktop_process_pending_launches(&focused);
         uint32_t ticks = sys_ticks();
+        dirty |= desktop_process_app_cycle(&focused, ticks);
+        dirty |= desktop_process_drag_stress(&focused, ticks);
         int mouse_event = 0;
         int left_pressed = (mouse.buttons & 0x01u) != 0;
         int right_pressed = (mouse.buttons & 0x02u) != 0;
@@ -4375,7 +4571,7 @@ void desktop_main(void) {
                   g_craft[g_windows[focused].instance].started)) {
                 cursor_draw(mouse.x, mouse.y);
             }
-            sys_present();
+            sys_present_full();
             dirty = 0;
         }
 

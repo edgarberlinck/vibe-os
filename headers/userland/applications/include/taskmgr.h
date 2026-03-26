@@ -27,10 +27,13 @@ struct taskmgr_state {
     struct rect window;
     int selected_tab;
     uint32_t last_refresh_ticks;
+    uint32_t last_video_refresh_ticks;
     uint32_t selected_pid;
     int task_count;
+    int video_bench_valid;
     struct task_snapshot_summary summary;
     struct task_snapshot_entry tasks[TASK_SNAPSHOT_MAX];
+    struct video_bench_info video_bench;
 };
 
 void taskmgr_init_state(struct taskmgr_state *tm);

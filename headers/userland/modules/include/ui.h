@@ -119,6 +119,8 @@ void draw_desktop(const struct mouse_state *mouse,
 void desktop_request_open_editor(const char *path);
 void desktop_request_open_nano(const char *path);
 void desktop_request_open_app(enum app_type type);
+void desktop_request_cycle_app(enum app_type type, uint32_t iterations, uint32_t hold_ticks);
+void desktop_request_drag_stress(uint32_t steps, uint32_t hold_ticks);
 void desktop_main(void);
 
 #endif // UI_H

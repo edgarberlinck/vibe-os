@@ -222,6 +222,7 @@ IMAGE_TOTAL_SECTORS := 524288
 DATA_PARTITION_SECTORS := $(shell echo $$(( $(IMAGE_TOTAL_SECTORS) - $(DATA_PARTITION_START_LBA) )))
 DOOM_WAD_SRC := userland/applications/games/DOOM/DOOM.WAD
 DOOM_WAD_IMAGE_LBA := $(IMAGE_ASSET_START_LBA)
+DOOM_WAD_RESERVED_SECTORS := 24576
 CRAFT_TEXTURE_SRC := userland/applications/games/craft/upstream/textures/texture.png
 CRAFT_FONT_SRC := userland/applications/games/craft/upstream/textures/font.png
 CRAFT_SKY_SRC := userland/applications/games/craft/upstream/textures/sky.png
@@ -234,11 +235,11 @@ BOOTLOADER_BG_SRC := assets/bootloader_background.png
 BOOTLOADER_BG_WIDTH := 192
 BOOTLOADER_BG_HEIGHT := 144
 BOOTLOADER_BG_RESAMPLE := box
-CRAFT_TEXTURE_IMAGE_LBA := 30000
-CRAFT_FONT_IMAGE_LBA := 30128
-CRAFT_SKY_IMAGE_LBA := 30256
-CRAFT_SIGN_IMAGE_LBA := 30416
-WALLPAPER_IMAGE_LBA := 30720
+CRAFT_TEXTURE_IMAGE_LBA := $(shell echo $$(( $(DOOM_WAD_IMAGE_LBA) + $(DOOM_WAD_RESERVED_SECTORS) )))
+CRAFT_FONT_IMAGE_LBA := $(shell echo $$(( $(CRAFT_TEXTURE_IMAGE_LBA) + 128 )))
+CRAFT_SKY_IMAGE_LBA := $(shell echo $$(( $(CRAFT_FONT_IMAGE_LBA) + 128 )))
+CRAFT_SIGN_IMAGE_LBA := $(shell echo $$(( $(CRAFT_SKY_IMAGE_LBA) + 256 )))
+WALLPAPER_IMAGE_LBA := $(shell echo $$(( $(CRAFT_SIGN_IMAGE_LBA) + 128 )))
 IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
 DATA_IMAGE := $(BUILD_DIR)/data-partition.img
 DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.manifest
@@ -246,6 +247,9 @@ BOOT_VOLUME_MANIFEST := $(BUILD_DIR)/boot-volume-layout.txt
 BOOT_POLICY_MANIFEST := $(BUILD_DIR)/boot-policy.txt
 PHASE6_REPORT := $(BUILD_DIR)/phase6-validation.md
 MODULAR_APPS_REPORT := $(BUILD_DIR)/modular-apps-validation.md
+GPU_BACKENDS_REPORT := $(BUILD_DIR)/gpu-backends-report.md
+GPU_BACKENDS_I915_EXPERIMENTAL_REPORT := $(BUILD_DIR)/gpu-backends-i915-experimental-report.md
+GPU_BACKENDS_RECOVERY_REPORT := $(BUILD_DIR)/gpu-backends-recovery-report.md
 CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
 
 # Kernel sources - kernel only, no stage2
@@ -524,6 +528,10 @@ CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pi
 CFLAGS += -Ilang/glibc/include
 CFLAGS += -I$(APP_CATALOG_GENERATED_DIR)
 CFLAGS += -MMD -MP
+INTEL_I915_EXPERIMENTAL_COMMIT ?= 0
+CFLAGS += -DINTEL_I915_EXPERIMENTAL_COMMIT=$(INTEL_I915_EXPERIMENTAL_COMMIT)
+VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL ?= 0
+CFLAGS += -DVIDEO_DRM_TEST_FORCE_HANDOFF_FAIL=$(VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL)
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-multiple-definition
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
@@ -738,8 +746,8 @@ DOOM_APP_BIN := $(BUILD_DIR)/lang/doom.app
 CRAFT_APP_BIN := $(BUILD_DIR)/lang/craft.app
 PERSONALIZE_APP_BIN := $(BUILD_DIR)/lang/personalize.app
 
-DESKTOP_LAUNCHER_HEAP_DEFAULT := 262144u
-DESKTOP_LAUNCHER_HEAP_doom := 2097152u
+DESKTOP_LAUNCHER_HEAP_DEFAULT := 8388608u
+DESKTOP_LAUNCHER_HEAP_doom := 8388608u
 DESKTOP_LAUNCHER_HEAP_craft := 8388608u
 
 SECTORC_APP_BUILD_DIR := $(BUILD_DIR)/lang/sectorc
@@ -936,6 +944,7 @@ $(BUILD_DIR)/userland/applications/games/craft:
 	@true
 $(BUILD_DIR)/userland/applications/games/DOOM:
 	@true
+$(BUILD_DIR)/kernel/drivers/video/video.o: CFLAGS += -msse2
 
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -1388,6 +1397,78 @@ validate-phase6: $(IMAGE)
 
 validate-modular-apps: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-gpu-backends: $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+rebuild-image-for-flagged-gpu-validation:
+	rm -rf $(BUILD_DIR)/kernel $(BUILD_DIR)/userland $(BUILD_DIR)/lang
+	rm -f $(KERNEL_ELF) $(KERNEL_BIN) $(DATA_IMAGE) $(DATA_IMAGE_MANIFEST) $(IMAGE)
+
+validate-gpu-backends-i915-exp:
+	$(MAKE) rebuild-image-for-flagged-gpu-validation
+	$(MAKE) INTEL_I915_EXPERIMENTAL_COMMIT=1 $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --image $(IMAGE) --report $(GPU_BACKENDS_I915_EXPERIMENTAL_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-gpu-backends-recovery:
+	$(MAKE) rebuild-image-for-flagged-gpu-validation
+	$(MAKE) VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL=1 $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --expect-recovery --image $(IMAGE) --report $(GPU_BACKENDS_RECOVERY_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-gpu-boot-800x600:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --expect-boot-mode 800x600 --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-gpu-boot-1024x768:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1024 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --expect-boot-mode 1024x768 --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-gpu-boot-1360x768:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1360 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --expect-boot-mode 1360x768 --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-gpu-boot-1366x768:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1366 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --expect-boot-mode 1366x768 --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-gpu-boot-1920x1080:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1920 -DBOOT_PREFERRED_VIDEO_HEIGHT=1080" $(IMAGE)
+	$(PYTHON) tools/validate_gpu_backends.py --expect-boot-mode 1920x1080 --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-startx-800x600:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --scenario startx-autoboot-desktop --scenario vidmodes-shell --expect-boot-mode 800x600 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-startx-1024x768:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1024 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --scenario startx-autoboot-desktop --scenario vidmodes-shell --expect-boot-mode 1024x768 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-doom-800x600:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --scenario doom-assets-app --expect-boot-mode 800x600 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-doom-1024x768:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1024 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --scenario doom-assets-app --expect-boot-mode 1024x768 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-craft-800x600:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --scenario craft-assets-app --expect-boot-mode 800x600 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-craft-1024x768:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1024 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --scenario craft-assets-app --expect-boot-mode 1024x768 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 debug: $(IMAGE)
 	@echo "QEMU pausado para GDB em tcp::1234. Serial do kernel no terminal."

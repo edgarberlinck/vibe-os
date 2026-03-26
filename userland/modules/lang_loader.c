@@ -69,6 +69,18 @@ static void *lang_memcpy(void *dst, const void *src, uint32_t size) {
     return dst;
 }
 
+static int lang_memcmp(const void *a, const void *b, uint32_t size) {
+    const uint8_t *lhs = (const uint8_t *)a;
+    const uint8_t *rhs = (const uint8_t *)b;
+
+    for (uint32_t i = 0; i < size; ++i) {
+        if (lhs[i] != rhs[i]) {
+            return (int)lhs[i] - (int)rhs[i];
+        }
+    }
+    return 0;
+}
+
 static void lang_memset(void *dst, int value, uint32_t size) {
     uint8_t *out = (uint8_t *)dst;
 
@@ -181,8 +193,30 @@ static int lang_storage_read_retry(uint32_t lba, void *dst, uint32_t sector_coun
         if (sys_storage_read_sectors(lba, dst, sector_count) == 0) {
             return 0;
         }
+        sys_sleep();
         sys_yield();
     }
+    return -1;
+}
+
+static int lang_storage_read_sector_verified(uint32_t lba, void *dst) {
+    uint8_t verify[LANG_SECTOR_SIZE];
+
+    for (int attempt = 0; attempt < LANG_STORAGE_RETRY_COUNT; ++attempt) {
+        if (lang_storage_read_retry(lba, dst, 1u) != 0) {
+            continue;
+        }
+        if (lang_storage_read_retry(lba, verify, 1u) != 0) {
+            continue;
+        }
+        if (lang_memcmp(dst, verify, LANG_SECTOR_SIZE) == 0) {
+            return 0;
+        }
+        sys_write_debug("lang: sector unstable read\n");
+        sys_sleep();
+        sys_yield();
+    }
+
     return -1;
 }
 
@@ -190,9 +224,8 @@ static int lang_storage_read_bytes(uint32_t lba_start, void *dst, uint32_t secto
     uint8_t *out = (uint8_t *)dst;
 
     for (uint32_t i = 0; i < sector_count; ++i) {
-        if (lang_storage_read_retry(lba_start + i,
-                                    out + (i * LANG_SECTOR_SIZE),
-                                    1u) != 0) {
+        if (lang_storage_read_sector_verified(lba_start + i,
+                                              out + (i * LANG_SECTOR_SIZE)) != 0) {
             return -1;
         }
     }
@@ -583,6 +616,7 @@ static int lang_has_runtime_stub(const char *name) {
 
 static int lang_load_directory(struct vibe_appfs_directory *directory) {
     static uint8_t raw_directory[VIBE_APPFS_DIRECTORY_SECTORS * 512u];
+    static uint8_t verify_directory[VIBE_APPFS_DIRECTORY_SECTORS * 512u];
     uint32_t checksum;
     uint32_t computed_checksum;
 
@@ -600,6 +634,23 @@ static int lang_load_directory(struct vibe_appfs_directory *directory) {
                                     raw_directory,
                                     VIBE_APPFS_DIRECTORY_SECTORS) != 0) {
             sys_write_debug("lang: directory read failed\n");
+            sys_sleep();
+            sys_yield();
+            continue;
+        }
+        if (lang_storage_read_bytes(VIBE_APPFS_DIRECTORY_LBA,
+                                    verify_directory,
+                                    VIBE_APPFS_DIRECTORY_SECTORS) != 0) {
+            sys_write_debug("lang: directory verify read failed\n");
+            sys_sleep();
+            sys_yield();
+            continue;
+        }
+        if (lang_memcmp(raw_directory,
+                        verify_directory,
+                        (uint32_t)sizeof(raw_directory)) != 0) {
+            sys_write_debug("lang: directory unstable read\n");
+            sys_sleep();
             sys_yield();
             continue;
         }
@@ -617,6 +668,7 @@ static int lang_load_directory(struct vibe_appfs_directory *directory) {
                 sys_write_debug("lang: directory looks zeroed\n");
             }
             sys_write_debug("lang: directory header invalid\n");
+            sys_sleep();
             sys_yield();
             continue;
         }
@@ -628,6 +680,7 @@ static int lang_load_directory(struct vibe_appfs_directory *directory) {
         if (checksum != computed_checksum) {
             directory->checksum = checksum;
             sys_write_debug("lang: directory checksum mismatch\n");
+            sys_sleep();
             sys_yield();
             continue;
         }

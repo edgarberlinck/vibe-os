@@ -5,6 +5,49 @@
 static const struct rect DEFAULT_TASKMGR_WINDOW = {30, 30, 580, 360};
 static const int TASKMGR_ROW_HEIGHT = 18;
 static const int TASKMGR_REFRESH_TICKS = 25;
+static const uint32_t TASKMGR_VIDEO_REFRESH_TICKS = 250u;
+
+static const char *taskmgr_video_backend_label(uint32_t backend_kind) {
+    switch (backend_kind) {
+    case VIDEO_BACKEND_LEGACY_LFB: return "legacy_lfb";
+    case VIDEO_BACKEND_FAST_LFB: return "fast_lfb";
+    default: return "none";
+    }
+}
+
+static const char *taskmgr_video_native_label(uint32_t native_backend_kind) {
+    switch (native_backend_kind) {
+    case VIDEO_NATIVE_BACKEND_I915: return "Intel i915";
+    case VIDEO_NATIVE_BACKEND_RADEON: return "AMD Radeon";
+    case VIDEO_NATIVE_BACKEND_NOUVEAU: return "NVIDIA nouveau";
+    case VIDEO_NATIVE_BACKEND_BGA: return "Bochs/BGA";
+    case VIDEO_NATIVE_BACKEND_UNKNOWN: return "Nativo desconhecido";
+    case VIDEO_NATIVE_BACKEND_NONE:
+    default: return "Fallback BIOS/VBE";
+    }
+}
+
+static const char *taskmgr_video_display_label(const struct video_bench_info *bench) {
+    if (bench == 0) {
+        return "indisponivel";
+    }
+    if (bench->native_backend_kind != VIDEO_NATIVE_BACKEND_NONE) {
+        return taskmgr_video_native_label(bench->native_backend_kind);
+    }
+    if (bench->detected_native_backend_kind != VIDEO_NATIVE_BACKEND_NONE) {
+        return taskmgr_video_native_label(bench->detected_native_backend_kind);
+    }
+    return "Fallback BIOS/VBE";
+}
+
+static const char *taskmgr_video_present_label(uint32_t present_copy_kind) {
+    switch (present_copy_kind) {
+    case VIDEO_PRESENT_COPY_MOVNTDQ: return "MOVNTDQ";
+    case VIDEO_PRESENT_COPY_REP_MOVSD: return "rep movsd";
+    case VIDEO_PRESENT_COPY_BYTE_LOOP:
+    default: return "byte loop";
+    }
+}
 
 static void append_uint(char *buf, unsigned v, int max_len) {
     char tmp[12];
@@ -37,6 +80,56 @@ static void append_int(char *buf, int v, int max_len) {
     } else {
         append_uint(buf, (unsigned)v, max_len);
     }
+}
+
+static void append_hex_fixed(char *buf, unsigned value, int digits, int max_len) {
+    static const char hex[] = "0123456789ABCDEF";
+    char tmp[9];
+
+    if (digits <= 0) {
+        return;
+    }
+    if (digits > 8) {
+        digits = 8;
+    }
+    for (int i = 0; i < digits; ++i) {
+        int shift = (digits - 1 - i) * 4;
+        tmp[i] = hex[(value >> shift) & 0xFu];
+    }
+    tmp[digits] = '\0';
+    str_append(buf, tmp, max_len);
+}
+
+static void taskmgr_append_video_pci_label(char *buf,
+                                           int max_len,
+                                           const struct video_bench_info *bench) {
+    uint32_t vendor_id;
+    uint32_t device_id;
+    uint32_t revision;
+
+    if (buf == 0 || bench == 0) {
+        return;
+    }
+
+    vendor_id = bench->gpu_vendor_id;
+    device_id = bench->gpu_device_id;
+    revision = bench->gpu_revision;
+    if (vendor_id == 0u && device_id == 0u) {
+        vendor_id = bench->detected_gpu_vendor_id;
+        device_id = bench->detected_gpu_device_id;
+        revision = bench->detected_gpu_revision;
+    }
+    if (vendor_id == 0u && device_id == 0u) {
+        str_append(buf, "PCI n/d", max_len);
+        return;
+    }
+
+    str_append(buf, "PCI 0x", max_len);
+    append_hex_fixed(buf, vendor_id, 4, max_len);
+    str_append(buf, ":", max_len);
+    append_hex_fixed(buf, device_id, 4, max_len);
+    str_append(buf, " rev 0x", max_len);
+    append_hex_fixed(buf, revision, 2, max_len);
 }
 
 static const char *taskmgr_window_label(enum app_type type) {
@@ -112,12 +205,27 @@ static void taskmgr_refresh(struct taskmgr_state *tm, uint32_t ticks) {
     tm->last_refresh_ticks = ticks;
 }
 
+static void taskmgr_refresh_video_bench(struct taskmgr_state *tm, uint32_t ticks) {
+    if (tm == 0) {
+        return;
+    }
+    if (tm->last_video_refresh_ticks != 0u &&
+        (ticks - tm->last_video_refresh_ticks) < TASKMGR_VIDEO_REFRESH_TICKS) {
+        return;
+    }
+
+    tm->video_bench_valid = (sys_gfx_bench(&tm->video_bench) == 0);
+    tm->last_video_refresh_ticks = ticks;
+}
+
 void taskmgr_init_state(struct taskmgr_state *tm) {
     tm->window = DEFAULT_TASKMGR_WINDOW;
     tm->selected_tab = TASKMGR_TAB_PROCESSES;
     tm->last_refresh_ticks = 0u;
+    tm->last_video_refresh_ticks = 0u;
     tm->selected_pid = 0u;
     tm->task_count = 0;
+    tm->video_bench_valid = 0;
 }
 
 static struct rect taskmgr_sidebar_rect(const struct taskmgr_state *tm) {
@@ -246,10 +354,11 @@ static void taskmgr_draw_performance_card(const struct rect *card,
 static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect content = taskmgr_content_rect(tm);
-    struct rect cards[4];
+    struct rect cards[6];
     char value[64];
     char detail[96];
 
+    taskmgr_refresh_video_bench(tm, tm->last_refresh_ticks);
     taskmgr_draw_header(&content, theme, "Desempenho", "Visao geral do kernel e do escalonador");
 
     cards[0].x = content.x + 8;
@@ -268,6 +377,14 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
     cards[3].y = cards[2].y;
     cards[3].w = cards[1].w;
     cards[3].h = cards[1].h;
+    cards[4].x = cards[0].x;
+    cards[4].y = cards[2].y + 54;
+    cards[4].w = cards[0].w;
+    cards[4].h = cards[0].h;
+    cards[5].x = cards[1].x;
+    cards[5].y = cards[4].y;
+    cards[5].w = cards[1].w;
+    cards[5].h = cards[1].h;
 
     value[0] = '\0';
     append_uint(value, tm->summary.cpu_count, (int)sizeof(value));
@@ -300,18 +417,60 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
     str_append(detail, " KiB", (int)sizeof(detail));
     taskmgr_draw_performance_card(&cards[3], "Heap do Kernel", value, detail);
 
+    if (tm->video_bench_valid) {
+        str_copy_limited(value,
+                         taskmgr_video_display_label(&tm->video_bench),
+                         (int)sizeof(value));
+        detail[0] = '\0';
+        str_append(detail, taskmgr_video_backend_label(tm->video_bench.backend_kind), (int)sizeof(detail));
+        if (tm->video_bench.native_backend_kind == VIDEO_NATIVE_BACKEND_NONE &&
+            tm->video_bench.detected_native_backend_kind != VIDEO_NATIVE_BACKEND_NONE) {
+            str_append(detail, "  detectado", (int)sizeof(detail));
+        } else if (tm->video_bench.native_backend_kind != VIDEO_NATIVE_BACKEND_NONE) {
+            str_append(detail, "  ativo", (int)sizeof(detail));
+        }
+        str_append(detail, "  ", (int)sizeof(detail));
+        taskmgr_append_video_pci_label(detail, (int)sizeof(detail), &tm->video_bench);
+        str_append(detail, "  ", (int)sizeof(detail));
+        append_uint(detail, tm->video_bench.active_width, (int)sizeof(detail));
+        str_append(detail, "x", (int)sizeof(detail));
+        append_uint(detail, tm->video_bench.active_height, (int)sizeof(detail));
+        taskmgr_draw_performance_card(&cards[4], "Driver de Video", value, detail);
+
+        str_copy_limited(value,
+                         taskmgr_video_present_label(tm->video_bench.present_copy_kind),
+                         (int)sizeof(value));
+        str_copy_limited(detail, "pitch ", (int)sizeof(detail));
+        append_uint(detail, tm->video_bench.active_pitch, (int)sizeof(detail));
+        str_append(detail, "  WC ", (int)sizeof(detail));
+        append_uint(detail, tm->video_bench.wc_enabled, (int)sizeof(detail));
+        str_append(detail, "  PAT ", (int)sizeof(detail));
+        append_uint(detail, tm->video_bench.cpu_has_pat, (int)sizeof(detail));
+        taskmgr_draw_performance_card(&cards[5], "Present / Scanout", value, detail);
+    } else {
+        str_copy_limited(value, "indisponivel", (int)sizeof(value));
+        str_copy_limited(detail, "sys_gfx_bench falhou", (int)sizeof(detail));
+        taskmgr_draw_performance_card(&cards[4], "Driver de Video", value, detail);
+        taskmgr_draw_performance_card(&cards[5], "Present / Scanout", value, detail);
+    }
+
     value[0] = '\0';
     str_copy_limited(value, "Tempo ativo ", (int)sizeof(value));
     append_uint(value, tm->summary.uptime_ticks / 100u, (int)sizeof(value));
     str_append(value, "s", (int)sizeof(value));
-    sys_text(content.x + 12, content.y + 160, theme->text, value);
+    sys_text(content.x + 12, content.y + 214, theme->text, value);
 
     detail[0] = '\0';
     str_copy_limited(detail, "PID atual ", (int)sizeof(detail));
     append_uint(detail, tm->summary.current_pid, (int)sizeof(detail));
     str_append(detail, "  bloqueados ", (int)sizeof(detail));
     append_uint(detail, tm->summary.blocked_tasks, (int)sizeof(detail));
-    sys_text(content.x + 12, content.y + 172, ui_color_muted(), detail);
+    if (tm->video_bench_valid) {
+        str_append(detail, "  frame ", (int)sizeof(detail));
+        append_uint(detail, tm->video_bench.frame_ticks, (int)sizeof(detail));
+        str_append(detail, "t", (int)sizeof(detail));
+    }
+    sys_text(content.x + 12, content.y + 226, ui_color_muted(), detail);
 }
 
 static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {

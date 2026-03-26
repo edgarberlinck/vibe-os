@@ -25,8 +25,7 @@ void craft_gl_blit_to(int x, int y);
 static unsigned int g_craft_runner_rng_state = 1u;
 
 static void craft_debug_stage(const char *message) {
-    sys_write_debug(message);
-    sys_write_debug("\n");
+    (void)message;
 }
 
 static void *craft_runner_calloc(size_t count, size_t size) {

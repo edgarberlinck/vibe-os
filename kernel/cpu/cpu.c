@@ -44,9 +44,12 @@ struct mp_processor_entry {
 } __attribute__((packed));
 
 static struct kernel_cpu_topology g_cpu_topology = {
-    1u, 0u, 0u, 0u, 1u, 1u, 0u, "unknown"
+    1u, 0u, 0u, 0u, 1u, 1u, 0u, 0u, 0u, 0u, "unknown"
 };
 static struct kernel_cpu_state g_cpu_states[32];
+static uint32_t g_cpu_has_pat = 0u;
+static uint32_t g_cpu_has_sse2 = 0u;
+static uint32_t g_cpu_sse_enabled = 0u;
 
 static int cpu_has_cpuid(void) {
     uint32_t before;
@@ -85,6 +88,28 @@ static void cpu_cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx
     if (ebx) *ebx = b;
     if (ecx) *ecx = c;
     if (edx) *edx = d;
+}
+
+static void cpu_try_enable_sse(void) {
+    uint32_t cr0;
+    uint32_t cr4;
+
+    if (!g_cpu_has_sse2) {
+        return;
+    }
+
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1u << 2); /* EM */
+    cr0 |= (1u << 1);  /* MP */
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1u << 9);  /* OSFXSR */
+    cr4 |= (1u << 10); /* OSXMMEXCPT */
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+
+    __asm__ volatile("fninit");
+    g_cpu_sse_enabled = 1u;
 }
 
 static uint8_t cpu_checksum_ok(const void *ptr, size_t len) {
@@ -223,6 +248,9 @@ void cpu_init(void) {
     g_cpu_topology.cpuid_supported = cpu_has_cpuid() ? 1u : 0u;
     g_cpu_topology.cpuid_logical_cpus = 1u;
     g_cpu_topology.cpuid_core_cpus = 1u;
+    g_cpu_topology.cpuid_family = 0u;
+    g_cpu_topology.cpuid_model = 0u;
+    g_cpu_topology.cpuid_stepping = 0u;
     g_cpu_topology.mp_table_present = 0u;
     g_cpu_topology.vendor[0] = 'u';
     g_cpu_topology.vendor[1] = 'n';
@@ -247,9 +275,29 @@ void cpu_init(void) {
         g_cpu_topology.vendor[12] = '\0';
 
         if (eax >= 1u) {
+            uint32_t base_family;
+            uint32_t base_model;
+            uint32_t ext_family;
+            uint32_t ext_model;
+
             cpu_cpuid(1u, &eax, &ebx, &ecx, &edx);
             g_cpu_topology.apic_supported = ((edx & (1u << 9)) != 0u) ? 1u : 0u;
             g_cpu_topology.cpuid_logical_cpus = (ebx >> 16) & 0xFFu;
+            g_cpu_has_pat = ((edx >> 16) & 0x1u);
+            g_cpu_has_sse2 = ((edx >> 26) & 0x1u);
+            base_family = (eax >> 8) & 0xFu;
+            base_model = (eax >> 4) & 0xFu;
+            ext_family = (eax >> 20) & 0xFFu;
+            ext_model = (eax >> 16) & 0xFu;
+            g_cpu_topology.cpuid_stepping = eax & 0xFu;
+            g_cpu_topology.cpuid_family = base_family;
+            if (base_family == 0xFu) {
+                g_cpu_topology.cpuid_family += ext_family;
+            }
+            g_cpu_topology.cpuid_model = base_model;
+            if (base_family == 0x6u || base_family == 0xFu) {
+                g_cpu_topology.cpuid_model |= (ext_model << 4);
+            }
             if (g_cpu_topology.cpuid_logical_cpus == 0u) {
                 g_cpu_topology.cpuid_logical_cpus = 1u;
             }
@@ -275,6 +323,8 @@ void cpu_init(void) {
         }
     }
 
+    cpu_try_enable_sse();
+
     mp_cpu_count = cpu_detect_from_mp_table(&boot_cpu_id);
     if (mp_cpu_count > 0u) {
         g_cpu_topology.cpu_count = mp_cpu_count;
@@ -295,9 +345,12 @@ void cpu_init(void) {
         g_cpu_states[i].is_boot_cpu = 0u;
     }
 
-    kernel_debug_printf("cpu: vendor=%s cpuid=%d apic=%d logical=%d cores=%d detected=%d bsp=%d mp=%d\n",
+    kernel_debug_printf("cpu: vendor=%s cpuid=%d family=%d model=%d stepping=%d apic=%d logical=%d cores=%d detected=%d bsp=%d mp=%d\n",
                         g_cpu_topology.vendor,
                         (int)g_cpu_topology.cpuid_supported,
+                        (int)g_cpu_topology.cpuid_family,
+                        (int)g_cpu_topology.cpuid_model,
+                        (int)g_cpu_topology.cpuid_stepping,
                         (int)g_cpu_topology.apic_supported,
                         (int)g_cpu_topology.cpuid_logical_cpus,
                         (int)g_cpu_topology.cpuid_core_cpus,
@@ -309,6 +362,10 @@ void cpu_init(void) {
     } else if (g_cpu_topology.cpu_count > 1u) {
         kernel_debug_puts("cpu: MP table detected; LAPIC/SMP bring-up allowed\n");
     }
+    kernel_debug_printf("cpu: pat=%d sse2=%d sse=%d\n",
+                        (int)g_cpu_has_pat,
+                        (int)g_cpu_has_sse2,
+                        (int)g_cpu_sse_enabled);
 }
 
 void gdt_init(void) {
@@ -360,4 +417,16 @@ int kernel_cpu_mark_started(uint32_t apic_id) {
         }
     }
     return -1;
+}
+
+int kernel_cpu_has_pat(void) {
+    return g_cpu_has_pat != 0u;
+}
+
+int kernel_cpu_has_sse2(void) {
+    return g_cpu_has_sse2 != 0u;
+}
+
+int kernel_cpu_sse_enabled(void) {
+    return g_cpu_sse_enabled != 0u;
 }

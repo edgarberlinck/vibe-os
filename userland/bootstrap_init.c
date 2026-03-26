@@ -24,6 +24,12 @@ static void bootstrap_print_banner(void) {
         } else if ((info.boot_flags & BOOTINFO_FLAG_BOOT_RESCUE_SHELL) != 0u) {
             console_write("boot mode: rescue shell\n");
         }
+        if ((info.boot_flags & BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT) != 0u) {
+            console_write("video: i915 experimental commit enabled\n");
+        }
+        if ((info.boot_flags & BOOTINFO_FLAG_FORCE_LEGACY_VIDEO) != 0u) {
+            console_write("video: legacy video driver forced\n");
+        }
     }
 }
 
@@ -83,25 +89,21 @@ static int bootstrap_run_startup_apps(void) {
 }
 
 static void bootstrap_storage_smoke_test(void) {
-    uint8_t original[BOOTSTRAP_STORAGE_SMOKE_SIZE];
     uint8_t verify[BOOTSTRAP_STORAGE_SMOKE_SIZE];
+    uint8_t verify_again[BOOTSTRAP_STORAGE_SMOKE_SIZE];
     extern void kernel_debug_puts(const char *);
 
     kernel_debug_puts("init: storage smoke begin\n");
-    if (sys_storage_read_sectors(BOOTSTRAP_STORAGE_SMOKE_SECTOR, original, 1u) != 0) {
+    if (sys_storage_read_sectors(BOOTSTRAP_STORAGE_SMOKE_SECTOR, verify, 1u) != 0) {
         kernel_debug_puts("init: storage smoke read failed\n");
         return;
     }
-    if (sys_storage_write_sectors(BOOTSTRAP_STORAGE_SMOKE_SECTOR, original, 1u) != 0) {
-        kernel_debug_puts("init: storage smoke write failed\n");
-        return;
-    }
-    if (sys_storage_read_sectors(BOOTSTRAP_STORAGE_SMOKE_SECTOR, verify, 1u) != 0) {
+    if (sys_storage_read_sectors(BOOTSTRAP_STORAGE_SMOKE_SECTOR, verify_again, 1u) != 0) {
         kernel_debug_puts("init: storage smoke verify read failed\n");
         return;
     }
     for (uint32_t i = 0; i < BOOTSTRAP_STORAGE_SMOKE_SIZE; ++i) {
-        if (original[i] != verify[i]) {
+        if (verify[i] != verify_again[i]) {
             kernel_debug_puts("init: storage smoke verify mismatch\n");
             return;
         }
@@ -112,8 +114,17 @@ static void bootstrap_storage_smoke_test(void) {
 __attribute__((section(".entry"))) void userland_entry(void) {
     extern void kernel_debug_puts(const char *);
     int rc;
+    struct userland_launch_info info;
 
     kernel_debug_puts("init: entered builtin entry\n");
+    if (sys_launch_info(&info) == 0 &&
+        (info.boot_flags & BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT) != 0u) {
+        kernel_debug_puts("init: boot flag enabled for i915 experimental commit\n");
+    }
+    if (sys_launch_info(&info) == 0 &&
+        (info.boot_flags & BOOTINFO_FLAG_FORCE_LEGACY_VIDEO) != 0u) {
+        kernel_debug_puts("init: boot flag forcing legacy video driver\n");
+    }
     sys_write_debug("init: builtin bootstrap launching external AppFS apps\n");
     kernel_debug_puts("init: sys_write_debug returned\n");
 

@@ -30,7 +30,23 @@ void sys_text(int x, int y, uint8_t color, const char *text) {
 }
 
 void sys_present(void) {
-    (void)syscall5(SYSCALL_GFX_FLIP, 0, 0, 0, 0, 0);
+    (void)syscall5(SYSCALL_GFX_FLIP, VIDEO_PRESENT_AUTO, 0, 0, 0, 0);
+}
+
+void sys_present_dirty(void) {
+    (void)syscall5(SYSCALL_GFX_FLIP, VIDEO_PRESENT_DIRTY, 0, 0, 0, 0);
+}
+
+void sys_present_full(void) {
+    (void)syscall5(SYSCALL_GFX_FLIP, VIDEO_PRESENT_FULL, 0, 0, 0, 0);
+}
+
+int sys_gfx_set_present_policy(uint32_t policy) {
+    return syscall5(SYSCALL_GFX_SET_PRESENT_POLICY, (int)policy, 0, 0, 0, 0);
+}
+
+int sys_gfx_set_present_copy_override(uint32_t kind) {
+    return syscall5(SYSCALL_GFX_SET_PRESENT_COPY_OVERRIDE, (int)kind, 0, 0, 0, 0);
 }
 
 void sys_leave_graphics(void) {
@@ -59,11 +75,33 @@ void sys_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_
                    scale);
 }
 
+void sys_gfx_blit8_present(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale) {
+    int packed_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
+    (void)syscall5(SYSCALL_GFX_BLIT8_PRESENT,
+                   (int)(uintptr_t)src,
+                   packed_wh,
+                   dst_x,
+                   dst_y,
+                   scale);
+}
+
 void sys_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
                            int dst_x, int dst_y, int dst_w, int dst_h) {
     int packed_src_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
     int packed_dst_wh = ((dst_h & 0xFFFF) << 16) | (dst_w & 0xFFFF);
     (void)syscall5(SYSCALL_GFX_BLIT8_STRETCH,
+                   (int)(uintptr_t)src,
+                   packed_src_wh,
+                   dst_x,
+                   dst_y,
+                   packed_dst_wh);
+}
+
+void sys_gfx_blit8_stretch_present(const uint8_t *src, int src_w, int src_h,
+                                   int dst_x, int dst_y, int dst_w, int dst_h) {
+    int packed_src_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
+    int packed_dst_wh = ((dst_h & 0xFFFF) << 16) | (dst_w & 0xFFFF);
+    (void)syscall5(SYSCALL_GFX_BLIT8_STRETCH_PRESENT,
                    (int)(uintptr_t)src,
                    packed_src_wh,
                    dst_x,
@@ -161,6 +199,10 @@ int sys_gfx_info(struct video_mode *mode) {
 
 int sys_gfx_caps(struct video_capabilities *caps) {
     return syscall5(SYSCALL_GFX_CAPS, (int)(uintptr_t)caps, 0, 0, 0, 0);
+}
+
+int sys_gfx_bench(struct video_bench_info *bench) {
+    return syscall5(SYSCALL_GFX_BENCH, (int)(uintptr_t)bench, 0, 0, 0, 0);
 }
 
 int sys_getpid(void) {

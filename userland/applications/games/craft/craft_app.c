@@ -3,8 +3,8 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
 
-#define CRAFT_EMBED_MAX_WIDTH 640
-#define CRAFT_EMBED_MAX_HEIGHT 480
+#define CRAFT_EMBED_MAX_WIDTH 480
+#define CRAFT_EMBED_MAX_HEIGHT 360
 #define CRAFT_WINDOW_CHROME_W 8
 #define CRAFT_WINDOW_CHROME_H 22
 #define CRAFT_WINDOW_MARGIN 16

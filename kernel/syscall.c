@@ -55,8 +55,22 @@ static uint32_t sys_gfx_text(uint32_t x, uint32_t y, uint32_t text_ptr,
 
 static uint32_t sys_gfx_flip(uint32_t a, uint32_t b, uint32_t c,
                              uint32_t d, uint32_t e) {
-    (void)a; (void)b; (void)c; (void)d; (void)e;
-    kernel_video_flip();
+    (void)b; (void)c; (void)d; (void)e;
+    kernel_video_flip_mode(a);
+    return 0u;
+}
+
+static uint32_t sys_gfx_set_present_policy(uint32_t policy, uint32_t b, uint32_t c,
+                                           uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    kernel_video_set_present_policy(policy);
+    return 0u;
+}
+
+static uint32_t sys_gfx_set_present_copy_override(uint32_t kind, uint32_t b, uint32_t c,
+                                                  uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    kernel_video_set_present_copy_override(kind);
     return 0u;
 }
 
@@ -75,6 +89,24 @@ static uint32_t sys_gfx_blit8(uint32_t src_ptr, uint32_t packed_wh, uint32_t dst
                      (int)dst_x,
                      (int)dst_y,
                      (int)scale);
+    return 0u;
+}
+
+static uint32_t sys_gfx_blit8_present(uint32_t src_ptr, uint32_t packed_wh, uint32_t dst_x,
+                                      uint32_t dst_y, uint32_t scale) {
+    int src_w = (int)(packed_wh & 0xFFFFu);
+    int src_h = (int)((packed_wh >> 16) & 0xFFFFu);
+
+    if (src_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    kernel_gfx_blit8_present((const uint8_t *)(uintptr_t)src_ptr,
+                             src_w,
+                             src_h,
+                             (int)dst_x,
+                             (int)dst_y,
+                             (int)scale);
     return 0u;
 }
 
@@ -97,6 +129,28 @@ static uint32_t sys_gfx_blit8_stretch(uint32_t src_ptr, uint32_t packed_src_wh,
                              (int)dst_y,
                              dst_w,
                              dst_h);
+    return 0u;
+}
+
+static uint32_t sys_gfx_blit8_stretch_present(uint32_t src_ptr, uint32_t packed_src_wh,
+                                              uint32_t dst_x, uint32_t dst_y,
+                                              uint32_t packed_dst_wh) {
+    int src_w = (int)(packed_src_wh & 0xFFFFu);
+    int src_h = (int)((packed_src_wh >> 16) & 0xFFFFu);
+    int dst_w = (int)(packed_dst_wh & 0xFFFFu);
+    int dst_h = (int)((packed_dst_wh >> 16) & 0xFFFFu);
+
+    if (src_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    kernel_gfx_blit8_stretch_present((const uint8_t *)(uintptr_t)src_ptr,
+                                     src_w,
+                                     src_h,
+                                     (int)dst_x,
+                                     (int)dst_y,
+                                     dst_w,
+                                     dst_h);
     return 0u;
 }
 
@@ -327,6 +381,19 @@ static uint32_t sys_gfx_caps(uint32_t out_ptr, uint32_t b, uint32_t c,
     return 0u;
 }
 
+static uint32_t sys_gfx_bench(uint32_t out_ptr, uint32_t b, uint32_t c,
+                              uint32_t d, uint32_t e) {
+    struct video_bench_info *out;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (out_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    out = (struct video_bench_info *)(uintptr_t)out_ptr;
+    kernel_video_get_benchmarks(out);
+    return 0u;
+}
+
 static uint32_t sys_keyboard_set_layout(uint32_t name_ptr, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
     return (uint32_t)mk_input_service_set_layout((const char*)(uintptr_t)name_ptr);
@@ -489,8 +556,12 @@ void syscall_init(void) {
     syscall_table[SYSCALL_GFX_RECT] = sys_gfx_rect;
     syscall_table[SYSCALL_GFX_TEXT] = sys_gfx_text;
     syscall_table[SYSCALL_GFX_FLIP] = sys_gfx_flip;
+    syscall_table[SYSCALL_GFX_SET_PRESENT_POLICY] = sys_gfx_set_present_policy;
+    syscall_table[SYSCALL_GFX_SET_PRESENT_COPY_OVERRIDE] = sys_gfx_set_present_copy_override;
     syscall_table[SYSCALL_GFX_BLIT8] = sys_gfx_blit8;
+    syscall_table[SYSCALL_GFX_BLIT8_PRESENT] = sys_gfx_blit8_present;
     syscall_table[SYSCALL_GFX_BLIT8_STRETCH] = sys_gfx_blit8_stretch;
+    syscall_table[SYSCALL_GFX_BLIT8_STRETCH_PRESENT] = sys_gfx_blit8_stretch_present;
     syscall_table[SYSCALL_GFX_LEAVE] = sys_gfx_leave;
     syscall_table[SYSCALL_GFX_SET_MODE] = sys_gfx_set_mode;
     syscall_table[SYSCALL_GFX_SET_PALETTE] = sys_gfx_set_palette;
@@ -517,6 +588,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_TIME_TICKS] = sys_time_ticks;
     syscall_table[SYSCALL_GFX_INFO] = sys_gfx_info;
     syscall_table[SYSCALL_GFX_CAPS] = sys_gfx_caps;
+    syscall_table[SYSCALL_GFX_BENCH] = sys_gfx_bench;
     syscall_table[SYSCALL_GETPID] = sys_getpid;
     syscall_table[SYSCALL_LAUNCH_INFO] = sys_launch_info;
     syscall_table[SYSCALL_YIELD] = sys_yield;
