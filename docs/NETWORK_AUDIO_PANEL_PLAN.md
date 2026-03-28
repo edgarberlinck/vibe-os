@@ -8,16 +8,16 @@ Adicionar ao desktop do VibeOS dois applets no lado direito do painel:
 
 - um applet de rede, antes do som, para listar redes Wi-Fi, pedir senha, conectar e mostrar estado da interface
 - um applet de som, na extrema direita, para listar entradas/saidas de audio e controlar o volume de cada uma
-- o port completo de `userland/applications/network/vibe-browser` como aplicacao de desktop e navegador padrao do sistema
-- o port completo de `userland/applications/network/vibe-browser` como aplicacao de desktop e navegador padrao do sistema
-- deve mostrar na aba desempenho do gerenciador de tarefas o driver de som e o driver de rede detectados assim como ja é feito com a gpu
--deve se criar sprites para os applets de som e network no painel ao inves de usar letras
+- o `vibe-browser` continua importado no repo, mas ainda nao esta integrado ao desktop/AppFS
+- deve mostrar na aba desempenho do gerenciador de tarefas o driver de som e o driver de rede detectados assim como ja e feito com a gpu
+- deve se criar sprites para os applets de som e network no painel ao inves de usar letras
 O plano prioriza reaproveitar ao maximo o que ja existe em `compat/` e no microkernel atual, em vez de criar APIs totalmente novas.
 - usar o novo sistema de som para tentar reproduzir assets/vibe_os_boot.wav no bootloader uma unica vez, caso falhe na execução isso não deve impactar o boot.
 - o mesmo vale para assets/vibe_os_desktop.wav que deve reproduzir uma unica vez ao carregar o startx. caso falhe tambem não deve travar a area de trabalho
 ## Resumo executivo
 
-Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois itens nao estao no mesmo estagio:
+Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois itens nao estao no mesmo estagio.
+Hoje a verdade dura e simples e esta: a rede segue em MVP sintético de control-plane e o navegador ainda nao virou app desktop/AppFS de verdade.
 
 - Som:
   - ha um caminho claro e incremental
@@ -26,13 +26,13 @@ Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois it
   - o applet de painel e o painel de volume sao viaveis cedo, mesmo com backend inicial simples
 
 - Rede:
-  - o servico `network` tambem existe, mas ainda esta em `query-only`
+  - o servico `network` tambem existe, mas ainda esta em `query-only` e segue sustentado por estado sintético, nao por driver compat real
   - para DHCP e DNS ha muito reuso pronto em `compat`
   - para Wi-Fi real ainda faltam partes de stack e driver/control-plane 802.11
   - o equivalente a "NetworkManager" no VibeOS deve nascer como um daemon proprio e fino, reaproveitando `ifconfig`, `dhcpleased` e `unwind`, nao como um port literal do NetworkManager do Linux
 
 - Navegador:
-  - o `vibe-browser` ja esta no repo, mas ainda nao esta integrado ao desktop do VibeOS
+  - o `vibe-browser` ja esta no repo, mas ainda nao esta integrado ao desktop/AppFS do VibeOS
   - ele vira uma fase propria do projeto, dependente da stack de rede, DNS, downloads e UX de desktop
 
 ## Checklist de progresso
