@@ -63,6 +63,20 @@ static const char *taskmgr_audio_display_label(const struct mk_audio_info *info)
     return "desconhecido";
 }
 
+static int taskmgr_audio_usb_attach_ready(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0;
+    }
+    return (info->parameters._spare[5] & 0x20000u) != 0u;
+}
+
+static int taskmgr_audio_usb_attached_ready(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0;
+    }
+    return (info->parameters._spare[5] & 0x40000u) != 0u;
+}
+
 static int taskmgr_audio_output_count(const struct mk_audio_info *info) {
     if (info == 0) {
         return 0;
@@ -133,6 +147,12 @@ static const char *taskmgr_audio_config_hint(const audio_device_t *device) {
     }
     if (strcmp(config, "bar-unavailable") == 0) {
         return "BAR AC97 ausente";
+    }
+    if (strcmp(config, "pcspkr-fallback-usb-audio-attached") == 0) {
+        return "USB Audio Class com attach real";
+    }
+    if (strcmp(config, "pcspkr-fallback-usb-audio-attach-ready") == 0) {
+        return "USB Audio Class anexavel";
     }
     return "";
 }
@@ -770,9 +790,20 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         }
         if (tm->audio_info.output_route != 0u) {
             str_append(detail, "  route ", (int)sizeof(detail));
-            taskmgr_append_hex_fixed(detail, (tm->audio_info.output_route >> 8) & 0xffu, 2u, (int)sizeof(detail));
-            str_append(detail, "/", (int)sizeof(detail));
-            taskmgr_append_hex_fixed(detail, tm->audio_info.output_route & 0xffu, 2u, (int)sizeof(detail));
+            if (taskmgr_audio_usb_attach_ready(&tm->audio_info)) {
+                str_append(detail, "as", (int)sizeof(detail));
+                taskmgr_append_hex_fixed(detail, (tm->audio_info.output_route >> 24) & 0xffu, 2u, (int)sizeof(detail));
+                str_append(detail, "/alt", (int)sizeof(detail));
+                taskmgr_append_hex_fixed(detail, (tm->audio_info.output_route >> 16) & 0xffu, 2u, (int)sizeof(detail));
+                str_append(detail, "/ep", (int)sizeof(detail));
+                taskmgr_append_hex_fixed(detail, (tm->audio_info.output_route >> 8) & 0xffu, 2u, (int)sizeof(detail));
+                str_append(detail, "/cfg", (int)sizeof(detail));
+                taskmgr_append_hex_fixed(detail, tm->audio_info.output_route & 0xffu, 2u, (int)sizeof(detail));
+            } else {
+                taskmgr_append_hex_fixed(detail, (tm->audio_info.output_route >> 8) & 0xffu, 2u, (int)sizeof(detail));
+                str_append(detail, "/", (int)sizeof(detail));
+                taskmgr_append_hex_fixed(detail, tm->audio_info.output_route & 0xffu, 2u, (int)sizeof(detail));
+            }
         }
         str_append(detail, (audio_features & 0x2u) != 0u ? "  irq" : "  no-irq", (int)sizeof(detail));
         str_append(detail, (audio_features & 0x80u) != 0u ? "  mmio" : "  io", (int)sizeof(detail));
@@ -808,6 +839,12 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         }
         if ((audio_features & 0x4000u) != 0u) {
             str_append(detail, " path-ok", (int)sizeof(detail));
+        }
+        if (taskmgr_audio_usb_attach_ready(&tm->audio_info)) {
+            str_append(detail, " usb-attach", (int)sizeof(detail));
+        }
+        if (taskmgr_audio_usb_attached_ready(&tm->audio_info)) {
+            str_append(detail, " usb-attached", (int)sizeof(detail));
         }
         if (tm->audio_status_valid) {
             str_append(detail, "  ", (int)sizeof(detail));

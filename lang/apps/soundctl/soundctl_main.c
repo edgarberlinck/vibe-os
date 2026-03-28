@@ -11,6 +11,10 @@
 #define MK_AUDIO_STATUS_FLAG_UNDERRUN 0x00001000u
 #define MK_AUDIO_STATUS_FLAG_CAPTURE_DATA 0x00002000u
 #define MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN 0x00004000u
+#define MK_AUDIO_FEATURE_USB_ATTACH_READY 0x00020000u
+#define MK_AUDIO_FEATURE_USB_ATTACHED_READY 0x00040000u
+
+static unsigned soundctl_feature_flags(const struct mk_audio_info *info);
 
 static void soundctl_debug(const char *text) {
     __asm__ volatile("int $0x80"
@@ -65,6 +69,8 @@ static void soundctl_usage(void) {
 
 static const char *soundctl_backend_name(int backend_kind) {
     switch (backend_kind) {
+    case 4:
+        return "compat-uaudio";
     case 3:
         return "pcspkr";
     case 2:
@@ -155,11 +161,29 @@ static void soundctl_append_hex(char *buf, int max_len, int *len, unsigned value
 }
 
 static void soundctl_format_hardware_diag(const struct mk_audio_info *info, char *buf, int max_len) {
+    unsigned feature_flags;
+
     if (buf == 0 || max_len <= 0) {
         return;
     }
     buf[0] = '\0';
     if (info == 0 || info->controller_pci_id == 0u) {
+        return;
+    }
+    feature_flags = soundctl_feature_flags(info);
+    if ((feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u) {
+        snprintf(buf,
+                 (size_t)max_len,
+                 "pci %04x:%04x b%02x:s%02x:f%u  usb-audio as=%02x alt=%02x ep=%02x cfg=%02x",
+                 (unsigned)((info->controller_pci_id >> 16) & 0xffffu),
+                 (unsigned)(info->controller_pci_id & 0xffffu),
+                 (unsigned)((info->controller_location >> 16) & 0xffu),
+                 (unsigned)((info->controller_location >> 8) & 0xffu),
+                 (unsigned)(info->controller_location & 0xffu),
+                 (unsigned)((info->output_route >> 24) & 0xffu),
+                 (unsigned)((info->output_route >> 16) & 0xffu),
+                 (unsigned)((info->output_route >> 8) & 0xffu),
+                 (unsigned)(info->output_route & 0xffu));
         return;
     }
     if (info->codec_vendor_id != 0u || info->output_route != 0u) {
@@ -189,10 +213,12 @@ static void soundctl_format_hardware_diag(const struct mk_audio_info *info, char
 static void soundctl_emit_hardware_debug(const struct mk_audio_info *info) {
     char line[96];
     int len = 0;
+    unsigned feature_flags;
 
     if (info == 0) {
         return;
     }
+    feature_flags = soundctl_feature_flags(info);
     line[0] = '\0';
     soundctl_append_text(line, (int)sizeof(line), &len, "soundctl: pci=");
     soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)((info->controller_pci_id >> 16) & 0xffffu), 4);
@@ -209,9 +235,20 @@ static void soundctl_emit_hardware_debug(const struct mk_audio_info *info) {
     len = 0;
     line[0] = '\0';
     soundctl_append_text(line, (int)sizeof(line), &len, "soundctl: route=");
-    soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)((info->output_route >> 8) & 0xffu), 2);
-    soundctl_append_char(line, (int)sizeof(line), &len, '/');
-    soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)(info->output_route & 0xffu), 2);
+    if ((feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u) {
+        soundctl_append_text(line, (int)sizeof(line), &len, "as");
+        soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)((info->output_route >> 24) & 0xffu), 2);
+        soundctl_append_text(line, (int)sizeof(line), &len, "/alt");
+        soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)((info->output_route >> 16) & 0xffu), 2);
+        soundctl_append_text(line, (int)sizeof(line), &len, "/ep");
+        soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)((info->output_route >> 8) & 0xffu), 2);
+        soundctl_append_text(line, (int)sizeof(line), &len, "/cfg");
+        soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)(info->output_route & 0xffu), 2);
+    } else {
+        soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)((info->output_route >> 8) & 0xffu), 2);
+        soundctl_append_char(line, (int)sizeof(line), &len, '/');
+        soundctl_append_hex(line, (int)sizeof(line), &len, (unsigned)(info->output_route & 0xffu), 2);
+    }
     soundctl_append_char(line, (int)sizeof(line), &len, '\n');
     soundctl_debug(line);
 }
@@ -271,6 +308,15 @@ static const char *soundctl_device_hint(const audio_device_t *device) {
     }
     if (strcmp(config, "bar-unavailable") == 0) {
         return "AC97 BAR unavailable";
+    }
+    if (strcmp(config, "pcspkr-fallback-usb-audio-attached") == 0) {
+        return "USB Audio Class ja teve SET_INTERFACE de playback; falta plugar o caminho de write/isoc do compat-uaudio";
+    }
+    if (strcmp(config, "pcspkr-fallback-usb-audio-attach-ready") == 0) {
+        return "USB Audio Class ja anexavel; falta o backend compat-uaudio sair do attach para playback";
+    }
+    if (strcmp(config, "pcspkr-fallback-usb-configured-audio") == 0) {
+        return "USB Audio Class configurado; falta fechar o attach minimo do compat-uaudio";
     }
     return "";
 }
@@ -664,7 +710,7 @@ static int soundctl_command_list(void) {
         }
         printf("\n");
     }
-    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed\n",
+    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready\n",
            (feature_flags & 0x2u) != 0u ? "" : "no-",
            (feature_flags & 0x8u) != 0u ? "" : "no-",
            (feature_flags & 0x80u) != 0u ? "mmio" : "io",
@@ -674,7 +720,9 @@ static int soundctl_command_list(void) {
            (feature_flags & 0x800u) != 0u ? "" : "no-",
            (feature_flags & 0x1000u) != 0u ? "" : "no-",
            (feature_flags & 0x2000u) != 0u ? "" : "no-",
-           (feature_flags & 0x4000u) != 0u ? "" : "no-");
+           (feature_flags & 0x4000u) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-");
     printf("controls:\n");
     while (vibe_app_audio_get_control_info(index, &control_info) == 0) {
         printf("  %s/%s -> id=%u %s pair=%u\n",
@@ -740,7 +788,7 @@ static int soundctl_command_status(void) {
         soundctl_print_default_target(&info, "input", MK_AUDIO_MIXER_INPUT_DEFAULT);
     }
     soundctl_debug("soundctl: status mixer-ok\n");
-    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed irq-count=%u\n",
+    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready irq-count=%u\n",
            (feature_flags & 0x2u) != 0u ? "" : "no-",
            (feature_flags & 0x8u) != 0u ? "" : "no-",
            (feature_flags & 0x80u) != 0u ? "mmio" : "io",
@@ -751,6 +799,8 @@ static int soundctl_command_status(void) {
            (feature_flags & 0x1000u) != 0u ? "" : "no-",
            (feature_flags & 0x2000u) != 0u ? "" : "no-",
            (feature_flags & 0x4000u) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-",
            info.parameters._spare[0]);
     printf("runtime: %sirq-seen %sno-valid-irq %sstarvation %sunderrun %scapture-data %scapture-xrun\n",
            (status_flags & MK_AUDIO_STATUS_FLAG_IRQ_SEEN) != 0u ? "" : "no-",

@@ -8,11 +8,18 @@
 #define AUDIO_WAV_CHUNK_HEADER_SIZE 8
 #define AUDIO_WAV_STREAM_CHUNK 960
 #define AUDIO_WAV_AZALIA_CHUNK 16384
+#define AUDIO_WAV_AZALIA_ASYNC_CHUNK 4096
 #define AUDIO_STATUS_BACKEND_MASK 0x000000ffu
+#define AUDIO_BACKEND_SOFT 0
+#define AUDIO_BACKEND_COMPAT_AC97 1
 #define AUDIO_BACKEND_COMPAT_AZALIA 2
+#define AUDIO_BACKEND_PCSPKR 3
+#define AUDIO_BACKEND_COMPAT_UAUDIO 4
 #define AUDIO_STATUS_FLAG_IRQ_REGISTERED 0x00000100u
 #define AUDIO_STATUS_FLAG_IRQ_SEEN 0x00000200u
 #define AUDIO_FEATURE_PATH_PROGRAMMED 0x4000u
+#define AUDIO_FEATURE_USB_ATTACH_READY 0x20000u
+#define AUDIO_FEATURE_USB_ATTACHED_READY 0x40000u
 
 static char g_audio_last_playback_error[48] = "ok";
 static char g_audio_last_playback_detail[160] = "";
@@ -29,10 +36,15 @@ const char *audio_last_playback_error(void) {
 
 static const char *audio_backend_name_from_kind(int backend_kind) {
     switch (backend_kind) {
-    case 2:
+    case AUDIO_BACKEND_COMPAT_UAUDIO:
+        return "compat-uaudio";
+    case AUDIO_BACKEND_COMPAT_AZALIA:
         return "compat-azalia";
-    case 1:
+    case AUDIO_BACKEND_COMPAT_AC97:
         return "compat-ac97";
+    case AUDIO_BACKEND_PCSPKR:
+        return "pcspkr";
+    case AUDIO_BACKEND_SOFT:
     default:
         return "softmix";
     }
@@ -78,6 +90,11 @@ static void audio_update_last_playback_detail(void) {
         str_append(line, " cfg=", (int)sizeof(line));
         str_append(line, info.device.config, (int)sizeof(line));
     }
+    if ((feature_flags & AUDIO_FEATURE_USB_ATTACHED_READY) != 0u) {
+        str_append(line, " usb-attached=1", (int)sizeof(line));
+    } else if ((feature_flags & AUDIO_FEATURE_USB_ATTACH_READY) != 0u) {
+        str_append(line, " usb-attach=1", (int)sizeof(line));
+    }
     str_append(line, " act=", (int)sizeof(line));
     str_append(line, status.active ? "1" : "0", (int)sizeof(line));
     str_append(line, " pend=", (int)sizeof(line));
@@ -100,9 +117,32 @@ static void audio_update_last_playback_detail(void) {
     }
     if (info.output_route != 0u) {
         str_append(line, " route=", (int)sizeof(line));
-        audio_append_hex(line, (int)sizeof(line), (unsigned)((info.output_route >> 8) & 0xffu), 2);
-        str_append(line, "/", (int)sizeof(line));
-        audio_append_hex(line, (int)sizeof(line), (unsigned)(info.output_route & 0xffu), 2);
+        if ((feature_flags & AUDIO_FEATURE_USB_ATTACH_READY) != 0u) {
+            str_append(line, "as", (int)sizeof(line));
+            audio_append_hex(line,
+                             (int)sizeof(line),
+                             (unsigned)((info.output_route >> 24) & 0xffu),
+                             2);
+            str_append(line, "/alt", (int)sizeof(line));
+            audio_append_hex(line,
+                             (int)sizeof(line),
+                             (unsigned)((info.output_route >> 16) & 0xffu),
+                             2);
+            str_append(line, "/ep", (int)sizeof(line));
+            audio_append_hex(line,
+                             (int)sizeof(line),
+                             (unsigned)((info.output_route >> 8) & 0xffu),
+                             2);
+            str_append(line, "/cfg", (int)sizeof(line));
+            audio_append_hex(line,
+                             (int)sizeof(line),
+                             (unsigned)(info.output_route & 0xffu),
+                             2);
+        } else {
+            audio_append_hex(line, (int)sizeof(line), (unsigned)((info.output_route >> 8) & 0xffu), 2);
+            str_append(line, "/", (int)sizeof(line));
+            audio_append_hex(line, (int)sizeof(line), (unsigned)(info.output_route & 0xffu), 2);
+        }
     }
     str_copy_limited(g_audio_last_playback_detail, line, (int)sizeof(g_audio_last_playback_detail));
 }
@@ -163,6 +203,13 @@ static void audio_debug_line(const char *prefix, const char *tag, const char *su
     str_append(line, tag ? tag : "audio", (int)sizeof(line));
     str_append(line, suffix, (int)sizeof(line));
     sys_write_debug(line);
+}
+
+static int audio_debug_progress_enabled(const char *tag) {
+    if (tag != 0 && (str_eq(tag, "desktop-session") || str_eq(tag, "desktop"))) {
+        return 0;
+    }
+    return 1;
 }
 
 static int audio_backend_kind(void) {
@@ -386,7 +433,9 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
             (void)sys_audio_stop();
             return -1;
         }
-        audio_debug_line("audio: wrote ", tag, "\n");
+        if (audio_debug_progress_enabled(tag)) {
+            audio_debug_line("audio: wrote ", tag, "\n");
+        }
         streamed += (uint32_t)written;
         if (backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
             uint32_t chunk_ticks = audio_estimated_playback_ticks(&params, (uint32_t)written);
@@ -398,7 +447,9 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
                 break;
             }
             waited_for_hda_chunks = 1;
-            audio_debug_line("audio: queued ", tag, "\n");
+            if (audio_debug_progress_enabled(tag)) {
+                audio_debug_line("audio: queued ", tag, "\n");
+            }
         }
         if (backend_kind != AUDIO_BACKEND_COMPAT_AZALIA) {
             sys_yield();
@@ -498,7 +549,9 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
         if (audio_playback_is_idle()) {
             playback->waiting_for_idle = 0;
             if (!playback->finalizing) {
-                audio_debug_line("audio: queued ", playback->tag, "\n");
+                if (audio_debug_progress_enabled(playback->tag)) {
+                    audio_debug_line("audio: queued ", playback->tag, "\n");
+                }
             }
         } else if ((uint32_t)(sys_ticks() - playback->idle_started) >= playback->idle_timeout) {
             audio_set_last_playback_error("wait-timeout");
@@ -526,7 +579,11 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
         uint32_t chunk_size = playback->data_size - playback->streamed;
         int written;
 
-        if (chunk_size > (uint32_t)sizeof(buffer)) {
+        if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
+            if (chunk_size > AUDIO_WAV_AZALIA_ASYNC_CHUNK) {
+                chunk_size = AUDIO_WAV_AZALIA_ASYNC_CHUNK;
+            }
+        } else if (chunk_size > (uint32_t)sizeof(buffer)) {
             chunk_size = (uint32_t)sizeof(buffer);
         }
         if (fs_read_node_bytes(playback->node,
@@ -553,7 +610,9 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
 
         playback->streamed += (uint32_t)written;
         playback->last_chunk_ticks = audio_estimated_playback_ticks(params, (uint32_t)written);
-        audio_debug_line("audio: wrote ", playback->tag, "\n");
+        if (audio_debug_progress_enabled(playback->tag)) {
+            audio_debug_line("audio: wrote ", playback->tag, "\n");
+        }
 
         if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA ||
             playback->streamed >= playback->data_size) {

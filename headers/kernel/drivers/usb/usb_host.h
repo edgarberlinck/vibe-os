@@ -115,7 +115,9 @@ enum kernel_usb_probe_status {
     KERNEL_USB_PROBE_STATUS_EXEC_READY = 6,
     KERNEL_USB_PROBE_STATUS_DESCRIPTOR_READY = 7,
     KERNEL_USB_PROBE_STATUS_ADDRESS_READY = 8,
-    KERNEL_USB_PROBE_STATUS_CONFIG_READY = 9
+    KERNEL_USB_PROBE_STATUS_CONFIG_READY = 9,
+    KERNEL_USB_PROBE_STATUS_CONFIGURED_READY = 10,
+    KERNEL_USB_PROBE_STATUS_ATTACHED_READY = 11
 };
 
 struct kernel_usb_probe_snapshot {
@@ -135,6 +137,17 @@ struct kernel_usb_probe_snapshot {
     uint8_t configuration_value;
     uint8_t interface_count;
     uint8_t endpoint_count;
+    uint8_t audio_control_interface_number;
+    uint8_t audio_streaming_interface_number;
+    uint8_t audio_streaming_interface_count;
+    uint8_t audio_streaming_alt_setting;
+    uint8_t audio_playback_channel_count;
+    uint8_t audio_playback_subframe_size;
+    uint8_t audio_playback_bit_resolution;
+    uint8_t audio_playback_endpoint_address;
+    uint8_t audio_playback_endpoint_attributes;
+    uint16_t audio_playback_endpoint_max_packet;
+    uint32_t audio_playback_sample_rate;
 };
 
 struct kernel_usb_probe_dispatch_context {
@@ -167,7 +180,11 @@ enum kernel_usb_probe_execution_result {
     KERNEL_USB_PROBE_EXEC_RESULT_UHCI_SET_ADDRESS_OK = 17,
     KERNEL_USB_PROBE_EXEC_RESULT_OHCI_SET_ADDRESS_OK = 18,
     KERNEL_USB_PROBE_EXEC_RESULT_UHCI_CONFIG_DESCRIPTOR_OK = 19,
-    KERNEL_USB_PROBE_EXEC_RESULT_OHCI_CONFIG_DESCRIPTOR_OK = 20
+    KERNEL_USB_PROBE_EXEC_RESULT_OHCI_CONFIG_DESCRIPTOR_OK = 20,
+    KERNEL_USB_PROBE_EXEC_RESULT_UHCI_SET_CONFIGURATION_OK = 21,
+    KERNEL_USB_PROBE_EXEC_RESULT_OHCI_SET_CONFIGURATION_OK = 22,
+    KERNEL_USB_PROBE_EXEC_RESULT_UHCI_SET_INTERFACE_OK = 23,
+    KERNEL_USB_PROBE_EXEC_RESULT_OHCI_SET_INTERFACE_OK = 24
 };
 
 struct kernel_usb_probe_execution {
@@ -185,6 +202,17 @@ struct kernel_usb_probe_execution {
     uint8_t configuration_value;
     uint8_t interface_count;
     uint8_t endpoint_count;
+    uint8_t audio_control_interface_number;
+    uint8_t audio_streaming_interface_number;
+    uint8_t audio_streaming_interface_count;
+    uint8_t audio_streaming_alt_setting;
+    uint8_t audio_playback_channel_count;
+    uint8_t audio_playback_subframe_size;
+    uint8_t audio_playback_bit_resolution;
+    uint8_t audio_playback_endpoint_address;
+    uint8_t audio_playback_endpoint_attributes;
+    uint16_t audio_playback_endpoint_max_packet;
+    uint32_t audio_playback_sample_rate;
     int status_code;
 };
 
@@ -216,7 +244,22 @@ uint32_t kernel_usb_probe_exec_ready_count(void);
 uint32_t kernel_usb_audio_probe_exec_ready_count(void);
 uint32_t kernel_usb_probe_descriptor_ready_count(void);
 uint32_t kernel_usb_audio_probe_descriptor_ready_count(void);
+uint32_t kernel_usb_probe_configured_ready_count(void);
+uint32_t kernel_usb_audio_probe_configured_ready_count(void);
+uint32_t kernel_usb_probe_attached_ready_count(void);
+uint32_t kernel_usb_audio_probe_attached_ready_count(void);
 uint32_t kernel_usb_audio_class_probe_count(void);
+int kernel_usb_audio_probe_first_configured(struct kernel_usb_probe_snapshot *info_out,
+                                            uint32_t *match_index_out);
+int kernel_usb_audio_probe_attach_first_configured(struct kernel_usb_probe_snapshot *info_out,
+                                                   uint32_t *match_index_out);
+int kernel_usb_audio_refresh_probe_state(void);
+int kernel_usb_audio_playback_controller_info(struct kernel_usb_host_controller_info *info_out);
+uint8_t kernel_usb_audio_playback_transport_kind(void);
+int kernel_usb_audio_playback_supported(void);
+int kernel_usb_audio_playback_write(const uint8_t *data,
+                                    uint32_t size,
+                                    uint32_t *written_out);
 int kernel_usb_probe_dispatch_next(uint8_t audio_only,
                                    struct kernel_usb_probe_snapshot *info_out,
                                    uint32_t *match_index_out);

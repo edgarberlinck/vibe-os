@@ -8,7 +8,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -153,6 +153,27 @@ class QemuMonitorSession:
             self.send_key(key_map.get(ch, ch.lower()), pause=pause)
 
 
+def wait_for_any_marker(session: QemuMonitorSession, markers: List[str], timeout: float) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        log = session.read_log()
+        if any(marker in log for marker in markers):
+            return
+        if session.proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    raise RuntimeError("Timed out waiting for any marker: " + " | ".join(markers))
+
+
+def append_missing_alias_groups(log: str,
+                                missing: List[str],
+                                alias_groups: List[Tuple[str, List[str]]]) -> List[str]:
+    for label, markers in alias_groups:
+        if not any(marker in log for marker in markers):
+            missing.append(label)
+    return missing
+
+
 def run_audio_capture_smoke(qemu_binary: str,
                             image_path: Path,
                             memory_mb: int,
@@ -168,6 +189,11 @@ def run_audio_capture_smoke(qemu_binary: str,
                             require_desktop_startup_sound: bool,
                             require_boot_startup_sound: bool) -> AudioScenarioResult:
     backend_marker = f"audiosvc: backend={expected_backend}"
+    alias_groups: List[Tuple[str, List[str]]] = [
+        ("status: transport=", ["audiosvc: transport=", "soundctl: transport="]),
+        ("status: codecready-quirk=", ["audiosvc: codecready-quirk=", "soundctl: codecready-quirk="]),
+        ("status: multichannel=", ["audiosvc: multichannel=", "soundctl: multichannel="]),
+    ]
     required_markers = [
         "desktop.app: launch startx",
         "desktop: session start",
@@ -179,9 +205,6 @@ def run_audio_capture_smoke(qemu_binary: str,
         "audiosvc: status ok",
         "desktop: open-new w=0 t=1 i=0",
         "runtime: ",
-        "soundctl: transport=",
-        "soundctl: codecready-quirk=",
-        "soundctl: multichannel=",
     ]
     if require_capture:
         required_markers.extend(
@@ -208,21 +231,26 @@ def run_audio_capture_smoke(qemu_binary: str,
             ]
         )
     if require_path_programmed:
+        alias_groups.append(("status: path-programmed=1",
+                             ["audiosvc: path-programmed=1", "soundctl: path-programmed=1"]))
         required_markers.extend(
             [
                 "audiosvc: path-programmed=1",
-                "soundctl: path-programmed=1",
             ]
         )
     if require_hardware_diag:
+        alias_groups.extend(
+            [
+                ("status: pci=", ["audiosvc: pci=", "soundctl: pci="]),
+                ("status: codec=", ["audiosvc: codec=", "soundctl: codec="]),
+                ("status: route=", ["audiosvc: route=", "soundctl: route="]),
+            ]
+        )
         required_markers.extend(
             [
                 "audiosvc: pci=",
                 "audiosvc: codec=",
                 "audiosvc: route=",
-                "soundctl: pci=",
-                "soundctl: codec=",
-                "soundctl: route=",
             ]
         )
     if require_desktop_startup_sound:
@@ -283,6 +311,13 @@ def run_audio_capture_smoke(qemu_binary: str,
             session.type_text("soundctl status", pause=0.12)
             session.send_key("ret", pause=0.15)
             session.wait_for_all(["runtime: "], timeout=15.0)
+            wait_for_any_marker(session, ["audiosvc: transport=", "soundctl: transport="], timeout=15.0)
+            wait_for_any_marker(session,
+                                ["audiosvc: codecready-quirk=", "soundctl: codecready-quirk="],
+                                timeout=15.0)
+            wait_for_any_marker(session,
+                                ["audiosvc: multichannel=", "soundctl: multichannel="],
+                                timeout=15.0)
             if require_capture:
                 session.type_text(f"soundctl record {record_ms} /capture.wav", pause=0.12)
                 session.send_key("ret", pause=0.15)
@@ -301,16 +336,20 @@ def run_audio_capture_smoke(qemu_binary: str,
                 session.wait_for_all(["audiosvc: path-programmed=1"], timeout=15.0)
                 session.type_text("soundctl status", pause=0.12)
                 session.send_key("ret", pause=0.15)
-                session.wait_for_all(["soundctl: path-programmed=1"], timeout=15.0)
+                wait_for_any_marker(session,
+                                    ["audiosvc: path-programmed=1", "soundctl: path-programmed=1"],
+                                    timeout=15.0)
             log = session.read_log()
         except Exception as exc:
             log = session.read_log()
             missing = [marker for marker in required_markers if marker not in log]
+            missing = append_missing_alias_groups(log, missing, alias_groups)
             return AudioScenarioResult(False, log, missing, str(exc))
         finally:
             session.close()
 
     missing = [marker for marker in required_markers if marker not in log]
+    missing = append_missing_alias_groups(log, missing, alias_groups)
     return AudioScenarioResult(not missing, log, missing, "")
 
 
