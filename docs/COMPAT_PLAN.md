@@ -410,6 +410,5 @@ Compat/bin ciclo incremental concluído:
 
 Próximos alvos recomendados:
 - [x] `mkdir` (integrado como app externa)
-- [x] `tr` de `compat/usr.bin`
-- [x] `sync` de `compat/bin`
-- [x] utilitários restantes de `compat/usr.bin` (`uname`)
+- [ ] `sync` de `compat/bin`
+- [ ] utilitários restantes de `compat/usr.bin` (`uname`)

@@ -1,7 +1,7 @@
 #ifndef VIBE_STDLIB_H
 #define VIBE_STDLIB_H
 
-#include <stddef.h>
+typedef unsigned int size_t;
 
 void *malloc(size_t size);
 void *calloc(size_t nmemb, size_t size);

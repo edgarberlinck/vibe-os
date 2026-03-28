@@ -13,6 +13,8 @@
 #define FILENAME_MAX 256
 #define FOPEN_MAX 16
 
+typedef unsigned int size_t;
+
 /* FILE structure - minimal implementation */
 typedef struct FILE {
     int fd;              /* file descriptor */

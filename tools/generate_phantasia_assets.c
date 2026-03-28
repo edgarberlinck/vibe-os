@@ -2,10 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef LOGIN_NAME_MAX
-#define LOGIN_NAME_MAX 32
-#endif
-
 #include "compat/games/phantasia/phantdefs.h"
 #include "compat/games/phantasia/phantstruct.h"
 
