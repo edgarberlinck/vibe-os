@@ -20,7 +20,7 @@ kernel_trap_frame_t *kernel_timer_irq_handler(kernel_trap_frame_t *frame) {
         g_timer_trace_budget -= 1u;
         kernel_debug_printf("timer: tick=%d\n", (int)g_kernel_ticks);
     }
-    kernel_pic_send_eoi(0);
+    kernel_irq_complete(0);
     return scheduler_schedule_frame(frame, 1);
 }
 

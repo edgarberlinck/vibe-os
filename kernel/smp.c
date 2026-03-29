@@ -94,8 +94,9 @@ static int smp_wait_for_cpu(uint32_t expected_count) {
     return -1;
 }
 
-static void smp_busy_wait(uint32_t iterations) {
-    while (iterations-- > 0u) {
+static void smp_wait_ticks(uint32_t ticks) {
+    uint32_t deadline = kernel_timer_get_ticks() + ticks;
+    while ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
         __asm__ volatile("pause");
     }
 }
@@ -209,19 +210,27 @@ void smp_init(void) {
         if (local_apic_send_init(cpu->apic_id) == 0) {
             g_smp_cpu_stage[i] = SMP_CPU_STAGE_INIT_SENT;
             kernel_debug_printf("smp: init sent apic=%x\n", cpu->apic_id);
-            smp_busy_wait(200000u);
+            smp_wait_ticks(2u);
             if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI1_SENT;
                 kernel_debug_printf("smp: sipi1 sent apic=%x vec=%x\n",
                                     cpu->apic_id,
                                     (unsigned)AP_TRAMPOLINE_VECTOR);
+            } else {
+                kernel_debug_printf("smp: sipi1 failed apic=%x stage=%x\n",
+                                    cpu->apic_id,
+                                    (unsigned)smp_trampoline_debug_stage());
             }
-            smp_busy_wait(50000u);
+            smp_wait_ticks(1u);
             if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI2_SENT;
                 kernel_debug_printf("smp: sipi2 sent apic=%x vec=%x\n",
                                     cpu->apic_id,
                                     (unsigned)AP_TRAMPOLINE_VECTOR);
+            } else {
+                kernel_debug_printf("smp: sipi2 failed apic=%x stage=%x\n",
+                                    cpu->apic_id,
+                                    (unsigned)smp_trampoline_debug_stage());
             }
         } else {
             kernel_debug_printf("smp: init failed apic=%x\n", cpu->apic_id);

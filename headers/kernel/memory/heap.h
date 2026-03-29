@@ -13,6 +13,7 @@ uintptr_t kernel_heap_start(void);
 uintptr_t kernel_heap_end(void);
 size_t kernel_heap_used(void);
 size_t kernel_heap_free(void);
+int kernel_heap_is_initialized(void);
 
 /* public-facing API (aliases) */
 static inline void memory_init(uintptr_t start, size_t size) {

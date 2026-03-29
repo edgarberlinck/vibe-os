@@ -1,0 +1,67 @@
+Source: links2
+Section: web
+Priority: optional
+Maintainer: Axel Beckert <abe@debian.org>
+Build-Depends: debhelper-compat (= 13),
+               dh-exec,
+               libavif-dev,
+               libbrotli-dev,
+               libbz2-dev,
+               libevent-dev,
+               libfontconfig-dev,
+               libfreetype-dev,
+               libgpm-dev [linux-any],
+               libjpeg-dev,
+               liblz-dev,
+               liblzma-dev,
+               libpng-dev,
+               librsvg2-dev,
+               libsdl1.2-dev,
+               libssl-dev,
+               libtiff-dev,
+               libwebp-dev,
+               libx11-dev,
+               libxau-dev,
+               libxdmcp-dev,
+               libxt-dev,
+               libzstd-dev,
+               pkg-config,
+               publicsuffix
+Standards-Version: 4.6.2
+Homepage: http://links.twibright.com/
+Vcs-Browser: https://salsa.debian.org/debian/links2
+Vcs-Git: https://salsa.debian.org/debian/links2.git
+Rules-Requires-Root: no
+
+Package: links2
+Architecture: any
+Multi-Arch: foreign
+Provides: www-browser
+Depends: ${misc:Depends},
+         ${shlibs:Depends}
+Recommends: ca-certificates,
+            xterm | x-terminal-emulator
+Suggests: mc
+Built-Using: ${Built-Using}
+Description: Web browser running in both graphics and text mode
+ Links is a graphics and text mode WWW browser, similar to Lynx. It displays
+ tables, frames, downloads on background, uses HTTP/1.1 keepalive connections.
+ In graphics mode it displays PNG, JPEG, GIF, TIFF, and XBM pictures, runs
+ external bindings on other types, and features anti-aliased font, smooth
+ image zooming, 48-bit dithering, and gamma and aspect ratio correction.
+
+Package: links
+Architecture: any
+Multi-Arch: foreign
+Provides: www-browser
+Depends: ${misc:Depends},
+         ${shlibs:Depends}
+Recommends: ca-certificates
+Suggests: mc
+Built-Using: ${Built-Using}
+Description: Web browser running in text mode
+ Links is a text mode WWW browser, similar to Lynx. It displays tables,
+ frames, downloads on background, uses HTTP/1.1 keepalive connections.
+ .
+ This version is compiled without graphics mode. See the package
+ links2 for a version with graphics support compiled in.

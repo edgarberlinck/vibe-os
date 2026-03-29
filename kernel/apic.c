@@ -59,11 +59,12 @@ static void local_apic_write(uint32_t reg, uint32_t value) {
 }
 
 static int local_apic_wait_icr_idle(void) {
-    uint32_t spins = 1000000u;
+    uint32_t spins = 8000000u;
     while (spins-- > 0u) {
         if ((local_apic_read(LAPIC_ICRLO_REG) & LAPIC_ICR_DELIVERY_STATUS) == 0u) {
             return 0;
         }
+        __asm__ volatile("pause");
     }
     return -1;
 }

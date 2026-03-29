@@ -7,8 +7,8 @@
 #define AUDIO_WAV_HEADER_SIZE 44
 #define AUDIO_WAV_CHUNK_HEADER_SIZE 8
 #define AUDIO_WAV_STREAM_CHUNK 960
-#define AUDIO_WAV_AZALIA_CHUNK 16384
-#define AUDIO_WAV_AZALIA_ASYNC_CHUNK 4096
+#define AUDIO_WAV_AZALIA_CHUNK 4096
+#define AUDIO_WAV_AZALIA_ASYNC_CHUNK 2048
 #define AUDIO_WAV_COMPAT_ASYNC_CHUNK 2048
 #define AUDIO_WAV_UAUDIO_ASYNC_CHUNK 16384
 #define AUDIO_STATUS_BACKEND_MASK 0x000000ffu
@@ -369,7 +369,6 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
 
     audio_set_last_playback_error("ok");
     audio_debug_line("audio: begin ", tag, "\n");
-
     node = fs_resolve(path);
     if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
         audio_set_last_playback_error("missing-file");
@@ -387,13 +386,6 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
     }
     playback_ticks = audio_estimated_playback_ticks(&params, data_size);
     backend_kind = audio_backend_kind();
-    if (backend_kind == AUDIO_BACKEND_COMPAT_AZALIA &&
-        tag != 0 &&
-        str_eq(tag, "desktop")) {
-        audio_set_last_playback_error("deferred");
-        audio_debug_line("audio: defer wav ", tag, "\n");
-        return 0;
-    }
     if (backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
         tag != 0 &&
         str_eq(tag, "boot")) {
@@ -460,6 +452,7 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
                 break;
             }
             waited_for_hda_chunks = 1;
+            sys_yield();
             if (audio_debug_progress_enabled(tag)) {
                 audio_debug_line("audio: queued ", tag, "\n");
             }
@@ -489,7 +482,6 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
     int node;
     uint32_t file_size;
     struct audio_swpar *params;
-
     if (playback == 0) {
         audio_set_last_playback_error("invalid-state");
         g_audio_last_playback_detail[0] = '\0';
@@ -506,7 +498,6 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
 
     audio_set_last_playback_error("ok");
     audio_debug_line("audio: begin ", tag, "\n");
-
     node = fs_resolve(path);
     if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
         audio_set_last_playback_error("missing-file");

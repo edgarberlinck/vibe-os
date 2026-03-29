@@ -22,6 +22,7 @@ struct kernel_cpu_topology {
     uint32_t cpuid_model;
     uint32_t cpuid_stepping;
     uint32_t mp_table_present;
+    uint32_t synthetic_apic_map;
     char vendor[13];
 };
 

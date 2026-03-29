@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <kernel/apic.h>
 #include <kernel/interrupt.h>
 #include <kernel/hal/io.h>
 
@@ -125,4 +126,13 @@ void kernel_pic_send_eoi(uint8_t irq_line) {
         outb(0xA0, 0x20);
     }
     outb(0x20, 0x20);
+}
+
+void kernel_irq_complete(uint8_t irq_line) {
+    if (irq_line < 16u) {
+        kernel_pic_send_eoi(irq_line);
+    }
+    if (local_apic_enabled()) {
+        local_apic_eoi();
+    }
 }

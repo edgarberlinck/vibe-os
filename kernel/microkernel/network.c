@@ -755,7 +755,7 @@ static void mk_network_log_probe(void) {
         return;
     }
     if (g_network_state.pci_probe.virtio_legacy_ready) {
-        kernel_debug_printf("network: pci=%x:%x if=%s backend=%s io=%x q=%d rxq=%d txq=%d txsmoke=%d rxseen=%d arprx=%d txf=%u rxf=%u link=%d mac=%x:%x:%x:%x:%x:%x\n",
+        kernel_debug_printf("network: pci=%x:%x if=%s backend=%s io=%x q=%d rxq=%d txq=%d txsmoke=%d rxseen=%d arprx=%d txf=%d rxf=%d link=%d mac=%x:%x:%x:%x:%x:%x\n",
                             (unsigned int)g_network_state.pci_probe.vendor_id,
                             (unsigned int)g_network_state.pci_probe.device_id,
                             g_network_state.pci_probe.if_name,

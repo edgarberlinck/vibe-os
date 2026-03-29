@@ -44,7 +44,7 @@ struct mp_processor_entry {
 } __attribute__((packed));
 
 static struct kernel_cpu_topology g_cpu_topology = {
-    1u, 0u, 0u, 0u, 1u, 1u, 0u, 0u, 0u, 0u, "unknown"
+    1u, 0u, 0u, 0u, 1u, 1u, 0u, 0u, 0u, 0u, 0u, "unknown"
 };
 static struct kernel_cpu_state g_cpu_states[32];
 static uint32_t g_cpu_has_pat = 0u;
@@ -252,6 +252,7 @@ void cpu_init(void) {
     g_cpu_topology.cpuid_model = 0u;
     g_cpu_topology.cpuid_stepping = 0u;
     g_cpu_topology.mp_table_present = 0u;
+    g_cpu_topology.synthetic_apic_map = 0u;
     g_cpu_topology.vendor[0] = 'u';
     g_cpu_topology.vendor[1] = 'n';
     g_cpu_topology.vendor[2] = 'k';
@@ -326,12 +327,20 @@ void cpu_init(void) {
     cpu_try_enable_sse();
 
     mp_cpu_count = cpu_detect_from_mp_table(&boot_cpu_id);
-    if (mp_cpu_count > 0u) {
+    if (mp_cpu_count > 1u) {
         g_cpu_topology.cpu_count = mp_cpu_count;
         g_cpu_topology.boot_cpu_id = boot_cpu_id;
         g_cpu_topology.mp_table_present = 1u;
     } else if (g_cpu_topology.cpuid_core_cpus > 1u) {
         g_cpu_topology.cpu_count = g_cpu_topology.cpuid_core_cpus;
+        if (g_cpu_topology.apic_supported) {
+            g_cpu_topology.synthetic_apic_map = 1u;
+        }
+        if (mp_cpu_count == 1u) {
+            kernel_debug_puts("cpu: MP table exposed only one processor entry; promoting CPUID logical topology for SMP bring-up\n");
+        } else {
+            kernel_debug_puts("cpu: no usable MP table; promoting CPUID logical topology for SMP bring-up\n");
+        }
     }
     if (g_cpu_topology.cpu_count > 32u) {
         g_cpu_topology.cpu_count = 32u;
@@ -341,11 +350,13 @@ void cpu_init(void) {
     g_cpu_states[0].is_boot_cpu = 1u;
     for (uint32_t i = 1; i < g_cpu_topology.cpu_count; ++i) {
         g_cpu_states[i].started = 0u;
-        g_cpu_states[i].apic_id = i;
         g_cpu_states[i].is_boot_cpu = 0u;
+        if (!g_cpu_topology.mp_table_present) {
+            g_cpu_states[i].apic_id = i;
+        }
     }
 
-    kernel_debug_printf("cpu: vendor=%s cpuid=%d family=%d model=%d stepping=%d apic=%d logical=%d cores=%d detected=%d bsp=%d mp=%d\n",
+    kernel_debug_printf("cpu: vendor=%s cpuid=%d family=%d model=%d stepping=%d apic=%d logical=%d cores=%d detected=%d bsp=%d mp=%d synth=%d\n",
                         g_cpu_topology.vendor,
                         (int)g_cpu_topology.cpuid_supported,
                         (int)g_cpu_topology.cpuid_family,
@@ -356,9 +367,10 @@ void cpu_init(void) {
                         (int)g_cpu_topology.cpuid_core_cpus,
                         (int)g_cpu_topology.cpu_count,
                         (int)g_cpu_topology.boot_cpu_id,
-                        (int)g_cpu_topology.mp_table_present);
-    if (g_cpu_topology.cpu_count > 1u && mp_cpu_count == 0u) {
-        kernel_debug_puts("cpu: multiple CPUs detected via CPUID, but no MP table was found; reporting topology while keeping BSP-only bring-up\n");
+                        (int)g_cpu_topology.mp_table_present,
+                        (int)g_cpu_topology.synthetic_apic_map);
+    if (g_cpu_topology.cpu_count > 1u && g_cpu_topology.synthetic_apic_map) {
+        kernel_debug_puts("cpu: SMP bring-up will use a synthetic APIC-id map derived from CPUID logical topology\n");
     } else if (g_cpu_topology.cpu_count > 1u) {
         kernel_debug_puts("cpu: MP table detected; LAPIC/SMP bring-up allowed\n");
     }
@@ -406,7 +418,7 @@ uint32_t kernel_cpu_index(void) {
 int kernel_cpu_is_smp_capable(void) {
     return g_cpu_topology.cpu_count > 1u &&
            g_cpu_topology.apic_supported &&
-           g_cpu_topology.mp_table_present;
+           (g_cpu_topology.mp_table_present || g_cpu_topology.synthetic_apic_map);
 }
 
 int kernel_cpu_mark_started(uint32_t apic_id) {

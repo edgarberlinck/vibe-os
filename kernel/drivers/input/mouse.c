@@ -229,20 +229,20 @@ void kernel_mouse_irq_handler(void) {
     struct video_mode *mode = kernel_video_get_mode();
 
     if (!g_kernel_mouse_ready) {
-        kernel_pic_send_eoi(12);
+        kernel_irq_complete(12);
         return;
     }
 
     if ((status & PS2_STATUS_OUTPUT_FULL) == 0u ||
         (status & PS2_STATUS_AUX_OUTPUT_FULL) == 0u) {
-        kernel_pic_send_eoi(12);
+        kernel_irq_complete(12);
         return;
     }
 
     data = inb(PS2_DATA_PORT);
 
     if (g_kernel_mouse_packet_index == 0u && (data & 0x08u) == 0u) {
-        kernel_pic_send_eoi(12);
+        kernel_irq_complete(12);
         return;
     }
     
@@ -250,7 +250,7 @@ void kernel_mouse_irq_handler(void) {
     g_kernel_mouse_packet_index += 1u;
     
     if (g_kernel_mouse_packet_index < 3u) {
-        kernel_pic_send_eoi(12);
+        kernel_irq_complete(12);
         return;
     }
 
@@ -274,7 +274,7 @@ void kernel_mouse_irq_handler(void) {
                             (int)g_kernel_mouse.buttons);
     }
 
-    kernel_pic_send_eoi(12);
+    kernel_irq_complete(12);
 }
 
 void kernel_mouse_prepare_for_graphics(void) {

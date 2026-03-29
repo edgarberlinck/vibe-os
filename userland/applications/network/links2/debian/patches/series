@@ -1,0 +1,7 @@
+links2-instead-of-links.diff
+x-terminal-emulator-instead-of-xterm.diff
+improve-message-of-dash-g-602227.diff
+fix-puerile-humor.diff
+use-local-calibration-files.diff
+use-packaged-publicsuffix.diff
+fix-FTBFS-with-autoreconf-enabled.diff

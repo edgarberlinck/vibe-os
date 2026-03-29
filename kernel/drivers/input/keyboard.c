@@ -137,20 +137,20 @@ void kernel_keyboard_irq_handler(void) {
 
     if ((status & PS2_STATUS_OUTPUT_FULL) == 0u ||
         (status & PS2_STATUS_AUX_OUTPUT_FULL) != 0u) {
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     scancode = inb(PS2_DATA_PORT);
 
     if (!g_kernel_kbd_ready) {
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     if (scancode == 0xE0u) {
         g_kernel_kbd_extended = 1u;
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
@@ -169,41 +169,41 @@ void kernel_keyboard_irq_handler(void) {
                 kbd_push_key(key);
             }
         }
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     if (scancode == 0x2Au || scancode == 0x36u) {
         g_kernel_kbd_shift = 1u;
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     if (scancode == 0x1Du) {
         g_kernel_kbd_ctrl = 1u;
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     if (scancode == 0xAAu || scancode == 0xB6u) {
         g_kernel_kbd_shift = 0u;
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     if (scancode == 0x9Du) {
         g_kernel_kbd_ctrl = 0u;
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     if ((scancode & 0x80u) != 0u) {
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
     if (scancode == 0xFAu || scancode == 0xFEu) {
-        kernel_pic_send_eoi(1);
+        kernel_irq_complete(1);
         return;
     }
 
@@ -222,7 +222,7 @@ void kernel_keyboard_irq_handler(void) {
         kbd_push_key((uint16_t)(uint8_t)c);
     }
 
-    kernel_pic_send_eoi(1);
+    kernel_irq_complete(1);
 }
 
 void kernel_keyboard_init(void) {

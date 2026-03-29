@@ -290,6 +290,7 @@ PHASE6_REPORT := $(BUILD_DIR)/phase6-validation.md
 MODULAR_APPS_REPORT := $(BUILD_DIR)/modular-apps-validation.md
 GPU_BACKENDS_REPORT := $(BUILD_DIR)/gpu-backends-report.md
 AUDIO_STACK_REPORT := $(BUILD_DIR)/audio-stack-validation.md
+SMP_REPORT := $(BUILD_DIR)/smp-validation.md
 GPU_BACKENDS_I915_EXPERIMENTAL_REPORT := $(BUILD_DIR)/gpu-backends-i915-experimental-report.md
 GPU_BACKENDS_RECOVERY_REPORT := $(BUILD_DIR)/gpu-backends-recovery-report.md
 CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
@@ -1634,6 +1635,9 @@ run-headless-usb-debug: $(IMAGE)
 
 validate-phase6: $(IMAGE)
 	$(PYTHON) tools/validate_phase6.py --image $(IMAGE) --report $(PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-smp: $(IMAGE)
+	$(PYTHON) tools/validate_smp.py --image $(IMAGE) --report $(SMP_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 boot-smoke-image: check-tools
 	$(MAKE) IMAGE="$(BOOT_SMOKE_IMAGE)" \

@@ -18,7 +18,7 @@ Objetivo: evoluir o VibeOS de kernel single-core cooperativo para kernel SMP rea
 - [X] Implementar leitura/escrita MMIO do LAPIC
 - [X] Implementar enable do Local APIC no BSP
 - [X] Implementar helpers de EOI/IPI do LAPIC
-- [ ] Validar fallback limpo para maquinas sem APIC
+- [X] Validar fallback limpo para maquinas sem APIC
 
 ## Fase 2 - AP Startup
 
@@ -49,14 +49,26 @@ Estado atual da ABI:
 - Syscalls e helpers sensiveis de servicos passaram a consultar o `current_pid` via scheduler per-CPU centralizado, em vez de cada subsistema reler `scheduler_current()` por conta propria.
 - O fallback padrao voltou a ser single-core seguro: o bring-up SMP agora so ativa quando o loader entrega `BOOTINFO_FLAG_EXPERIMENTAL_SMP`, alternado no `stage2` pela tecla `M`.
 - O bootstrap e o smoke `validate-audio-hda-startup` voltaram a passar em QEMU com essa ABI nova.
+- O heap do kernel deixou de depender de estado global sem protecao: alocacao e estatisticas agora passam por `spinlock`, fechando a corrupcao obvia de bring-up SMP.
+- O caminho de EOI dos IRQs deixou de ser PIC-only: timer, teclado, mouse e IRQs compartilhadas de audio passaram a usar `kernel_irq_complete()`, que reconhece o LAPIC quando ele esta ativo e preserva o PIC no fallback legado.
+- O boot agora loga o motivo do fallback SMP de forma explicita, incluindo `local apic unavailable`, `intel mp table missing` e `experimental toggle off`.
+- Existe validacao dedicada via `make validate-smp`, cobrindo fallback legado e bring-up experimental em QEMU com `-smp 2` e `-smp 4`.
+- Entrada/video/storage ficam no patamar minimo de reentrancia desta fase: teclado e mouse continuam serializados por `irq_save`, video protege sections criticas com `irq_save`, e ATA/AHCI seguem serializados por `spinlock`.
 
 ## Fase 4 - Robustez
 
-- [ ] Revisar heap para concorrencia
-- [ ] Revisar timers/EOI/IRQ para APIC
-- [ ] Revisar drivers de entrada/video/storage para reentrancia minima
-- [ ] Adicionar testes de boot em hardware/QEMU com 2+ CPUs
-- [~] Documentar riscos e knobs de ativacao
+- [X] Revisar heap para concorrencia
+- [X] Revisar timers/EOI/IRQ para APIC
+- [X] Revisar drivers de entrada/video/storage para reentrancia minima
+- [X] Adicionar testes de boot em hardware/QEMU com 2+ CPUs
+- [X] Documentar riscos e knobs de ativacao
+
+Knobs e riscos atuais:
+
+- O caminho padrao continua conservador: sem `BOOTINFO_FLAG_EXPERIMENTAL_SMP`, o sistema segue BSP-only mesmo em plataforma multiprocessada.
+- A ativacao experimental continua vindo do `stage2` pela tecla `M`, justamente para manter fallback limpo em hardware estranho.
+- O runtime ainda usa PIC como roteamento principal de IRQ; o que esta fechado nesta fase e o ack/EIO coerente entre PIC e LAPIC no estado atual, nao uma migracao completa para IOAPIC ou timer local por core.
+- O heap do kernel continua sendo bump allocator sem reclaim; a correcao desta fase fecha concorrencia, nao um allocator completo.
 
 ## Principios
 

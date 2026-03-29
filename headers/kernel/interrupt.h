@@ -17,6 +17,7 @@ void kernel_irq_dispatch(uint8_t irq_line);
 uint32_t kernel_irq_save(void);
 void kernel_irq_restore(uint32_t flags);
 void kernel_pic_send_eoi(uint8_t irq_line);
+void kernel_irq_complete(uint8_t irq_line);
 
 /* Exception handlers called by stubs */
 void divide_error_handler(void);
