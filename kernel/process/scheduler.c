@@ -114,7 +114,9 @@ static process_t *scheduler_first_runnable(void) {
 }
 
 static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
+    int wait_bonus = 0;
     int affinity_score;
+    int base_score;
 
     if (task == NULL) {
         return 0x7fffffff;
@@ -127,7 +129,50 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
     } else if (task->preferred_cpu < 0) {
         affinity_score = 2;
     }
-    return (int)(task->priority_tier * 16u) + affinity_score;
+
+    /*
+     * Recently signaled tasks that were blocked on interactive queues should
+     * run ahead of bulk/background work once they become ready again.
+     */
+    if (task->wait_result == TASK_WAIT_RESULT_SIGNALED) {
+        switch (task->wait_event_class) {
+        case TASK_WAIT_CLASS_INPUT:
+            wait_bonus = 12;
+            break;
+        case TASK_WAIT_CLASS_VIDEO:
+            wait_bonus = 8;
+            break;
+        case TASK_WAIT_CLASS_SUPERVISION:
+            wait_bonus = 6;
+            break;
+        case TASK_WAIT_CLASS_STORAGE:
+        case TASK_WAIT_CLASS_FILESYSTEM:
+            wait_bonus = 4;
+            break;
+        case TASK_WAIT_CLASS_AUDIO:
+        case TASK_WAIT_CLASS_NETWORK:
+            wait_bonus = 2;
+            break;
+        default:
+            break;
+        }
+    }
+
+    base_score = (int)(task->priority_tier * 16u) + affinity_score - wait_bonus;
+    if (base_score < 0) {
+        base_score = 0;
+    }
+    return base_score;
+}
+
+static void scheduler_clear_wait_channel(process_t *task) {
+    if (task == NULL) {
+        return;
+    }
+
+    task->wait_channel = 0;
+    task->wait_deadline = 0u;
+    task->wait_next = 0;
 }
 
 void scheduler_init(void) {
@@ -479,9 +524,8 @@ int scheduler_complete_wait(process_t *task, uint32_t wait_result) {
     if (task->state == PROCESS_BLOCKED) {
         task->state = PROCESS_READY;
         task->current_cpu = -1;
-        task->wait_deadline = 0u;
+        scheduler_clear_wait_channel(task);
         task->wait_result = wait_result;
-        task->wait_next = 0;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         return 0;
     }
@@ -505,10 +549,8 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
         kernel_waitable_detach_task((kernel_waitable_t *)task->wait_channel, task);
         task->state = PROCESS_READY;
         task->current_cpu = -1;
-        task->wait_channel = 0;
-        task->wait_deadline = 0u;
+        scheduler_clear_wait_channel(task);
         task->wait_result = TASK_WAIT_RESULT_TIMED_OUT;
-        task->wait_next = 0;
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
 }

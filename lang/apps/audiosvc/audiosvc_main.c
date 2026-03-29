@@ -1,5 +1,7 @@
 #include <lang/include/vibe_app_runtime.h>
 #include <lang/include/vibe_stdlib.h>
+#include <userland/modules/include/syscalls.h>
+#include <userland/modules/include/utils.h>
 
 #define AUDIOSVC_STATUS_EXPORT_PATH "/runtime/audiosvc-status.txt"
 #define MK_AUDIO_STATUS_BACKEND_MASK 0x000000ffu
@@ -12,6 +14,10 @@
 #define MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN 0x00004000u
 #define MK_AUDIO_FEATURE_USB_ATTACH_READY 0x00020000u
 #define MK_AUDIO_FEATURE_USB_ATTACHED_READY 0x00040000u
+
+void kernel_debug_puts(const char *msg) {
+    (void)msg;
+}
 
 static void audiosvc_debug(const char *text) {
     __asm__ volatile("int $0x80"
@@ -659,6 +665,36 @@ static int audiosvc_command_export_state(const char *path) {
     return 0;
 }
 
+static int audiosvc_command_play_asset(const char *path) {
+    struct audio_async_playback playback;
+    int rc;
+
+    if (path == 0 || *path == '\0') {
+        audiosvc_debug("audiosvc: play-asset missing-path\n");
+        printf("audiosvc: missing asset path\n");
+        return 1;
+    }
+
+    audiosvc_debug("audiosvc: play-asset begin\n");
+    rc = audio_play_wav_async_start(&playback, path, "desktop-session");
+    if (rc != 0) {
+        audiosvc_debug("audiosvc: play-asset start-failed\n");
+        return 1;
+    }
+
+    while ((rc = audio_play_wav_async_poll(&playback)) > 0) {
+        sys_yield();
+    }
+
+    if (rc < 0) {
+        audiosvc_debug("audiosvc: play-asset failed\n");
+        return 1;
+    }
+
+    audiosvc_debug("audiosvc: play-asset done\n");
+    return 0;
+}
+
 int vibe_app_main(int argc, char **argv) {
     if (argc < 2 || argv == 0 || argv[1] == 0) {
         audiosvc_usage();
@@ -670,6 +706,9 @@ int vibe_app_main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "export-state") == 0) {
         return audiosvc_command_export_state(argc > 2 ? argv[2] : 0);
+    }
+    if (strcmp(argv[1], "play-asset") == 0) {
+        return audiosvc_command_play_asset(argc > 2 ? argv[2] : 0);
     }
 
     audiosvc_usage();

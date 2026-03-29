@@ -624,7 +624,11 @@ AUDIOSVC_APP_BUILD_DIR := $(BUILD_DIR)/lang/audiosvc
 AUDIOSVC_APP_OBJS := \
 	$(AUDIOSVC_APP_BUILD_DIR)/app_entry.o \
 	$(AUDIOSVC_APP_BUILD_DIR)/app_runtime.o \
-	$(AUDIOSVC_APP_BUILD_DIR)/audiosvc_main.o
+	$(AUDIOSVC_APP_BUILD_DIR)/audiosvc_main.o \
+	$(BUILD_DIR)/userland/modules/console.o \
+	$(BUILD_DIR)/userland/modules/fs.o \
+	$(BUILD_DIR)/userland/modules/utils.o \
+	$(BUILD_DIR)/userland/modules/syscalls.o
 AUDIOSVC_APP_ELF := $(BUILD_DIR)/lang/audiosvc.elf
 AUDIOSVC_APP_BIN := $(BUILD_DIR)/lang/audiosvc.app
 

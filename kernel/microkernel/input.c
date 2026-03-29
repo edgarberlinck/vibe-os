@@ -191,34 +191,27 @@ static int mk_input_local_handler(const struct mk_message *request,
     }
     case MK_MSG_INPUT_MOUSE_POLL: {
         struct mouse_state state;
-        int x;
-        int y;
-        int dx;
-        int dy;
-        int wheel;
-        uint8_t buttons;
 
         if (request->payload_size != 0u) {
             return -1;
         }
-        if (!kernel_mouse_has_data()) {
+        if (!kernel_input_mouse_event_dequeue(&state)) {
             return mk_input_reply_mouse(reply, 0, 0);
         }
-
-        kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
-        state.x = x;
-        state.y = y;
-        state.dx = dx;
-        state.dy = dy;
-        state.wheel = wheel;
-        state.buttons = buttons;
         return mk_input_reply_mouse(reply, 1, &state);
     }
     case MK_MSG_INPUT_KEY_READ:
         if (request->payload_size != 0u) {
             return -1;
         }
-        return mk_input_reply_result(reply, kernel_keyboard_read());
+        if (kernel_input_key_event_has_data()) {
+            int key = 0;
+
+            if (kernel_input_key_event_dequeue(&key) != 0) {
+                return mk_input_reply_result(reply, key);
+            }
+        }
+        return mk_input_reply_result(reply, -1);
     case MK_MSG_INPUT_SET_LAYOUT: {
         const struct mk_input_layout_set_request *payload;
         char *name;
@@ -307,45 +300,25 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
     struct mk_message request;
     struct mk_message reply;
     int rc;
-    int x;
-    int y;
-    int dx;
-    int dy;
-    int wheel;
-    uint8_t buttons;
 
     if (state == 0) {
         return 0;
     }
     if (mk_input_should_use_local_fallback() ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_MOUSE_POLL, 0, 0u) != 0) {
-        if (!kernel_mouse_has_data()) {
+        if (!kernel_input_mouse_event_dequeue(state)) {
             memset(state, 0, sizeof(*state));
             return 0;
         }
-        kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
-        state->x = x;
-        state->y = y;
-        state->dx = dx;
-        state->dy = dy;
-        state->wheel = wheel;
-        state->buttons = buttons;
         return 1;
     }
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
-        if (!kernel_mouse_has_data()) {
+        if (!kernel_input_mouse_event_dequeue(state)) {
             memset(state, 0, sizeof(*state));
             return 0;
         }
-        kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
-        state->x = x;
-        state->y = y;
-        state->dx = dx;
-        state->dy = dy;
-        state->wheel = wheel;
-        state->buttons = buttons;
         return 1;
     }
     g_input_service_transport_degraded = 0;
@@ -356,15 +329,22 @@ int mk_input_service_read_key(void) {
     struct mk_message request;
     struct mk_message reply;
     int rc;
+    int key = -1;
 
     if (mk_input_should_use_local_fallback() ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_KEY_READ, 0, 0u) != 0) {
-        return kernel_keyboard_read();
+        if (kernel_input_key_event_dequeue(&key) != 0) {
+            return key;
+        }
+        return -1;
     }
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
-        return kernel_keyboard_read();
+        if (kernel_input_key_event_dequeue(&key) != 0) {
+            return key;
+        }
+        return -1;
     }
     g_input_service_transport_degraded = 0;
     return mk_input_decode_result(&reply);

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import re
 import shutil
 import signal
@@ -15,11 +16,18 @@ from typing import Callable, List, Optional, Tuple
 
 BOOT_MARKER = "userland.app: shell start"
 SHELL_READY_MARKER = "shell: ready"
+AUTODESKTOP_BOOT_MARKERS = [
+    "init: desktop host launched",
+    "host: startx start",
+    "desktop: session start",
+]
 DESKTOP_CENTER_X = 320
 DESKTOP_CENTER_Y = 240
 FILES_ICON_CENTER = (572, 63)
 START_BUTTON_CENTER = (35, 469)
 START_MENU_TERMINAL_CENTER = (186, 142)
+BASE_WIDTH = 640
+BASE_HEIGHT = 480
 
 
 @dataclass
@@ -60,6 +68,7 @@ class QemuSession:
     def __init__(self, qemu_binary: str, image_path: Path, memory_mb: int, workspace: Path):
         self.serial_log = workspace / "s.log"
         self.monitor_socket = workspace / "m.sock"
+        self.qmp_socket = workspace / "qmp.sock"
         self.proc = subprocess.Popen(
             [
                 qemu_binary,
@@ -79,6 +88,8 @@ class QemuSession:
                 f"file:{self.serial_log}",
                 "-monitor",
                 f"unix:{self.monitor_socket},server,nowait",
+                "-qmp",
+                f"unix:{self.qmp_socket},server,nowait",
                 "-no-reboot",
                 "-no-shutdown",
             ],
@@ -87,7 +98,10 @@ class QemuSession:
         )
         self.mouse_x = 0
         self.mouse_y = 0
+        self.qmp_client: Optional[socket.socket] = None
         self._wait_for_monitor()
+        self._wait_for_qmp()
+        self._connect_qmp()
 
     def _wait_for_monitor(self) -> None:
         deadline = time.time() + 10.0
@@ -99,12 +113,28 @@ class QemuSession:
             time.sleep(0.05)
         raise RuntimeError("Timed out waiting for QEMU monitor socket")
 
+    def _wait_for_qmp(self) -> None:
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            if self.qmp_socket.exists():
+                return
+            if self.proc.poll() is not None:
+                raise RuntimeError("QEMU exited before QMP socket was created")
+            time.sleep(0.05)
+        raise RuntimeError("Timed out waiting for QMP socket")
+
     def close(self) -> None:
         if self.proc.poll() is None:
             try:
-                self.hmp("quit", timeout=0.5)
+                self.qmp({"execute": "quit"}, timeout=0.5)
             except Exception:
                 pass
+        if self.qmp_client is not None:
+            try:
+                self.qmp_client.close()
+            except Exception:
+                pass
+            self.qmp_client = None
         if self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -182,6 +212,63 @@ class QemuSession:
                     break
         return b"".join(chunks).decode("utf-8", errors="replace")
 
+    def _connect_qmp(self) -> None:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(1.0)
+        client.connect(str(self.qmp_socket))
+        greeting = client.recv(4096)
+        if b"QMP" not in greeting:
+            client.close()
+            raise RuntimeError("Unexpected QMP greeting")
+        self.qmp_client = client
+        response = self.qmp({"execute": "qmp_capabilities"})
+        if "return" not in response:
+            raise RuntimeError("QMP capability handshake failed")
+
+    def qmp(self, payload: dict, timeout: float = 1.0) -> dict:
+        client = self.qmp_client
+        if client is None:
+            raise RuntimeError("QMP client is not connected")
+        client.settimeout(timeout)
+        client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+        data = b""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                chunk = client.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            data += chunk
+            if b"\n" in chunk:
+                break
+        if not data:
+            return {}
+        return json.loads(data.decode("utf-8", errors="replace"))
+
+    def qmp_mouse_rel(self, dx: int, dy: int) -> None:
+        raw_dx = dx // 2
+        raw_dy = dy // 2
+        if dx != 0 and raw_dx == 0:
+            raw_dx = 1 if dx > 0 else -1
+        if dy != 0 and raw_dy == 0:
+            raw_dy = 1 if dy > 0 else -1
+        response = self.qmp(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": [
+                        {"type": "rel", "data": {"axis": "x", "value": raw_dx}},
+                        {"type": "rel", "data": {"axis": "y", "value": raw_dy}},
+                    ],
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP mouse move failed: {response['error']}")
+
     def send_key(self, key: str, pause: float = 0.08) -> None:
         self.hmp(f"sendkey {key}")
         time.sleep(pause)
@@ -200,8 +287,11 @@ class QemuSession:
             self.send_key(key, pause=pause)
 
     def reset_mouse_to_center(self) -> None:
-        self.mouse_x = DESKTOP_CENTER_X
-        self.mouse_y = DESKTOP_CENTER_Y
+        for _ in range(4):
+            self.qmp_mouse_rel(-32768, -32768)
+            time.sleep(0.03)
+        self.mouse_x = 0
+        self.mouse_y = 0
 
     def move_mouse_to(self, x: int, y: int, pause: float = 0.04) -> None:
         dx = x - self.mouse_x
@@ -210,7 +300,7 @@ class QemuSession:
         while dx != 0 or dy != 0:
             step_x = max(-40, min(40, dx))
             step_y = max(-40, min(40, dy))
-            self.hmp(f"mouse_move {step_x} {step_y}")
+            self.qmp_mouse_rel(step_x, step_y)
             self.mouse_x += step_x
             self.mouse_y += step_y
             dx -= step_x
@@ -218,17 +308,64 @@ class QemuSession:
             time.sleep(pause)
 
     def left_click(self, pause: float = 0.08) -> None:
-        self.hmp("mouse_button 1")
+        response = self.qmp(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": [
+                        {"type": "rel", "data": {"axis": "x", "value": 1}},
+                        {"type": "rel", "data": {"axis": "y", "value": 0}},
+                        {"type": "btn", "data": {"button": "left", "down": True}},
+                    ],
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP mouse press failed: {response['error']}")
+        self.mouse_x += 1
         time.sleep(pause)
-        self.hmp("mouse_button 0")
+        response = self.qmp(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": [
+                        {"type": "btn", "data": {"button": "left", "down": False}},
+                    ],
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP mouse release failed: {response['error']}")
         time.sleep(pause)
+        self.qmp_mouse_rel(-1, 0)
+        self.mouse_x -= 1
+        time.sleep(pause)
+
+
+def scaled_point(session: QemuSession, point: Tuple[int, int]) -> Tuple[int, int]:
+    mode = session.boot_mode_size()
+    if not mode:
+        return point
+    width, height = mode
+    return (
+        (point[0] * width) // BASE_WIDTH,
+        (point[1] * height) // BASE_HEIGHT,
+    )
 
 
 def scenario_startx(session: QemuSession) -> None:
     session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=90.0)
-    session.send_key("ctrl-f", pause=0.15)
+    session.reset_mouse_to_center()
+    session.move_mouse_to(*scaled_point(session, FILES_ICON_CENTER))
+    session.left_click(pause=0.12)
     session.wait_for_log("desktop: open-new w=0 t=3 i=0", timeout=8.0)
-    session.send_key("ctrl-t", pause=0.15)
+    session.move_mouse_to(*scaled_point(session, START_BUTTON_CENTER))
+    session.left_click(pause=0.12)
+    time.sleep(0.25)
+    session.move_mouse_to(*scaled_point(session, START_MENU_TERMINAL_CENTER))
+    session.left_click(pause=0.12)
     session.wait_for_log("desktop: open-new w=1 t=1 i=0", timeout=8.0)
 
 
@@ -258,9 +395,7 @@ def scenario_terminal_runtime(session: QemuSession) -> None:
 
 
 def scenario_terminal_vidmodes(session: QemuSession) -> None:
-    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=45.0)
-    session.send_key("ctrl-t", pause=0.15)
-    session.wait_for_log("desktop: open-new w=0 t=1 i=0", timeout=8.0)
+    scenario_open_terminal(session, timeout=45.0)
     time.sleep(1.0)
     run_command(session, "vidmodes", timeout=8.0, marker="")
     session.wait_for_all(
@@ -284,7 +419,12 @@ def scenario_terminal_vidmodes(session: QemuSession) -> None:
 
 def scenario_open_terminal(session: QemuSession, timeout: float = 45.0) -> None:
     session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=timeout)
-    session.send_key("ctrl-t", pause=0.15)
+    session.reset_mouse_to_center()
+    session.move_mouse_to(*scaled_point(session, START_BUTTON_CENTER))
+    session.left_click(pause=0.12)
+    time.sleep(0.25)
+    session.move_mouse_to(*scaled_point(session, START_MENU_TERMINAL_CENTER))
+    session.left_click(pause=0.12)
     session.wait_for_log("desktop: open-new w=0 t=1 i=0", timeout=8.0)
     time.sleep(1.0)
 
@@ -348,9 +488,7 @@ SCENARIOS = [
             "desktop: open-new w=1 t=1 i=0",
         ],
         boot_markers=[
-            BOOT_MARKER,
-            "desktop.app: launch startx",
-            "desktop: session start",
+            *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_startx,
     ),
@@ -474,9 +612,7 @@ SCENARIOS = [
             "doom: port run begin",
         ],
         boot_markers=[
-            BOOT_MARKER,
-            "desktop.app: launch startx",
-            "desktop: session start",
+            *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_doom,
     ),
@@ -497,9 +633,7 @@ SCENARIOS = [
             "craft: first frame rc=",
         ],
         boot_markers=[
-            BOOT_MARKER,
-            "desktop.app: launch startx",
-            "desktop: session start",
+            *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_craft,
     ),
@@ -525,9 +659,7 @@ SCENARIOS = [
             "vidmodes: summary ok=",
         ],
         boot_markers=[
-            BOOT_MARKER,
-            "desktop.app: launch startx",
-            "desktop: session start",
+            *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_terminal_vidmodes,
     ),

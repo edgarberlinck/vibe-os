@@ -295,6 +295,8 @@ static int g_desktop_audio_event_subscription = 0;
 static int g_desktop_network_event_subscription = 0;
 static int g_desktop_video_event_subscription = 0;
 static uint32_t g_desktop_service_event_subscriptions = 0u;
+static int g_desktop_key_trace_budget = 16;
+static int g_desktop_click_trace_budget = 24;
 
 static const char *g_sound_outputs[] = {"Alto-falantes", "Fones", "Surround", "Centro/LFE"};
 static const char *g_sound_outputs_hda[] = {"Alto-falante", "Fones", "Line-out", "Digital"};
@@ -303,9 +305,8 @@ static const char *g_sound_inputs_hda[] = {"Microfone", "Line-in"};
 
 static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
                                            int *pending,
-                                           struct audio_async_playback *playback,
                                            uint32_t ticks) {
-    if (armed_ticks == 0 || pending == 0 || playback == 0) {
+    if (armed_ticks == 0 || pending == 0) {
         return;
     }
     if (*pending != 0) {
@@ -319,16 +320,9 @@ static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
             return;
         }
         sys_write_debug("desktop: startup sound begin\n");
-        if (audio_play_wav_async_start(playback, "/assets/vibe_os_desktop.wav", "desktop-session") != 0) {
+        if (sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP_AUDIO) <= 0) {
             sys_write_debug("desktop: startup sound returned\n");
         }
-        return;
-    }
-    if (playback->active == 0) {
-        return;
-    }
-    if (audio_play_wav_async_poll(playback) <= 0) {
-        sys_write_debug("desktop: startup sound returned\n");
     }
 }
 
@@ -720,6 +714,7 @@ static void free_window(int widx);
 static void clamp_window_rect(struct rect *r);
 static void append_uint_limited(char *buf, unsigned value, int max_len);
 static void debug_window_event(const char *tag, int widx, enum app_type type, int instance);
+static void desktop_trace_click_event(int x, int y, int start_hover, int menu_open);
 static void clamp_mouse_state(struct mouse_state *mouse);
 static int desktop_scroll_lines(int wheel_delta);
 static int trash_window_visible_rows(const struct trash_state *state);
@@ -3349,6 +3344,42 @@ static void debug_window_event(const char *tag, int widx, enum app_type type, in
     debug_append_int(msg, (int)type, (int)sizeof(msg));
     str_append(msg, " i=", (int)sizeof(msg));
     debug_append_int(msg, instance, (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
+static void desktop_trace_key_event(int key) {
+    char msg[64];
+
+    if (g_desktop_key_trace_budget <= 0) {
+        return;
+    }
+
+    g_desktop_key_trace_budget -= 1;
+    msg[0] = '\0';
+    str_append(msg, "desktop: key ", (int)sizeof(msg));
+    debug_append_int(msg, key, (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
+static void desktop_trace_click_event(int x, int y, int start_hover, int menu_open) {
+    char msg[96];
+
+    if (g_desktop_click_trace_budget <= 0) {
+        return;
+    }
+
+    g_desktop_click_trace_budget -= 1;
+    msg[0] = '\0';
+    str_append(msg, "desktop: click x=", (int)sizeof(msg));
+    debug_append_int(msg, x, (int)sizeof(msg));
+    str_append(msg, " y=", (int)sizeof(msg));
+    debug_append_int(msg, y, (int)sizeof(msg));
+    str_append(msg, " start=", (int)sizeof(msg));
+    debug_append_int(msg, start_hover, (int)sizeof(msg));
+    str_append(msg, " menu=", (int)sizeof(msg));
+    debug_append_int(msg, menu_open, (int)sizeof(msg));
     str_append(msg, "\n", (int)sizeof(msg));
     sys_write_debug(msg);
 }
@@ -7412,7 +7443,6 @@ void desktop_main(void) {
     uint32_t desktop_sound_armed_ticks = 0u;
     uint32_t desktop_last_present_sequence = 0u;
     int desktop_sound_pending = 1;
-    struct audio_async_playback desktop_sound_playback = {0};
 
     ui_init();
     (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
@@ -7478,7 +7508,6 @@ void desktop_main(void) {
         dirty |= desktop_process_drag_stress(&focused, ticks);
         desktop_try_play_startup_sound(&desktop_sound_armed_ticks,
                                        &desktop_sound_pending,
-                                       &desktop_sound_playback,
                                        ticks);
         network_applet_sync_backend(0);
         network_applet_try_autoconnect();
@@ -7844,6 +7873,8 @@ void desktop_main(void) {
             int start_click_hover = point_in_rect(&start_button, click_x, click_y);
             int handled = 0;
 
+            desktop_trace_click_event(click_x, click_y, start_click_hover, menu_open);
+
             if (desktop_dispatch_file_dialog_click(&file_dialog, click_x, click_y)) {
                 handled = 1;
                 dirty = 1;
@@ -7953,6 +7984,7 @@ void desktop_main(void) {
 
         for (int event_index = 0; event_index < key_event_queue.count; ++event_index) {
             key = key_event_queue.keys[event_index];
+            desktop_trace_key_event(key);
             if (g_network_applet.popup_open && g_network_applet.password_focus) {
                 if (key == '\b' || key == 127) {
                     if (g_network_applet.password_len > 0) {

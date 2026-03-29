@@ -242,12 +242,13 @@ Rules:
 - [x] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
 - [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
 - [~] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
+: `init` now remains in a supervision/event loop and `desktop-host` now relaunches a separate `startx-host` task instead of executing the desktop session inline, but generic AppFS foreground apps still do not launch into their own independent task contexts yet
 
 ### Phase B: Input / Desktop Decoupling
 
 - [x] keyboard polling can bypass degraded worker transport
 - [x] mouse polling can bypass degraded worker transport
-- [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; foreground modular apps still need the same treatment
+- [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; `desktop-host` now supervises a separate `startx-host` task instead of running the session inline, but general foreground modular apps still need the same treatment
 - [~] move input service to event publication ownership instead of kernel fallback ownership
 - [~] move input service to event publication ownership instead of kernel fallback ownership
 : the shared `INPUT_EVENT` stream now sits on top of explicit kernel-owned keyboard and mouse queues with their own waitable contexts, so per-device capture no longer exists only as private driver-local state; the steady-state fallback path still exists and service ownership is not complete yet

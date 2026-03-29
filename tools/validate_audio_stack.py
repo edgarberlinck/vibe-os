@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import re
 import shutil
 import socket
 import subprocess
@@ -9,6 +10,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+
+BASE_WIDTH = 640
+BASE_HEIGHT = 480
+START_BUTTON_CENTER = (35, 469)
+START_MENU_TERMINAL_CENTER = (186, 142)
 
 
 @dataclass
@@ -63,6 +70,8 @@ class QemuMonitorSession:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        self.mouse_x = 0
+        self.mouse_y = 0
         self._wait_for_monitor()
 
     def _wait_for_monitor(self) -> None:
@@ -140,6 +149,14 @@ class QemuMonitorSession:
             time.sleep(0.05)
         raise RuntimeError("Timed out waiting for markers: " + ", ".join(pending))
 
+    def boot_mode_size(self) -> Optional[Tuple[int, int]]:
+        log = self.read_log()
+        matches = re.findall(r"video: boot init backend=.* mode=(\d+)x(\d+)x\d+", log)
+        if not matches:
+            return None
+        width_text, height_text = matches[-1]
+        return (int(width_text, 10), int(height_text, 10))
+
     def send_key(self, key: str, pause: float = 0.08) -> None:
         self.hmp(f"sendkey {key}")
         time.sleep(pause)
@@ -155,6 +172,50 @@ class QemuMonitorSession:
         }
         for ch in text:
             self.send_key(key_map.get(ch, ch.lower()), pause=pause)
+
+    def reset_mouse_to_center(self) -> None:
+        for _ in range(4):
+            self.hmp("mouse_move -32768 -32768")
+            time.sleep(0.03)
+        self.mouse_x = 0
+        self.mouse_y = 0
+
+    def move_mouse_to(self, x: int, y: int, pause: float = 0.04) -> None:
+        dx = x - self.mouse_x
+        dy = y - self.mouse_y
+
+        while dx != 0 or dy != 0:
+            step_x = max(-40, min(40, dx))
+            step_y = max(-40, min(40, dy))
+            self.hmp(f"mouse_move {step_x} {step_y}")
+            self.mouse_x += step_x
+            self.mouse_y += step_y
+            dx -= step_x
+            dy -= step_y
+            time.sleep(pause)
+
+    def left_click(self, pause: float = 0.08) -> None:
+        self.hmp("mouse_button 1")
+        time.sleep(pause)
+        self.hmp("mouse_move 1 0")
+        self.mouse_x += 1
+        time.sleep(pause)
+        self.hmp("mouse_button 0")
+        time.sleep(pause)
+        self.hmp("mouse_move -1 0")
+        self.mouse_x -= 1
+        time.sleep(pause)
+
+
+def scaled_point(session: QemuMonitorSession, point: Tuple[int, int]) -> Tuple[int, int]:
+    mode = session.boot_mode_size()
+    if not mode:
+        return point
+    width, height = mode
+    return (
+        (point[0] * width) // BASE_WIDTH,
+        (point[1] * height) // BASE_HEIGHT,
+    )
 
 
 def wait_for_any_marker(session: QemuMonitorSession, markers: List[str], timeout: float) -> None:
@@ -194,12 +255,12 @@ def run_audio_capture_smoke(qemu_binary: str,
                             require_boot_startup_sound: bool) -> AudioScenarioResult:
     backend_marker = f"audiosvc: backend={expected_backend}"
     alias_groups: List[Tuple[str, List[str]]] = [
+        ("startx-launch", ["desktop.app: launch startx", "host: startx start", "host: desktop session launched"]),
         ("status: transport=", ["audiosvc: transport=", "soundctl: transport="]),
         ("status: codecready-quirk=", ["audiosvc: codecready-quirk=", "soundctl: codecready-quirk="]),
         ("status: multichannel=", ["audiosvc: multichannel=", "soundctl: multichannel="]),
     ]
     required_markers = [
-        "desktop.app: launch startx",
         "desktop: session start",
         "audiosvc: export ok",
         backend_marker,
@@ -294,7 +355,10 @@ def run_audio_capture_smoke(qemu_binary: str,
                     ],
                     timeout=20.0,
                 )
-            session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=45.0)
+            wait_for_any_marker(session,
+                                ["desktop.app: launch startx", "host: startx start", "host: desktop session launched"],
+                                timeout=45.0)
+            session.wait_for_all(["desktop: session start"], timeout=45.0)
             if require_desktop_startup_sound:
                 session.wait_for_all(
                     [
@@ -306,7 +370,12 @@ def run_audio_capture_smoke(qemu_binary: str,
                     ],
                     timeout=20.0,
                 )
-            session.send_key("ctrl-t", pause=0.15)
+            session.reset_mouse_to_center()
+            session.move_mouse_to(*scaled_point(session, START_BUTTON_CENTER))
+            session.left_click(pause=0.12)
+            time.sleep(0.25)
+            session.move_mouse_to(*scaled_point(session, START_MENU_TERMINAL_CENTER))
+            session.left_click(pause=0.12)
             session.wait_for_all(["desktop: open-new w=0 t=1 i=0"], timeout=8.0)
             time.sleep(1.0)
             session.type_text("audiosvc status", pause=0.12)

@@ -176,44 +176,52 @@ static void smp_wait_ticks(uint32_t ticks) {
     }
 }
 
+static uint16_t smp_read_bios_u16(uintptr_t addr) {
+    uint16_t value;
+
+    __asm__ volatile("movw (%1), %0"
+                     : "=r"(value)
+                     : "r"(addr)
+                     : "memory");
+    return value;
+}
+
+static void smp_write_bios_u16(uintptr_t addr, uint16_t value) {
+    __asm__ volatile("movw %1, (%0)"
+                     :
+                     : "r"(addr), "r"(value)
+                     : "memory");
+}
+
 static void smp_arm_ap_reset_vector(void) {
-    volatile uint16_t *warm_reset_offset =
-        (volatile uint16_t *)(uintptr_t)BIOS_WARM_RESET_VECTOR_OFFSET_ADDR;
-    volatile uint16_t *warm_reset_segment =
-        (volatile uint16_t *)(uintptr_t)BIOS_WARM_RESET_VECTOR_SEGMENT_ADDR;
     uint16_t vector_segment = (uint16_t)(AP_TRAMPOLINE_PHYS_ADDR >> 4);
 
     if (!g_smp_ap_reset_vector_armed) {
         outb(CMOS_INDEX_PORT, CMOS_SHUTDOWN_STATUS_REG);
         g_smp_saved_cmos_shutdown = inb(CMOS_DATA_PORT);
-        g_smp_saved_warm_reset_offset = *warm_reset_offset;
-        g_smp_saved_warm_reset_segment = *warm_reset_segment;
+        g_smp_saved_warm_reset_offset = smp_read_bios_u16(BIOS_WARM_RESET_VECTOR_OFFSET_ADDR);
+        g_smp_saved_warm_reset_segment = smp_read_bios_u16(BIOS_WARM_RESET_VECTOR_SEGMENT_ADDR);
         g_smp_ap_reset_vector_armed = 1;
     }
 
     outb(CMOS_INDEX_PORT, CMOS_SHUTDOWN_STATUS_REG);
     outb(CMOS_DATA_PORT, CMOS_SHUTDOWN_JUMP_VECTOR);
-    *warm_reset_offset = 0u;
-    *warm_reset_segment = vector_segment;
+    smp_write_bios_u16(BIOS_WARM_RESET_VECTOR_OFFSET_ADDR, 0u);
+    smp_write_bios_u16(BIOS_WARM_RESET_VECTOR_SEGMENT_ADDR, vector_segment);
     kernel_debug_printf("smp: warm reset vector armed seg=%x phys=%x\n",
                         vector_segment,
                         AP_TRAMPOLINE_PHYS_ADDR);
 }
 
 static void smp_restore_ap_reset_vector(void) {
-    volatile uint16_t *warm_reset_offset =
-        (volatile uint16_t *)(uintptr_t)BIOS_WARM_RESET_VECTOR_OFFSET_ADDR;
-    volatile uint16_t *warm_reset_segment =
-        (volatile uint16_t *)(uintptr_t)BIOS_WARM_RESET_VECTOR_SEGMENT_ADDR;
-
     if (!g_smp_ap_reset_vector_armed) {
         return;
     }
 
     outb(CMOS_INDEX_PORT, CMOS_SHUTDOWN_STATUS_REG);
     outb(CMOS_DATA_PORT, g_smp_saved_cmos_shutdown);
-    *warm_reset_offset = g_smp_saved_warm_reset_offset;
-    *warm_reset_segment = g_smp_saved_warm_reset_segment;
+    smp_write_bios_u16(BIOS_WARM_RESET_VECTOR_OFFSET_ADDR, g_smp_saved_warm_reset_offset);
+    smp_write_bios_u16(BIOS_WARM_RESET_VECTOR_SEGMENT_ADDR, g_smp_saved_warm_reset_segment);
     g_smp_ap_reset_vector_armed = 0;
     kernel_debug_puts("smp: warm reset vector restored\n");
 }

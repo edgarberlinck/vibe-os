@@ -30,6 +30,8 @@ static syscall_fn syscall_table[MAX_SYSCALLS];
 
 extern void userland_shell_host_entry(void);
 extern void userland_desktop_host_entry(void);
+extern void userland_startx_host_entry(void);
+extern void userland_desktop_audio_host_entry(void);
 
 static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
@@ -260,12 +262,6 @@ static uint32_t sys_fs_fstat(uint32_t fd, uint32_t stat_ptr, uint32_t c,
 static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
                                 uint32_t d, uint32_t e) {
     struct mouse_state *state;
-    int x;
-    int y;
-    int dx;
-    int dy;
-    int wheel;
-    uint8_t buttons;
 
     (void)b; (void)c; (void)d; (void)e;
     if (state_ptr == 0u) {
@@ -273,24 +269,15 @@ static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
     }
 
     /*
-     * Keep desktop mouse polling on the direct PS/2 queue, just like keyboard
-     * reads already do. The input service host remains useful for supervision
-     * and layout/state APIs, but pointer motion should not depend on the
-     * worker transport staying healthy while the GUI is live.
+     * Keep desktop mouse polling on the kernel-owned input queue even when the
+     * input service restarts. This preserves low-latency pointer updates
+     * without reading device state straight from the raw driver path.
      */
     state = (struct mouse_state *)(uintptr_t)state_ptr;
-    if (!kernel_mouse_has_data()) {
+    if (!kernel_input_mouse_event_dequeue(state)) {
         memset(state, 0, sizeof(*state));
         return 0;
     }
-
-    kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
-    state->x = x;
-    state->y = y;
-    state->dx = dx;
-    state->dy = dy;
-    state->wheel = wheel;
-    state->buttons = buttons;
     return 1u;
 }
 
@@ -304,7 +291,13 @@ static uint32_t sys_input_event(uint32_t event_ptr, uint32_t b, uint32_t c,
     }
 
     event = (struct input_event *)(uintptr_t)event_ptr;
-    return (uint32_t)mk_input_service_next_event(event);
+    /*
+     * Desktop/session input should consume the kernel-owned event stream
+     * directly so pointer/key continuity survives input-service restarts.
+     * The input service remains relevant for publication/supervision and
+     * layout/state APIs, but not as a mandatory hop for foreground input.
+     */
+    return (uint32_t)kernel_input_event_dequeue(event);
 }
 
 static uint32_t sys_network_listen(uint32_t handle, uint32_t backlog, uint32_t c,
@@ -362,13 +355,17 @@ static uint32_t sys_write_debug(uint32_t a, uint32_t b, uint32_t c,
 
 static uint32_t sys_input_key(uint32_t a, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
+    int key = -1;
+
     (void)a; (void)b; (void)c; (void)d; (void)e;
     /*
-     * Key polling is latency-sensitive and already backed by the global
-     * kernel PS/2 queue. Going through the input worker adds an avoidable
-     * IPC/restart failure mode without improving arbitration.
+     * Key polling is latency-sensitive, but it should still consume the
+     * kernel-owned input queue instead of bypassing into the raw driver.
      */
-    return (uint32_t)kernel_keyboard_read();
+    if (kernel_input_key_event_dequeue(&key) != 0) {
+        return (uint32_t)key;
+    }
+    return (uint32_t)-1;
 }
 
 static uint32_t sys_text_clear(uint32_t a, uint32_t b, uint32_t c,
@@ -881,6 +878,16 @@ static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
         descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
         memcpy(descriptor.name, "desktop-host", 13u);
         descriptor.entry = userland_desktop_host_entry;
+        break;
+    case USERLAND_BUILTIN_STARTX:
+        descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        memcpy(descriptor.name, "startx-host", 12u);
+        descriptor.entry = userland_startx_host_entry;
+        break;
+    case USERLAND_BUILTIN_DESKTOP_AUDIO:
+        descriptor.flags |= MK_LAUNCH_FLAG_USER_APP;
+        memcpy(descriptor.name, "audio-host", 11u);
+        descriptor.entry = userland_desktop_audio_host_entry;
         break;
     default:
         return (uint32_t)-1;

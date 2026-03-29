@@ -97,7 +97,9 @@ enum syscall_id {
 enum userland_builtin_target {
     USERLAND_BUILTIN_NONE = 0,
     USERLAND_BUILTIN_SHELL = 1,
-    USERLAND_BUILTIN_DESKTOP = 2
+    USERLAND_BUILTIN_DESKTOP = 2,
+    USERLAND_BUILTIN_STARTX = 3,
+    USERLAND_BUILTIN_DESKTOP_AUDIO = 4
 };
 
 enum input_keycode {
