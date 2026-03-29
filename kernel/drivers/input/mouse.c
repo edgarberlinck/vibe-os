@@ -12,33 +12,15 @@
 #define PS2_TIMEOUT_SPINS 1000000u
 #define PS2_DRAIN_LIMIT 128u
 
-#define MOUSE_EVENT_QUEUE_CAPACITY 128u
-
 static volatile struct mouse_state g_kernel_mouse = {0};
 static volatile uint8_t g_kernel_mouse_packet[4];
 static volatile uint8_t g_kernel_mouse_packet_index = 0u;
 static volatile uint8_t g_kernel_mouse_packet_size = 3u;
 static volatile uint8_t g_kernel_mouse_ready = 0u;
-static volatile struct mouse_state g_mouse_event_queue[MOUSE_EVENT_QUEUE_CAPACITY];
-static volatile uint8_t g_mouse_event_head = 0u;
-static volatile uint8_t g_mouse_event_tail = 0u;
 static volatile uint32_t g_mouse_trace_budget = 16u;
 
 static void kernel_mouse_queue_event_unlocked(void) {
     struct mouse_state event_state;
-    uint8_t next = (uint8_t)((g_mouse_event_tail + 1u) % MOUSE_EVENT_QUEUE_CAPACITY);
-
-    if (next == g_mouse_event_head) {
-        g_mouse_event_head = (uint8_t)((g_mouse_event_head + 1u) % MOUSE_EVENT_QUEUE_CAPACITY);
-    }
-
-    g_mouse_event_queue[g_mouse_event_tail].x = g_kernel_mouse.x;
-    g_mouse_event_queue[g_mouse_event_tail].y = g_kernel_mouse.y;
-    g_mouse_event_queue[g_mouse_event_tail].dx = g_kernel_mouse.dx;
-    g_mouse_event_queue[g_mouse_event_tail].dy = g_kernel_mouse.dy;
-    g_mouse_event_queue[g_mouse_event_tail].wheel = g_kernel_mouse.wheel;
-    g_mouse_event_queue[g_mouse_event_tail].buttons = g_kernel_mouse.buttons;
-    g_mouse_event_tail = next;
 
     event_state.x = g_kernel_mouse.x;
     event_state.y = g_kernel_mouse.y;
@@ -46,7 +28,7 @@ static void kernel_mouse_queue_event_unlocked(void) {
     event_state.dy = g_kernel_mouse.dy;
     event_state.wheel = g_kernel_mouse.wheel;
     event_state.buttons = g_kernel_mouse.buttons;
-    kernel_input_event_enqueue_mouse(&event_state);
+    kernel_input_mouse_event_enqueue(&event_state);
 }
 
 static void kernel_mouse_clamp_to_mode(const struct video_mode *mode) {
@@ -218,8 +200,6 @@ void kernel_mouse_init(void) {
 
     g_kernel_mouse_packet_index = 0u;
     g_kernel_mouse_ready = 1u;
-    g_mouse_event_head = 0u;
-    g_mouse_event_tail = 0u;
 
     struct video_mode *mode = kernel_video_get_mode();
     g_kernel_mouse.x = (int)(mode->width / 2u);
@@ -232,27 +212,28 @@ void kernel_mouse_init(void) {
 }
 
 int kernel_mouse_has_data(void) {
-    uint32_t flags = kernel_irq_save();
-    int updated = g_mouse_event_head != g_mouse_event_tail;
-    kernel_irq_restore(flags);
-    return updated;
+    return kernel_input_mouse_event_has_data();
 }
 
 void kernel_mouse_read(int *x, int *y, int *dx, int *dy, int *wheel, uint8_t *buttons) {
     uint32_t flags = kernel_irq_save();
-    struct mouse_state state = {(int)g_kernel_mouse.x, (int)g_kernel_mouse.y,
-                                (int)g_kernel_mouse.dx, (int)g_kernel_mouse.dy,
+    struct mouse_state state = {(int)g_kernel_mouse.x,
+                                (int)g_kernel_mouse.y,
+                                (int)g_kernel_mouse.dx,
+                                (int)g_kernel_mouse.dy,
                                 (int)g_kernel_mouse.wheel,
                                 (uint8_t)g_kernel_mouse.buttons};
+    kernel_irq_restore(flags);
 
-    if (g_mouse_event_head != g_mouse_event_tail) {
-        state.x = g_mouse_event_queue[g_mouse_event_head].x;
-        state.y = g_mouse_event_queue[g_mouse_event_head].y;
-        state.dx = g_mouse_event_queue[g_mouse_event_head].dx;
-        state.dy = g_mouse_event_queue[g_mouse_event_head].dy;
-        state.wheel = g_mouse_event_queue[g_mouse_event_head].wheel;
-        state.buttons = g_mouse_event_queue[g_mouse_event_head].buttons;
-        g_mouse_event_head = (uint8_t)((g_mouse_event_head + 1u) % MOUSE_EVENT_QUEUE_CAPACITY);
+    if (kernel_input_mouse_event_dequeue(&state) == 0) {
+        flags = kernel_irq_save();
+        state.x = (int)g_kernel_mouse.x;
+        state.y = (int)g_kernel_mouse.y;
+        state.dx = (int)g_kernel_mouse.dx;
+        state.dy = (int)g_kernel_mouse.dy;
+        state.wheel = (int)g_kernel_mouse.wheel;
+        state.buttons = (uint8_t)g_kernel_mouse.buttons;
+        kernel_irq_restore(flags);
     }
 
     if (x != NULL) {
@@ -273,7 +254,6 @@ void kernel_mouse_read(int *x, int *y, int *dx, int *dy, int *wheel, uint8_t *bu
     if (buttons != NULL) {
         *buttons = state.buttons;
     }
-    kernel_irq_restore(flags);
 }
 
 void kernel_mouse_sync_to_video(void) {

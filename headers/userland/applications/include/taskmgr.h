@@ -5,6 +5,7 @@
 #include <userland/modules/include/utils.h>
 #include <kernel/microkernel/audio.h>
 #include <kernel/microkernel/network.h>
+#include <kernel/microkernel/service.h>
 #include <include/userland_api.h>
 #include <stdint.h>
 

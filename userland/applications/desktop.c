@@ -27,10 +27,18 @@
 #include <userland/modules/include/fs.h>
 #include <kernel/microkernel/audio.h>
 #include <kernel/microkernel/network.h>
+#include <kernel/microkernel/video.h>
+#include <kernel/microkernel/service.h>
 #include <sys/audioio.h>
 
 #define DESKTOP_NETWORK_PROFILE_MAX 4
 #define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
+#define DESKTOP_INPUT_BATCH_MAX 128
+#define DESKTOP_UI_EVENT_QUEUE_MAX 4
+#define DESKTOP_KEY_EVENT_QUEUE_MAX DESKTOP_INPUT_BATCH_MAX
+#define DESKTOP_WINDOW_ACTION_QUEUE_MAX 8
+#define DESKTOP_SESSION_ACTION_QUEUE_MAX 8
+#define DESKTOP_APP_ACTION_QUEUE_MAX 8
 
 static struct window g_windows[MAX_WINDOWS];
 static struct terminal_state g_terms[MAX_TERMINALS];
@@ -133,6 +141,148 @@ struct network_applet_cache {
     struct mk_network_scan_info scans[4];
 };
 
+struct desktop_input_batch {
+    struct input_event events[DESKTOP_INPUT_BATCH_MAX];
+    int count;
+    int async_state_changed;
+    int mouse_event;
+    int wheel_delta;
+    int left_pressed;
+    int right_pressed;
+    int left_just_pressed;
+    int right_just_pressed;
+    int left_press_x;
+    int left_press_y;
+    int right_press_x;
+    int right_press_y;
+};
+
+enum desktop_ui_event_type {
+    DESKTOP_UI_EVENT_POINTER_MOVE = 0,
+    DESKTOP_UI_EVENT_LEFT_CLICK,
+    DESKTOP_UI_EVENT_RIGHT_CLICK,
+    DESKTOP_UI_EVENT_WHEEL
+};
+
+struct desktop_ui_event {
+    enum desktop_ui_event_type type;
+    int x;
+    int y;
+    int value;
+};
+
+struct desktop_ui_event_queue {
+    struct desktop_ui_event events[DESKTOP_UI_EVENT_QUEUE_MAX];
+    int count;
+};
+
+struct desktop_key_event_queue {
+    int keys[DESKTOP_KEY_EVENT_QUEUE_MAX];
+    int count;
+};
+
+enum desktop_window_action_type {
+    DESKTOP_WINDOW_ACTION_TASKBAR_TOGGLE = 0,
+    DESKTOP_WINDOW_ACTION_FOCUS_RAISE,
+    DESKTOP_WINDOW_ACTION_CLOSE,
+    DESKTOP_WINDOW_ACTION_MINIMIZE,
+    DESKTOP_WINDOW_ACTION_MAXIMIZE,
+    DESKTOP_WINDOW_ACTION_BEGIN_RESIZE,
+    DESKTOP_WINDOW_ACTION_BEGIN_DRAG
+};
+
+struct desktop_window_action {
+    enum desktop_window_action_type type;
+    int window;
+    int x;
+    int y;
+};
+
+struct desktop_window_action_queue {
+    struct desktop_window_action actions[DESKTOP_WINDOW_ACTION_QUEUE_MAX];
+    int count;
+};
+
+enum desktop_session_action_type {
+    DESKTOP_SESSION_ACTION_CLOSE_CONTEXTS = 0,
+    DESKTOP_SESSION_ACTION_OPEN_DESKTOP_CONTEXT,
+    DESKTOP_SESSION_ACTION_OPEN_APP_CONTEXT,
+    DESKTOP_SESSION_ACTION_OPEN_FILEMANAGER_CONTEXT,
+    DESKTOP_SESSION_ACTION_CLOSE_START_MENU,
+    DESKTOP_SESSION_ACTION_TOGGLE_START_MENU,
+    DESKTOP_SESSION_ACTION_OPEN_APP,
+    DESKTOP_SESSION_ACTION_LAUNCH_START_MENU_ENTRY
+};
+
+struct desktop_session_action {
+    enum desktop_session_action_type type;
+    int window;
+    int target;
+    int x;
+    int y;
+    int aux;
+    enum app_type app_type;
+};
+
+struct desktop_session_action_queue {
+    struct desktop_session_action actions[DESKTOP_SESSION_ACTION_QUEUE_MAX];
+    int count;
+};
+
+enum desktop_app_action_type {
+    DESKTOP_APP_ACTION_APPCTX_PRIMARY = 0,
+    DESKTOP_APP_ACTION_APPCTX_SAVE_AS,
+    DESKTOP_APP_ACTION_EDITOR_SAVE_BUTTON,
+    DESKTOP_APP_ACTION_FILEMANAGER_UP,
+    DESKTOP_APP_ACTION_FILEMANAGER_LIST_CLICK,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_OPEN,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_COPY,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_PASTE,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_DIR,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_FILE,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_RENAME,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_MOVE_TO_TRASH,
+    DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_SET_WALLPAPER,
+    DESKTOP_APP_ACTION_PERSONALIZE_CLICK,
+    DESKTOP_APP_ACTION_PERSONALIZE_OPEN_COLOR_PICKER,
+    DESKTOP_APP_ACTION_PERSONALIZE_CLOSE_COLOR_PICKER,
+    DESKTOP_APP_ACTION_PERSONALIZE_PICK_COLOR,
+    DESKTOP_APP_ACTION_PERSONALIZE_SELECT_SLOT,
+    DESKTOP_APP_ACTION_PERSONALIZE_SET_WALLPAPER,
+    DESKTOP_APP_ACTION_PERSONALIZE_CHOOSE_WALLPAPER,
+    DESKTOP_APP_ACTION_PERSONALIZE_SET_RESOLUTION,
+    DESKTOP_APP_ACTION_TASKMGR_CLICK,
+    DESKTOP_APP_ACTION_CALCULATOR_CLICK,
+    DESKTOP_APP_ACTION_IMAGEVIEWER_CLICK,
+    DESKTOP_APP_ACTION_AUDIO_PLAYER_CLICK,
+    DESKTOP_APP_ACTION_SKETCHPAD_CLICK,
+    DESKTOP_APP_ACTION_SKETCHPAD_CLEAR,
+    DESKTOP_APP_ACTION_SKETCHPAD_EXPORT,
+    DESKTOP_APP_ACTION_SKETCHPAD_SELECT_COLOR,
+    DESKTOP_APP_ACTION_SKETCHPAD_PAINT,
+    DESKTOP_APP_ACTION_FLAP_BIRB_CLICK,
+    DESKTOP_APP_ACTION_DOOM_CLICK,
+    DESKTOP_APP_ACTION_CRAFT_CLICK,
+    DESKTOP_APP_ACTION_TRASH_RESTORE,
+    DESKTOP_APP_ACTION_TRASH_DELETE,
+    DESKTOP_APP_ACTION_TRASH_EMPTY,
+    DESKTOP_APP_ACTION_TRASH_SELECT_ENTRY
+};
+
+struct desktop_app_action {
+    enum desktop_app_action_type type;
+    int window;
+    int target;
+    int x;
+    int y;
+    enum app_type app_type;
+};
+
+struct desktop_app_action_queue {
+    struct desktop_app_action actions[DESKTOP_APP_ACTION_QUEUE_MAX];
+    int count;
+};
+
 static struct sound_applet_state g_sound_applet = {0, 75, 62, 0, 0, 0, 2, 2, 0, 0, 0x1u};
 static struct network_applet_state g_network_applet = {0, 0, 0, 0, "", "", NETWORK_APPLET_DISCONNECTED};
 static struct network_applet_cache g_network_applet_cache = {0, 0, {0}, {{0}}};
@@ -141,6 +291,10 @@ static char g_network_auto_ssid[MK_NETWORK_SSID_MAX + 1];
 static uint32_t g_sound_applet_last_sync_ticks = 0u;
 static uint32_t g_network_applet_last_sync_ticks = 0u;
 static uint32_t g_network_autoconnect_last_attempt_ticks = 0u;
+static int g_desktop_audio_event_subscription = 0;
+static int g_desktop_network_event_subscription = 0;
+static int g_desktop_video_event_subscription = 0;
+static uint32_t g_desktop_service_event_subscriptions = 0u;
 
 static const char *g_sound_outputs[] = {"Alto-falantes", "Fones", "Surround", "Centro/LFE"};
 static const char *g_sound_outputs_hda[] = {"Alto-falante", "Fones", "Line-out", "Digital"};
@@ -329,7 +483,7 @@ enum {
     START_MENU_SEARCH_MAX = 24,
     START_MENU_SCROLLBAR_W = 10
 };
-static const uint32_t APPLET_BACKEND_REFRESH_TICKS = 25u;
+static const uint32_t APPLET_BACKEND_REFRESH_TICKS = 100u;
 static const uint32_t APPLET_AUTOCONNECT_RETRY_TICKS = 300u;
 enum {
     APPCTX_PRIMARY = 0,
@@ -547,10 +701,14 @@ static void sync_window_instance_rect(int widx);
 static int alloc_window(enum app_type type);
 static int find_window_by_type(enum app_type type);
 static int raise_window_to_front(int widx, int *focused);
+static int open_editor_window_for_node(int node, int *focused);
 static int open_imageviewer_window_for_node(int node, int *focused);
 static int open_audioplayer_window_for_node(int node, int *focused);
 static int open_window_or_focus_existing(enum app_type type, int *focused);
 static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused);
+static int topmost_window_at(int x, int y);
+static struct rect window_title_bar(const struct rect *w);
+static struct rect taskbar_button_rect_for_window(int win_index);
 static int desktop_process_app_cycle(int *focused, uint32_t ticks);
 static int desktop_process_drag_stress(int *focused, uint32_t ticks);
 static const struct mk_network_scan_info *network_applet_selected_scan(void);
@@ -567,6 +725,301 @@ static int desktop_scroll_lines(int wheel_delta);
 static int trash_window_visible_rows(const struct trash_state *state);
 static void trash_window_clamp_scroll(struct trash_state *state);
 static int trash_window_entry_at_point(const struct trash_state *state, int x, int y);
+static struct rect trash_window_list_rect(const struct trash_state *state);
+static struct rect trash_window_restore_button_rect(const struct trash_state *state);
+static struct rect trash_window_delete_button_rect(const struct trash_state *state);
+static struct rect trash_window_empty_button_rect(const struct trash_state *state);
+static int create_node_in_directory(int parent, int is_dir, const char *base_name);
+static int clone_node_to_directory(int src_node, int dst_parent);
+static int find_wallpaper_nodes(int *out_nodes, int max_nodes);
+static int node_is_wallpaper_candidate(int node);
+static int trash_move_node_to_bin(int node);
+static int trash_restore_entry(int entry, char *status, int status_len);
+static int trash_delete_entry(int entry, char *status, int status_len);
+static int trash_empty_all(char *status, int status_len);
+static int desktop_pump_async_applet_events(void);
+static void restore_or_toggle_window(int widx, int *focused);
+static void maximize_window(int widx);
+static void extract_basename_parts(const char *path,
+                                   char *name_out,
+                                   int name_len,
+                                   char *ext_out,
+                                   int ext_len);
+static void file_dialog_open_editor(struct file_dialog_state *dialog, int window_index);
+static void file_dialog_open_sketch(struct file_dialog_state *dialog, int window_index);
+static void file_dialog_open_rename(struct file_dialog_state *dialog, int window_index, int node);
+static void file_dialog_open_wallpaper(struct file_dialog_state *dialog, int window_index);
+static struct rect personalize_window_slot_rect(const struct rect *w, int slot);
+static struct rect personalize_window_wallpaper_button_rect(const struct rect *w, int index);
+static struct rect personalize_window_wallpaper_choose_rect(const struct rect *w);
+static struct rect personalize_window_resolution_button_rect(const struct rect *w, int index);
+static struct rect personalize_color_picker_rect(void);
+static struct rect personalize_color_swatch_rect(const struct rect *picker, int idx);
+static int start_menu_search_active(const char *query);
+static struct rect start_menu_tab_rect(int tab);
+static struct rect start_menu_search_rect(void);
+static struct rect start_menu_search_clear_rect(void);
+static struct rect start_menu_sidebar_button_rect(int index);
+static struct rect start_menu_logout_rect(void);
+static struct rect start_menu_scroll_track_rect(void);
+static int start_menu_visible_count(void);
+static void start_menu_clamp_scroll(int *scroll_offset, int count);
+static struct rect start_menu_scroll_thumb_rect(int result_count, int scroll_offset);
+static int start_menu_result_at_point(int filtered_count, int scroll_offset, int x, int y);
+static int start_menu_scroll_from_thumb_y(int result_count, int thumb_y);
+static struct rect sound_applet_popup_rect(void);
+static struct rect network_applet_popup_rect(void);
+static struct rect app_context_menu_rect(int x, int y);
+static struct rect app_context_item_rect(const struct rect *menu, int action);
+static struct rect desktop_context_menu_rect(int x, int y);
+static struct rect filemanager_context_menu_rect(int x, int y);
+static struct rect filemanager_context_item_rect(const struct rect *menu, int action);
+static struct rect file_dialog_close_rect(const struct file_dialog_state *dialog);
+static struct rect file_dialog_name_rect(const struct file_dialog_state *dialog);
+static struct rect file_dialog_ext_rect(const struct file_dialog_state *dialog);
+static struct rect file_dialog_path_rect(const struct file_dialog_state *dialog);
+static struct rect file_dialog_ok_rect(const struct file_dialog_state *dialog);
+static struct rect file_dialog_cancel_rect(const struct file_dialog_state *dialog);
+static void file_dialog_reset(struct file_dialog_state *dialog);
+static int file_dialog_apply(struct file_dialog_state *dialog);
+static void desktop_build_ui_event_queue(struct desktop_ui_event_queue *queue,
+                                         const struct desktop_input_batch *batch,
+                                         const struct mouse_state *mouse);
+static void desktop_build_key_event_queue(struct desktop_key_event_queue *queue,
+                                          const struct desktop_input_batch *batch);
+static void desktop_window_action_queue_push(struct desktop_window_action_queue *queue,
+                                             enum desktop_window_action_type type,
+                                             int window,
+                                             int x,
+                                             int y);
+static void desktop_session_action_queue_push(struct desktop_session_action_queue *queue,
+                                              enum desktop_session_action_type type,
+                                              int window,
+                                              int target,
+                                              int x,
+                                              int y,
+                                              int aux,
+                                              enum app_type app_type);
+static int desktop_process_session_action_queue(struct desktop_session_action_queue *queue,
+                                                int *focused,
+                                                int *context_open,
+                                                struct rect *context_menu,
+                                                int *fm_context_open,
+                                                struct rect *fm_context_menu,
+                                                int *fm_context_window,
+                                                int *fm_context_target,
+                                                int *fm_context_has_wallpaper_action,
+                                                struct app_context_state *app_context,
+                                                int *menu_open,
+                                                int *menu_scroll_dragging,
+                                                char *start_menu_search,
+                                                int start_menu_search_cap,
+                                                int *start_menu_search_len,
+                                                int *start_menu_search_scroll);
+static int desktop_flush_session_actions(struct desktop_session_action_queue *queue,
+                                         int *focused,
+                                         int *context_open,
+                                         struct rect *context_menu,
+                                         int *fm_context_open,
+                                         struct rect *fm_context_menu,
+                                         int *fm_context_window,
+                                         int *fm_context_target,
+                                         int *fm_context_has_wallpaper_action,
+                                         struct app_context_state *app_context,
+                                         int *menu_open,
+                                         int *menu_scroll_dragging,
+                                         char *start_menu_search,
+                                         int start_menu_search_cap,
+                                         int *start_menu_search_len,
+                                         int *start_menu_search_scroll);
+static void desktop_app_action_queue_push(struct desktop_app_action_queue *queue,
+                                          enum desktop_app_action_type type,
+                                          int window,
+                                          int target,
+                                          int x,
+                                          int y,
+                                          enum app_type app_type);
+static int desktop_queue_simple_app_click(struct desktop_app_action_queue *queue,
+                                          int hit_window,
+                                          int click_x,
+                                          int click_y,
+                                          enum app_type app_type,
+                                          enum desktop_app_action_type action_type);
+static int desktop_simple_app_action_for_type(enum app_type app_type);
+static void desktop_queue_close_session_overlays(struct desktop_session_action_queue *queue,
+                                                 int click_x,
+                                                 int click_y,
+                                                 int close_start_menu,
+                                                 int close_contexts);
+static void desktop_queue_close_contexts(struct desktop_session_action_queue *queue,
+                                         int click_x,
+                                         int click_y);
+static int desktop_dispatch_desktop_shortcut_click(struct desktop_session_action_queue *queue,
+                                                   int click_x,
+                                                   int click_y);
+static int desktop_dispatch_start_menu_click(struct desktop_session_action_queue *queue,
+                                             int click_x,
+                                             int click_y,
+                                             int filtered_count,
+                                             const int *filtered_indices,
+                                             enum start_menu_tab *start_menu_tab,
+                                             int *start_menu_scroll,
+                                             int *start_menu_search_scroll,
+                                             char *start_menu_search,
+                                             int *start_menu_search_len,
+                                             int *menu_scroll_dragging,
+                                             int *menu_scroll_drag_offset_y,
+                                             int *running);
+static int desktop_dispatch_contextual_click(struct desktop_session_action_queue *session_queue,
+                                             struct desktop_app_action_queue *app_queue,
+                                             struct file_dialog_state *file_dialog,
+                                             int click_x,
+                                             int click_y,
+                                             int start_click_hover,
+                                             int context_open,
+                                             const struct rect *context_menu,
+                                             int fm_context_open,
+                                             const struct rect *fm_context_menu,
+                                             int fm_context_window,
+                                             int fm_context_target,
+                                             int fm_context_has_wallpaper_action,
+                                             const struct app_context_state *app_context);
+static int desktop_dispatch_file_dialog_click(struct file_dialog_state *file_dialog,
+                                              int click_x,
+                                              int click_y);
+static int desktop_dispatch_right_click(struct desktop_session_action_queue *session_queue,
+                                        struct file_dialog_state *file_dialog,
+                                        int click_x,
+                                        int click_y,
+                                        int *focused,
+                                        int context_open,
+                                        int fm_context_open,
+                                        int app_context_open,
+                                        int *dirty);
+static int desktop_dispatch_applet_click(struct desktop_session_action_queue *queue,
+                                         int click_x,
+                                         int click_y,
+                                         int *dirty);
+static int desktop_process_app_action_queue(struct desktop_app_action_queue *queue,
+                                            int *focused,
+                                            struct file_dialog_state *file_dialog,
+                                            struct rect *start_button,
+                                            struct rect *menu_rect,
+                                            struct rect *context_menu,
+                                            struct rect *fm_context_menu,
+                                            struct mouse_state *mouse,
+                                            int *dragging,
+                                            int *resizing,
+                                            int *menu_open,
+                                            int *context_open,
+                                            int *fm_context_open,
+                                            int *fm_context_has_wallpaper_action);
+static int desktop_flush_post_pointer_actions(struct desktop_session_action_queue *session_queue,
+                                              struct desktop_app_action_queue *app_queue,
+                                              struct desktop_window_action_queue *window_queue,
+                                              int *focused,
+                                              struct file_dialog_state *file_dialog,
+                                              struct rect *start_button,
+                                              struct rect *menu_rect,
+                                              struct rect *context_menu,
+                                              struct rect *fm_context_menu,
+                                              struct mouse_state *mouse,
+                                              int *dragging,
+                                              int *drag_offset_x,
+                                              int *drag_offset_y,
+                                              int *resizing,
+                                              struct rect *resize_origin,
+                                              int *resize_anchor_x,
+                                              int *resize_anchor_y,
+                                              int *menu_open,
+                                              int *menu_scroll_dragging,
+                                              int *context_open,
+                                              int *fm_context_open,
+                                              int *fm_context_window,
+                                              int *fm_context_target,
+                                              int *fm_context_has_wallpaper_action,
+                                              struct app_context_state *app_context,
+                                              char *start_menu_search,
+                                              int start_menu_search_cap,
+                                              int *start_menu_search_len,
+                                              int *start_menu_search_scroll);
+static int desktop_dispatch_window_content_click(struct desktop_app_action_queue *queue,
+                                                 int hit_window,
+                                                 int click_x,
+                                                 int click_y);
+static int desktop_dispatch_editor_content_click(struct desktop_app_action_queue *queue,
+                                                 int hit_window,
+                                                 int click_x,
+                                                 int click_y);
+static int desktop_dispatch_filemanager_content_click(struct desktop_app_action_queue *queue,
+                                                      int hit_window,
+                                                      int click_x,
+                                                      int click_y);
+static int desktop_dispatch_trash_content_click(struct desktop_app_action_queue *queue,
+                                                int hit_window,
+                                                int click_x,
+                                                int click_y);
+static int desktop_dispatch_window_frame_click(struct desktop_window_action_queue *window_queue,
+                                               struct desktop_app_action_queue *app_queue,
+                                               int hit_window,
+                                               int click_x,
+                                               int click_y,
+                                               int *dirty);
+static int desktop_dispatch_shell_window_click(struct desktop_window_action_queue *window_queue,
+                                               struct desktop_app_action_queue *app_queue,
+                                               int click_x,
+                                               int click_y,
+                                               int *dirty);
+static int desktop_dispatch_taskbar_window_click(struct desktop_session_action_queue *session_queue,
+                                                 struct desktop_window_action_queue *window_queue,
+                                                 int click_x,
+                                                 int click_y);
+static int desktop_close_shell_popups(int click_x, int click_y);
+static void desktop_close_shell_overlays(struct desktop_session_action_queue *session_queue,
+                                         int click_x,
+                                         int click_y,
+                                         int menu_open,
+                                         const struct rect *menu_rect,
+                                         int context_open,
+                                         const struct rect *context_menu,
+                                         int fm_context_open,
+                                         const struct rect *fm_context_menu,
+                                         const struct app_context_state *app_context,
+                                         int *dirty);
+static int desktop_dispatch_shell_click(struct desktop_session_action_queue *session_queue,
+                                        struct desktop_window_action_queue *window_queue,
+                                        struct desktop_app_action_queue *app_queue,
+                                        int click_x,
+                                        int click_y,
+                                        int menu_open,
+                                        const struct rect *menu_rect,
+                                        int context_open,
+                                        const struct rect *context_menu,
+                                        int fm_context_open,
+                                        const struct rect *fm_context_menu,
+                                        const struct app_context_state *app_context,
+                                        int *dirty);
+static int desktop_process_window_action_queue(struct desktop_window_action_queue *queue,
+                                               int *focused,
+                                               int *dragging,
+                                               int *drag_offset_x,
+                                               int *drag_offset_y,
+                                               int *resizing,
+                                               struct rect *resize_origin,
+                                               int *resize_anchor_x,
+                                               int *resize_anchor_y);
+static int desktop_flush_window_actions(struct desktop_window_action_queue *queue,
+                                        int *focused,
+                                        int *dragging,
+                                        int *drag_offset_x,
+                                        int *drag_offset_y,
+                                        int *resizing,
+                                        struct rect *resize_origin,
+                                        int *resize_anchor_x,
+                                        int *resize_anchor_y);
+static int desktop_collect_input_batch(struct desktop_input_batch *batch,
+                                       struct mouse_state *mouse,
+                                       int *focused);
 
 static int app_type_valid(enum app_type type) {
     return type > APP_NONE && type <= APP_TRASH;
@@ -763,6 +1216,2105 @@ static int sanitize_windows(int *focused) {
     g_trash_used = trash_used;
 
     return changed;
+}
+
+static int desktop_collect_input_batch(struct desktop_input_batch *batch,
+                                       struct mouse_state *mouse,
+                                       int *focused) {
+    struct input_event input_event;
+
+    if (batch == 0 || mouse == 0 || focused == 0) {
+        return 0;
+    }
+
+    memset(batch, 0, sizeof(*batch));
+    batch->left_pressed = (mouse->buttons & 0x01u) != 0;
+    batch->right_pressed = (mouse->buttons & 0x02u) != 0;
+    batch->left_press_x = mouse->x;
+    batch->left_press_y = mouse->y;
+    batch->right_press_x = mouse->x;
+    batch->right_press_y = mouse->y;
+
+    batch->async_state_changed = desktop_pump_async_applet_events();
+    if (batch->async_state_changed) {
+        clamp_mouse_state(mouse);
+        if (sanitize_windows(focused)) {
+            batch->async_state_changed = 1;
+        }
+    }
+
+    while (batch->count < DESKTOP_INPUT_BATCH_MAX &&
+           sys_next_input_event(&input_event)) {
+        batch->events[batch->count++] = input_event;
+    }
+
+    for (int event_index = 0; event_index < batch->count; ++event_index) {
+        int new_left;
+        int new_right;
+        struct input_event *queued = &batch->events[event_index];
+
+        if (queued->type != INPUT_EVENT_MOUSE) {
+            continue;
+        }
+
+        *mouse = queued->mouse;
+        clamp_mouse_state(mouse);
+        batch->mouse_event = 1;
+        batch->wheel_delta += queued->mouse.wheel;
+        new_left = (mouse->buttons & 0x01u) != 0;
+        new_right = (mouse->buttons & 0x02u) != 0;
+        if (new_left && !batch->left_pressed) {
+            batch->left_just_pressed = 1;
+            batch->left_press_x = mouse->x;
+            batch->left_press_y = mouse->y;
+        }
+        if (new_right && !batch->right_pressed) {
+            batch->right_just_pressed = 1;
+            batch->right_press_x = mouse->x;
+            batch->right_press_y = mouse->y;
+        }
+        batch->left_pressed = new_left;
+        batch->right_pressed = new_right;
+    }
+
+    return batch->async_state_changed;
+}
+
+static void desktop_build_ui_event_queue(struct desktop_ui_event_queue *queue,
+                                         const struct desktop_input_batch *batch,
+                                         const struct mouse_state *mouse) {
+    if (queue == 0 || batch == 0 || mouse == 0) {
+        return;
+    }
+
+    memset(queue, 0, sizeof(*queue));
+    if (batch->mouse_event && queue->count < DESKTOP_UI_EVENT_QUEUE_MAX) {
+        queue->events[queue->count].type = DESKTOP_UI_EVENT_POINTER_MOVE;
+        queue->events[queue->count].x = mouse->x;
+        queue->events[queue->count].y = mouse->y;
+        queue->count += 1;
+    }
+    if (batch->right_just_pressed && queue->count < DESKTOP_UI_EVENT_QUEUE_MAX) {
+        queue->events[queue->count].type = DESKTOP_UI_EVENT_RIGHT_CLICK;
+        queue->events[queue->count].x = batch->right_press_x;
+        queue->events[queue->count].y = batch->right_press_y;
+        queue->count += 1;
+    }
+    if (batch->left_just_pressed && queue->count < DESKTOP_UI_EVENT_QUEUE_MAX) {
+        queue->events[queue->count].type = DESKTOP_UI_EVENT_LEFT_CLICK;
+        queue->events[queue->count].x = batch->left_press_x;
+        queue->events[queue->count].y = batch->left_press_y;
+        queue->count += 1;
+    }
+    if (batch->wheel_delta != 0 && queue->count < DESKTOP_UI_EVENT_QUEUE_MAX) {
+        queue->events[queue->count].type = DESKTOP_UI_EVENT_WHEEL;
+        queue->events[queue->count].x = mouse->x;
+        queue->events[queue->count].y = mouse->y;
+        queue->events[queue->count].value = batch->wheel_delta;
+        queue->count += 1;
+    }
+}
+
+static void desktop_build_key_event_queue(struct desktop_key_event_queue *queue,
+                                          const struct desktop_input_batch *batch) {
+    if (queue == 0 || batch == 0) {
+        return;
+    }
+
+    memset(queue, 0, sizeof(*queue));
+    for (int event_index = 0;
+         event_index < batch->count && queue->count < DESKTOP_KEY_EVENT_QUEUE_MAX;
+         ++event_index) {
+        const struct input_event *queued = &batch->events[event_index];
+
+        if (queued->type != INPUT_EVENT_KEY) {
+            continue;
+        }
+        queue->keys[queue->count++] = queued->value;
+    }
+}
+
+static void desktop_window_action_queue_push(struct desktop_window_action_queue *queue,
+                                             enum desktop_window_action_type type,
+                                             int window,
+                                             int x,
+                                             int y) {
+    if (queue == 0 || queue->count >= DESKTOP_WINDOW_ACTION_QUEUE_MAX) {
+        return;
+    }
+
+    queue->actions[queue->count].type = type;
+    queue->actions[queue->count].window = window;
+    queue->actions[queue->count].x = x;
+    queue->actions[queue->count].y = y;
+    queue->count += 1;
+}
+
+static void desktop_session_action_queue_push(struct desktop_session_action_queue *queue,
+                                              enum desktop_session_action_type type,
+                                              int window,
+                                              int target,
+                                              int x,
+                                              int y,
+                                              int aux,
+                                              enum app_type app_type) {
+    if (queue == 0 || queue->count >= DESKTOP_SESSION_ACTION_QUEUE_MAX) {
+        return;
+    }
+
+    queue->actions[queue->count].type = type;
+    queue->actions[queue->count].window = window;
+    queue->actions[queue->count].target = target;
+    queue->actions[queue->count].x = x;
+    queue->actions[queue->count].y = y;
+    queue->actions[queue->count].aux = aux;
+    queue->actions[queue->count].app_type = app_type;
+    queue->count += 1;
+}
+
+static int desktop_process_session_action_queue(struct desktop_session_action_queue *queue,
+                                                int *focused,
+                                                int *context_open,
+                                                struct rect *context_menu,
+                                                int *fm_context_open,
+                                                struct rect *fm_context_menu,
+                                                int *fm_context_window,
+                                                int *fm_context_target,
+                                                int *fm_context_has_wallpaper_action,
+                                                struct app_context_state *app_context,
+                                                int *menu_open,
+                                                int *menu_scroll_dragging,
+                                                char *start_menu_search,
+                                                int start_menu_search_cap,
+                                                int *start_menu_search_len,
+                                                int *start_menu_search_scroll) {
+    int dirty = 0;
+
+    if (queue == 0 || focused == 0 || context_open == 0 || context_menu == 0 || fm_context_open == 0 ||
+        fm_context_menu == 0 || fm_context_window == 0 || fm_context_target == 0 ||
+        fm_context_has_wallpaper_action == 0 || app_context == 0 || menu_open == 0 ||
+        menu_scroll_dragging == 0 || start_menu_search == 0 || start_menu_search_cap <= 0 ||
+        start_menu_search_len == 0 || start_menu_search_scroll == 0) {
+        return 0;
+    }
+
+    for (int action_index = 0; action_index < queue->count; ++action_index) {
+        struct desktop_session_action *action = &queue->actions[action_index];
+
+        switch (action->type) {
+        case DESKTOP_SESSION_ACTION_CLOSE_CONTEXTS:
+            *context_open = 0;
+            *fm_context_open = 0;
+            *fm_context_window = -1;
+            *fm_context_target = FILEMANAGER_HIT_NONE;
+            *fm_context_has_wallpaper_action = 0;
+            app_context->open = 0;
+            app_context->window = -1;
+            app_context->type = APP_NONE;
+            dirty = 1;
+            break;
+        case DESKTOP_SESSION_ACTION_OPEN_DESKTOP_CONTEXT:
+            *context_menu = desktop_context_menu_rect(action->x, action->y);
+            *context_open = 1;
+            *fm_context_open = 0;
+            *fm_context_window = -1;
+            *fm_context_target = FILEMANAGER_HIT_NONE;
+            *fm_context_has_wallpaper_action = 0;
+            app_context->open = 0;
+            *menu_open = 0;
+            dirty = 1;
+            break;
+        case DESKTOP_SESSION_ACTION_OPEN_APP_CONTEXT:
+            app_context->open = 1;
+            app_context->window = action->window;
+            app_context->type = action->app_type;
+            app_context->menu = app_context_menu_rect(action->x, action->y);
+            *context_open = 0;
+            *fm_context_open = 0;
+            *fm_context_window = -1;
+            *fm_context_target = FILEMANAGER_HIT_NONE;
+            *fm_context_has_wallpaper_action = 0;
+            *menu_open = 0;
+            dirty = 1;
+            break;
+        case DESKTOP_SESSION_ACTION_OPEN_FILEMANAGER_CONTEXT:
+            *fm_context_menu = filemanager_context_menu_rect(action->x, action->y);
+            *fm_context_open = 1;
+            *fm_context_window = action->window;
+            *fm_context_target = action->target;
+            *fm_context_has_wallpaper_action = action->aux;
+            *context_open = 0;
+            app_context->open = 0;
+            *menu_open = 0;
+            dirty = 1;
+            break;
+        case DESKTOP_SESSION_ACTION_CLOSE_START_MENU:
+            if (*menu_open) {
+                *menu_open = 0;
+                dirty = 1;
+            }
+            *menu_scroll_dragging = 0;
+            break;
+        case DESKTOP_SESSION_ACTION_TOGGLE_START_MENU:
+            *menu_open = !*menu_open;
+            if (*menu_open) {
+                start_menu_search[0] = '\0';
+                *start_menu_search_len = 0;
+                *start_menu_search_scroll = 0;
+            } else {
+                *menu_scroll_dragging = 0;
+            }
+            *context_open = 0;
+            *fm_context_open = 0;
+            *fm_context_window = -1;
+            *fm_context_target = FILEMANAGER_HIT_NONE;
+            *fm_context_has_wallpaper_action = 0;
+            app_context->open = 0;
+            app_context->window = -1;
+            app_context->type = APP_NONE;
+            dirty = 1;
+            break;
+        case DESKTOP_SESSION_ACTION_OPEN_APP:
+            if (action->app_type != APP_NONE &&
+                open_window_or_focus_existing(action->app_type, focused) >= 0) {
+                dirty = 1;
+            }
+            *menu_open = 0;
+            *menu_scroll_dragging = 0;
+            *context_open = 0;
+            *fm_context_open = 0;
+            *fm_context_window = -1;
+            *fm_context_target = FILEMANAGER_HIT_NONE;
+            *fm_context_has_wallpaper_action = 0;
+            app_context->open = 0;
+            app_context->window = -1;
+            app_context->type = APP_NONE;
+            break;
+        case DESKTOP_SESSION_ACTION_LAUNCH_START_MENU_ENTRY:
+            if (action->target >= 0 && action->target < START_MENU_ENTRY_COUNT &&
+                launch_start_menu_entry(&g_start_menu_entries[action->target], focused) >= 0) {
+                dirty = 1;
+            }
+            *menu_open = 0;
+            *menu_scroll_dragging = 0;
+            *context_open = 0;
+            *fm_context_open = 0;
+            *fm_context_window = -1;
+            *fm_context_target = FILEMANAGER_HIT_NONE;
+            *fm_context_has_wallpaper_action = 0;
+            app_context->open = 0;
+            app_context->window = -1;
+            app_context->type = APP_NONE;
+            break;
+        }
+    }
+
+    queue->count = 0;
+    return dirty;
+}
+
+static int desktop_flush_session_actions(struct desktop_session_action_queue *queue,
+                                         int *focused,
+                                         int *context_open,
+                                         struct rect *context_menu,
+                                         int *fm_context_open,
+                                         struct rect *fm_context_menu,
+                                         int *fm_context_window,
+                                         int *fm_context_target,
+                                         int *fm_context_has_wallpaper_action,
+                                         struct app_context_state *app_context,
+                                         int *menu_open,
+                                         int *menu_scroll_dragging,
+                                         char *start_menu_search,
+                                         int start_menu_search_cap,
+                                         int *start_menu_search_len,
+                                         int *start_menu_search_scroll) {
+    return desktop_process_session_action_queue(queue,
+                                                focused,
+                                                context_open,
+                                                context_menu,
+                                                fm_context_open,
+                                                fm_context_menu,
+                                                fm_context_window,
+                                                fm_context_target,
+                                                fm_context_has_wallpaper_action,
+                                                app_context,
+                                                menu_open,
+                                                menu_scroll_dragging,
+                                                start_menu_search,
+                                                start_menu_search_cap,
+                                                start_menu_search_len,
+                                                start_menu_search_scroll);
+}
+
+static void desktop_app_action_queue_push(struct desktop_app_action_queue *queue,
+                                          enum desktop_app_action_type type,
+                                          int window,
+                                          int target,
+                                          int x,
+                                          int y,
+                                          enum app_type app_type) {
+    if (queue == 0 || queue->count >= DESKTOP_APP_ACTION_QUEUE_MAX) {
+        return;
+    }
+
+    queue->actions[queue->count].type = type;
+    queue->actions[queue->count].window = window;
+    queue->actions[queue->count].target = target;
+    queue->actions[queue->count].x = x;
+    queue->actions[queue->count].y = y;
+    queue->actions[queue->count].app_type = app_type;
+    queue->count += 1;
+}
+
+static int desktop_queue_simple_app_click(struct desktop_app_action_queue *queue,
+                                          int hit_window,
+                                          int click_x,
+                                          int click_y,
+                                          enum app_type app_type,
+                                          enum desktop_app_action_type action_type) {
+    if (queue == 0) {
+        return 0;
+    }
+
+    desktop_app_action_queue_push(queue,
+                                  action_type,
+                                  hit_window, -1,
+                                  click_x, click_y,
+                                  app_type);
+    return 1;
+}
+
+static int desktop_simple_app_action_for_type(enum app_type app_type) {
+    switch (app_type) {
+    case APP_IMAGEVIEWER:
+        return DESKTOP_APP_ACTION_IMAGEVIEWER_CLICK;
+    case APP_AUDIO_PLAYER:
+        return DESKTOP_APP_ACTION_AUDIO_PLAYER_CLICK;
+    case APP_TASKMANAGER:
+        return DESKTOP_APP_ACTION_TASKMGR_CLICK;
+    case APP_CALCULATOR:
+        return DESKTOP_APP_ACTION_CALCULATOR_CLICK;
+    case APP_SKETCHPAD:
+        return DESKTOP_APP_ACTION_SKETCHPAD_CLICK;
+    case APP_FLAP_BIRB:
+        return DESKTOP_APP_ACTION_FLAP_BIRB_CLICK;
+    case APP_DOOM:
+        return DESKTOP_APP_ACTION_DOOM_CLICK;
+    case APP_CRAFT:
+        return DESKTOP_APP_ACTION_CRAFT_CLICK;
+    case APP_PERSONALIZE:
+        return DESKTOP_APP_ACTION_PERSONALIZE_CLICK;
+    default:
+        return -1;
+    }
+}
+
+static void desktop_queue_close_session_overlays(struct desktop_session_action_queue *queue,
+                                                 int click_x,
+                                                 int click_y,
+                                                 int close_start_menu,
+                                                 int close_contexts) {
+    if (queue == 0) {
+        return;
+    }
+
+    if (close_start_menu) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_CLOSE_START_MENU,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0, APP_NONE);
+    }
+    if (close_contexts) {
+        desktop_queue_close_contexts(queue, click_x, click_y);
+    }
+}
+
+static void desktop_queue_close_contexts(struct desktop_session_action_queue *queue,
+                                         int click_x,
+                                         int click_y) {
+    if (queue == 0) {
+        return;
+    }
+
+    desktop_session_action_queue_push(queue,
+                                      DESKTOP_SESSION_ACTION_CLOSE_CONTEXTS,
+                                      -1, FILEMANAGER_HIT_NONE,
+                                      click_x, click_y, 0, APP_NONE);
+}
+
+static int desktop_dispatch_desktop_shortcut_click(struct desktop_session_action_queue *queue,
+                                                   int click_x,
+                                                   int click_y) {
+    struct rect files_icon = ui_desktop_files_icon_rect();
+    struct rect craft_icon = ui_desktop_craft_icon_rect();
+    struct rect trash_icon = ui_desktop_trash_icon_rect();
+
+    if (queue == 0) {
+        return 0;
+    }
+
+    if (point_in_rect(&files_icon, click_x, click_y)) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          APP_FILEMANAGER);
+        return 1;
+    }
+    if (point_in_rect(&craft_icon, click_x, click_y)) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          APP_CRAFT);
+        return 1;
+    }
+    if (point_in_rect(&trash_icon, click_x, click_y)) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          APP_TRASH);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int desktop_dispatch_start_menu_click(struct desktop_session_action_queue *queue,
+                                             int click_x,
+                                             int click_y,
+                                             int filtered_count,
+                                             const int *filtered_indices,
+                                             enum start_menu_tab *start_menu_tab,
+                                             int *start_menu_scroll,
+                                             int *start_menu_search_scroll,
+                                             char *start_menu_search,
+                                             int *start_menu_search_len,
+                                             int *menu_scroll_dragging,
+                                             int *menu_scroll_drag_offset_y,
+                                             int *running) {
+    struct rect menu_rect = ui_start_menu_rect();
+    struct rect apps_tab = start_menu_tab_rect(START_MENU_TAB_APPS);
+    struct rect games_tab = start_menu_tab_rect(START_MENU_TAB_GAMES);
+    struct rect search_box = start_menu_search_rect();
+    struct rect search_clear = start_menu_search_clear_rect();
+    struct rect sidebar_files = start_menu_sidebar_button_rect(0);
+    struct rect sidebar_terminal = start_menu_sidebar_button_rect(1);
+    struct rect sidebar_personalize = start_menu_sidebar_button_rect(2);
+    struct rect logout = start_menu_logout_rect();
+    struct rect track = start_menu_scroll_track_rect();
+    struct rect thumb;
+    int *scroll_ptr;
+
+    if (queue == 0 || filtered_indices == 0 || start_menu_tab == 0 || start_menu_scroll == 0 ||
+        start_menu_search_scroll == 0 || start_menu_search == 0 || start_menu_search_len == 0 ||
+        menu_scroll_dragging == 0 || menu_scroll_drag_offset_y == 0 || running == 0) {
+        return 0;
+    }
+
+    thumb = start_menu_scroll_thumb_rect(filtered_count,
+                                         start_menu_search_active(start_menu_search) ?
+                                         *start_menu_search_scroll :
+                                         start_menu_scroll[(int)*start_menu_tab]);
+    scroll_ptr = start_menu_search_active(start_menu_search) ?
+                 start_menu_search_scroll :
+                 &start_menu_scroll[(int)*start_menu_tab];
+
+    if (!point_in_rect(&menu_rect, click_x, click_y)) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_CLOSE_START_MENU,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0, APP_NONE);
+        return 1;
+    }
+
+    if (point_in_rect(&apps_tab, click_x, click_y)) {
+        *start_menu_tab = START_MENU_TAB_APPS;
+        start_menu_clamp_scroll(&start_menu_scroll[(int)*start_menu_tab], filtered_count);
+        return 1;
+    }
+    if (point_in_rect(&games_tab, click_x, click_y)) {
+        *start_menu_tab = START_MENU_TAB_GAMES;
+        start_menu_clamp_scroll(&start_menu_scroll[(int)*start_menu_tab], filtered_count);
+        return 1;
+    }
+    if (point_in_rect(&search_clear, click_x, click_y) && start_menu_search[0] != '\0') {
+        start_menu_search[0] = '\0';
+        *start_menu_search_len = 0;
+        *start_menu_search_scroll = 0;
+        return 1;
+    }
+    if (point_in_rect(&search_box, click_x, click_y)) {
+        return 1;
+    }
+    if (point_in_rect(&sidebar_files, click_x, click_y)) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          APP_FILEMANAGER);
+        return 1;
+    }
+    if (point_in_rect(&sidebar_terminal, click_x, click_y)) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          APP_TERMINAL);
+        return 1;
+    }
+    if (point_in_rect(&sidebar_personalize, click_x, click_y)) {
+        desktop_session_action_queue_push(queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          APP_PERSONALIZE);
+        return 1;
+    }
+    if (point_in_rect(&logout, click_x, click_y)) {
+        *running = 0;
+        return 1;
+    }
+    if (filtered_count > start_menu_visible_count() &&
+        point_in_rect(&thumb, click_x, click_y)) {
+        *menu_scroll_dragging = 1;
+        *menu_scroll_drag_offset_y = click_y - thumb.y;
+        return 1;
+    }
+    if (filtered_count > start_menu_visible_count() &&
+        point_in_rect(&track, click_x, click_y)) {
+        int thumb_target_y = click_y - (thumb.h / 2);
+        *scroll_ptr = start_menu_scroll_from_thumb_y(filtered_count, thumb_target_y);
+        start_menu_clamp_scroll(scroll_ptr, filtered_count);
+        return 1;
+    }
+    {
+        int clicked_result = start_menu_result_at_point(filtered_count,
+                                                        *scroll_ptr,
+                                                        click_x,
+                                                        click_y);
+        if (clicked_result >= 0 && clicked_result < filtered_count) {
+            desktop_session_action_queue_push(queue,
+                                              DESKTOP_SESSION_ACTION_LAUNCH_START_MENU_ENTRY,
+                                              -1,
+                                              filtered_indices[clicked_result],
+                                              click_x, click_y, 0,
+                                              APP_NONE);
+            return 1;
+        }
+    }
+
+    return 1;
+}
+
+static int desktop_dispatch_contextual_click(struct desktop_session_action_queue *session_queue,
+                                             struct desktop_app_action_queue *app_queue,
+                                             struct file_dialog_state *file_dialog,
+                                             int click_x,
+                                             int click_y,
+                                             int start_click_hover,
+                                             int context_open,
+                                             const struct rect *context_menu,
+                                             int fm_context_open,
+                                             const struct rect *fm_context_menu,
+                                             int fm_context_window,
+                                             int fm_context_target,
+                                             int fm_context_has_wallpaper_action,
+                                             const struct app_context_state *app_context) {
+    if (session_queue == 0 || app_queue == 0 || file_dialog == 0 ||
+        context_menu == 0 || fm_context_menu == 0 || app_context == 0) {
+        return 0;
+    }
+
+    if (file_dialog->active) {
+        return 0;
+    }
+
+    if (app_context->open && point_in_rect(&app_context->menu, click_x, click_y)) {
+        struct rect app_primary_rect = app_context_item_rect(&app_context->menu, APPCTX_PRIMARY);
+        struct rect app_save_as_rect = app_context_item_rect(&app_context->menu, APPCTX_SAVE_AS);
+
+        if (point_in_rect(&app_primary_rect, click_x, click_y)) {
+            desktop_app_action_queue_push(app_queue,
+                                          DESKTOP_APP_ACTION_APPCTX_PRIMARY,
+                                          app_context->window,
+                                          -1,
+                                          click_x,
+                                          click_y,
+                                          app_context->type);
+            desktop_queue_close_contexts(session_queue, click_x, click_y);
+            return 1;
+        }
+        if (point_in_rect(&app_save_as_rect, click_x, click_y)) {
+            desktop_app_action_queue_push(app_queue,
+                                          DESKTOP_APP_ACTION_APPCTX_SAVE_AS,
+                                          app_context->window,
+                                          -1,
+                                          click_x,
+                                          click_y,
+                                          app_context->type);
+            desktop_queue_close_contexts(session_queue, click_x, click_y);
+            return 1;
+        }
+    } else if (app_context->open && !point_in_rect(&app_context->menu, click_x, click_y)) {
+        desktop_queue_close_contexts(session_queue, click_x, click_y);
+        return 1;
+    }
+
+    if (fm_context_open && fm_context_window >= 0 &&
+        g_windows[fm_context_window].active &&
+        g_windows[fm_context_window].type == APP_FILEMANAGER) {
+        int fm_open_hover;
+        int fm_copy_hover;
+        int fm_paste_hover;
+        int fm_new_dir_hover;
+        int fm_new_file_hover;
+        int fm_rename_hover;
+        int fm_trash_hover;
+        int fm_set_wallpaper_hover;
+        int target = fm_context_target;
+        struct rect fm_open_rect = filemanager_context_item_rect(fm_context_menu, FMENU_OPEN);
+        struct rect fm_copy_rect = filemanager_context_item_rect(fm_context_menu, FMENU_COPY);
+        struct rect fm_paste_rect = filemanager_context_item_rect(fm_context_menu, FMENU_PASTE);
+        struct rect fm_new_dir_rect = filemanager_context_item_rect(fm_context_menu, FMENU_NEW_DIR);
+        struct rect fm_new_file_rect = filemanager_context_item_rect(fm_context_menu, FMENU_NEW_FILE);
+        struct rect fm_rename_rect = filemanager_context_item_rect(fm_context_menu, FMENU_RENAME);
+        struct rect fm_trash_rect = filemanager_context_item_rect(fm_context_menu, FMENU_MOVE_TO_TRASH);
+        struct rect fm_set_wallpaper_rect = filemanager_context_item_rect(fm_context_menu, FMENU_SET_WALLPAPER);
+
+        fm_open_hover = point_in_rect(&fm_open_rect, click_x, click_y);
+        fm_copy_hover = point_in_rect(&fm_copy_rect, click_x, click_y);
+        fm_paste_hover = point_in_rect(&fm_paste_rect, click_x, click_y);
+        fm_new_dir_hover = point_in_rect(&fm_new_dir_rect, click_x, click_y);
+        fm_new_file_hover = point_in_rect(&fm_new_file_rect, click_x, click_y);
+        fm_rename_hover = point_in_rect(&fm_rename_rect, click_x, click_y);
+        fm_trash_hover = point_in_rect(&fm_trash_rect, click_x, click_y);
+        fm_set_wallpaper_hover = fm_context_has_wallpaper_action &&
+                                 point_in_rect(&fm_set_wallpaper_rect, click_x, click_y);
+
+        if (fm_open_hover || fm_copy_hover || fm_paste_hover || fm_new_dir_hover || fm_new_file_hover ||
+            fm_rename_hover || fm_trash_hover || fm_set_wallpaper_hover) {
+            if (target == FILEMANAGER_HIT_NONE) {
+                target = g_fms[g_windows[fm_context_window].instance].selected_node;
+            }
+
+            if (fm_open_hover && target != FILEMANAGER_HIT_NONE) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_OPEN,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            } else if (fm_copy_hover && target >= 0) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_COPY,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            } else if (fm_paste_hover && g_clipboard_node >= 0) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_PASTE,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            } else if (fm_new_dir_hover) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_DIR,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            } else if (fm_new_file_hover) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_FILE,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            } else if (fm_rename_hover && target >= 0) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_RENAME,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            } else if (fm_trash_hover && target >= 0) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_MOVE_TO_TRASH,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            } else if (fm_set_wallpaper_hover && target >= 0) {
+                desktop_app_action_queue_push(app_queue,
+                                              DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_SET_WALLPAPER,
+                                              fm_context_window, target,
+                                              click_x, click_y,
+                                              APP_FILEMANAGER);
+            }
+
+            desktop_queue_close_contexts(session_queue, click_x, click_y);
+            return 1;
+        }
+        if (!point_in_rect(fm_context_menu, click_x, click_y)) {
+            desktop_queue_close_contexts(session_queue, click_x, click_y);
+            return 1;
+        }
+    }
+
+    if (context_open && point_in_rect(context_menu, click_x, click_y)) {
+        desktop_session_action_queue_push(session_queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          APP_PERSONALIZE);
+        return 1;
+    }
+    if (start_click_hover) {
+        desktop_session_action_queue_push(session_queue,
+                                          DESKTOP_SESSION_ACTION_TOGGLE_START_MENU,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0, APP_NONE);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int desktop_dispatch_file_dialog_click(struct file_dialog_state *file_dialog,
+                                              int click_x,
+                                              int click_y) {
+    struct rect close;
+    struct rect name_field;
+    struct rect ext_field;
+    struct rect path_field;
+    struct rect ok;
+    struct rect cancel;
+
+    if (file_dialog == 0 || !file_dialog->active) {
+        return 0;
+    }
+
+    close = file_dialog_close_rect(file_dialog);
+    name_field = file_dialog_name_rect(file_dialog);
+    ext_field = file_dialog_ext_rect(file_dialog);
+    path_field = file_dialog_path_rect(file_dialog);
+    ok = file_dialog_ok_rect(file_dialog);
+    cancel = file_dialog_cancel_rect(file_dialog);
+
+    if (point_in_rect(&close, click_x, click_y) ||
+        point_in_rect(&cancel, click_x, click_y)) {
+        file_dialog_reset(file_dialog);
+        return 1;
+    }
+    if (point_in_rect(&ok, click_x, click_y)) {
+        if (file_dialog_apply(file_dialog)) {
+            file_dialog_reset(file_dialog);
+        }
+        return 1;
+    }
+    if (file_dialog->mode == FILE_DIALOG_WALLPAPER_PATH &&
+        point_in_rect(&path_field, click_x, click_y)) {
+        file_dialog->active_field = 0;
+        return 1;
+    }
+    if (point_in_rect(&name_field, click_x, click_y)) {
+        file_dialog->active_field = 0;
+        return 1;
+    }
+    if (file_dialog->mode != FILE_DIALOG_WALLPAPER_PATH &&
+        point_in_rect(&ext_field, click_x, click_y)) {
+        file_dialog->active_field = 1;
+        return 1;
+    }
+
+    return 1;
+}
+
+static int desktop_dispatch_right_click(struct desktop_session_action_queue *session_queue,
+                                        struct file_dialog_state *file_dialog,
+                                        int click_x,
+                                        int click_y,
+                                        int *focused,
+                                        int context_open,
+                                        int fm_context_open,
+                                        int app_context_open,
+                                        int *dirty) {
+    int hit_window;
+
+    if (session_queue == 0 || file_dialog == 0 || focused == 0 || dirty == 0) {
+        return 0;
+    }
+
+    hit_window = topmost_window_at(click_x, click_y);
+
+    if (file_dialog->active) {
+        desktop_queue_close_contexts(session_queue, click_x, click_y);
+        *dirty = 1;
+        return 1;
+    }
+
+    if (hit_window >= 0 && g_windows[hit_window].type == APP_FILEMANAGER) {
+        struct filemanager_state *fm = &g_fms[g_windows[hit_window].instance];
+        struct rect list = filemanager_list_rect(fm);
+
+        if (point_in_rect(&list, click_x, click_y)) {
+            int new_index = raise_window_to_front(hit_window, focused);
+            int target;
+
+            *focused = new_index;
+            hit_window = new_index;
+            fm = &g_fms[g_windows[hit_window].instance];
+            target = filemanager_hit_test_entry(fm, click_x, click_y);
+            desktop_session_action_queue_push(session_queue,
+                                              DESKTOP_SESSION_ACTION_OPEN_FILEMANAGER_CONTEXT,
+                                              hit_window, target,
+                                              click_x, click_y,
+                                              (target >= 0) && node_is_wallpaper_candidate(target),
+                                              APP_NONE);
+            if (target >= 0) {
+                fm->selected_node = target;
+            } else if (target == FILEMANAGER_HIT_NONE) {
+                fm->selected_node = -1;
+            }
+            *dirty = 1;
+            return 1;
+        }
+
+        if (fm_context_open || context_open) {
+            desktop_queue_close_contexts(session_queue, click_x, click_y);
+            *dirty = 1;
+            return 1;
+        }
+    } else if (hit_window >= 0 &&
+               (g_windows[hit_window].type == APP_EDITOR ||
+                g_windows[hit_window].type == APP_SKETCHPAD)) {
+        int new_index = raise_window_to_front(hit_window, focused);
+
+        *focused = new_index;
+        desktop_session_action_queue_push(session_queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_APP_CONTEXT,
+                                          new_index, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0,
+                                          g_windows[new_index].type);
+        *dirty = 1;
+        return 1;
+    } else if (hit_window < 0 &&
+               click_y < (int)SCREEN_HEIGHT - TASKBAR_HEIGHT) {
+        desktop_session_action_queue_push(session_queue,
+                                          DESKTOP_SESSION_ACTION_OPEN_DESKTOP_CONTEXT,
+                                          -1, FILEMANAGER_HIT_NONE,
+                                          click_x, click_y, 0, APP_NONE);
+        *dirty = 1;
+        return 1;
+    } else if (context_open || fm_context_open || app_context_open) {
+        desktop_queue_close_contexts(session_queue, click_x, click_y);
+        *dirty = 1;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int desktop_process_app_action_queue(struct desktop_app_action_queue *queue,
+                                            int *focused,
+                                            struct file_dialog_state *file_dialog,
+                                            struct rect *start_button,
+                                            struct rect *menu_rect,
+                                            struct rect *context_menu,
+                                            struct rect *fm_context_menu,
+                                            struct mouse_state *mouse,
+                                            int *dragging,
+                                            int *resizing,
+                                            int *menu_open,
+                                            int *context_open,
+                                            int *fm_context_open,
+                                            int *fm_context_has_wallpaper_action) {
+    int dirty = 0;
+
+    if (queue == 0 || focused == 0 || file_dialog == 0 || start_button == 0 || menu_rect == 0 ||
+        context_menu == 0 || fm_context_menu == 0 || mouse == 0 || dragging == 0 ||
+        resizing == 0 || menu_open == 0 || context_open == 0 || fm_context_open == 0 ||
+        fm_context_has_wallpaper_action == 0) {
+        return 0;
+    }
+
+    for (int action_index = 0; action_index < queue->count; ++action_index) {
+        struct desktop_app_action *action = &queue->actions[action_index];
+
+        switch (action->type) {
+        case DESKTOP_APP_ACTION_APPCTX_PRIMARY:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active) {
+                break;
+            }
+            if (action->app_type == APP_EDITOR) {
+                struct editor_state *ed = &g_editors[g_windows[action->window].instance];
+
+                if (ed->file_node >= 0 && g_fs_nodes[ed->file_node].used) {
+                    if (editor_save(ed)) {
+                        dirty = 1;
+                    }
+                } else {
+                    file_dialog_open_editor(file_dialog, action->window);
+                    dirty = 1;
+                }
+            } else if (action->app_type == APP_SKETCHPAD) {
+                struct sketchpad_state *sketch = &g_sketches[g_windows[action->window].instance];
+
+                if (sketch->last_export_path[0] != '\0') {
+                    char name[FS_NAME_MAX + 1];
+                    char ext[FS_NAME_MAX + 1];
+                    char filename[FS_NAME_MAX + 1];
+
+                    extract_basename_parts(sketch->last_export_path,
+                                           name, (int)sizeof(name),
+                                           ext, (int)sizeof(ext));
+                    filename[0] = '\0';
+                    str_copy_limited(filename, name, (int)sizeof(filename));
+                    if (ext[0] != '\0') {
+                        str_append(filename, ".", (int)sizeof(filename));
+                        str_append(filename, ext, (int)sizeof(filename));
+                    }
+                    if (sketchpad_export_bitmap_named(sketch, filename)) {
+                        dirty = 1;
+                    }
+                } else {
+                    file_dialog_open_sketch(file_dialog, action->window);
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_APPCTX_SAVE_AS:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active) {
+                break;
+            }
+            if (action->app_type == APP_EDITOR) {
+                file_dialog_open_editor(file_dialog, action->window);
+                dirty = 1;
+            } else if (action->app_type == APP_SKETCHPAD) {
+                file_dialog_open_sketch(file_dialog, action->window);
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_EDITOR_SAVE_BUTTON:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_EDITOR) {
+                break;
+            }
+            {
+                struct editor_state *ed = &g_editors[g_windows[action->window].instance];
+
+                if (ed->file_node >= 0 && g_fs_nodes[ed->file_node].used) {
+                    if (editor_save(ed)) {
+                        dirty = 1;
+                    } else {
+                        dirty = 1;
+                    }
+                } else {
+                    file_dialog_open_editor(file_dialog, action->window);
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_UP:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_FILEMANAGER) {
+                break;
+            }
+            if (filemanager_open_node(&g_fms[g_windows[action->window].instance],
+                                      FILEMANAGER_HIT_PARENT)) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_LIST_CLICK:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_FILEMANAGER) {
+                break;
+            }
+            {
+                struct filemanager_state *fm = &g_fms[g_windows[action->window].instance];
+                int target = action->target;
+
+                if (target == FILEMANAGER_HIT_PARENT) {
+                    if (filemanager_open_node(fm, target)) {
+                        dirty = 1;
+                    }
+                } else if (target >= 0) {
+                    if (g_fs_nodes[target].is_dir) {
+                        if (filemanager_open_node(fm, target)) {
+                            dirty = 1;
+                        }
+                    } else {
+                        fm->selected_node = target;
+                        dirty = 1;
+                    }
+                } else {
+                    fm->selected_node = -1;
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_OPEN:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_FILEMANAGER) {
+                break;
+            }
+            {
+                struct filemanager_state *fm = &g_fms[g_windows[action->window].instance];
+                int target = action->target;
+
+                if (target != FILEMANAGER_HIT_NONE) {
+                    if (target >= 0 && !g_fs_nodes[target].is_dir) {
+                        if (image_node_is_supported(target)) {
+                            if (open_imageviewer_window_for_node(target, focused) >= 0) {
+                                dirty = 1;
+                            }
+                        } else if (audioplayer_node_is_supported(target)) {
+                            if (open_audioplayer_window_for_node(target, focused) >= 0) {
+                                dirty = 1;
+                            }
+                        } else if (open_editor_window_for_node(target, focused) >= 0) {
+                            dirty = 1;
+                        }
+                    } else if (filemanager_open_node(fm, target)) {
+                        dirty = 1;
+                    } else if (target >= 0) {
+                        fm->selected_node = target;
+                        dirty = 1;
+                    }
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_COPY:
+            if (action->target >= 0) {
+                g_clipboard_node = action->target;
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_PASTE:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_FILEMANAGER) {
+                break;
+            }
+            if (g_clipboard_node >= 0 &&
+                clone_node_to_directory(g_clipboard_node,
+                                        g_fms[g_windows[action->window].instance].cwd) >= 0) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_DIR:
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_FILE:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_FILEMANAGER) {
+                break;
+            }
+            {
+                struct filemanager_state *fm = &g_fms[g_windows[action->window].instance];
+                int created = create_node_in_directory(fm->cwd,
+                                                       action->type == DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_DIR,
+                                                       action->type == DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_NEW_DIR
+                                                           ? "pasta"
+                                                           : "arquivo");
+                if (created >= 0) {
+                    fm->selected_node = created;
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_RENAME:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_FILEMANAGER) {
+                break;
+            }
+            if (action->target >= 0) {
+                file_dialog_open_rename(file_dialog, action->window, action->target);
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_MOVE_TO_TRASH:
+            if (action->window < 0 || action->window >= MAX_WINDOWS ||
+                !g_windows[action->window].active ||
+                g_windows[action->window].type != APP_FILEMANAGER) {
+                break;
+            }
+            if (action->target >= 0 && trash_move_node_to_bin(action->target) == 0) {
+                g_fms[g_windows[action->window].instance].selected_node = -1;
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_FILEMANAGER_CONTEXT_SET_WALLPAPER:
+            if (action->target >= 0 && ui_wallpaper_set_from_node(action->target) == 0) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_PERSONALIZE) {
+                int wallpaper_nodes[3];
+                int wallpaper_count = find_wallpaper_nodes(wallpaper_nodes, 3);
+
+                if (g_pers.color_picker_open) {
+                    struct rect picker = personalize_color_picker_rect();
+
+                    for (int i = 0; i < 256; ++i) {
+                        struct rect swatch = personalize_color_swatch_rect(&picker, i);
+                        if (point_in_rect(&swatch, action->x, action->y)) {
+                            desktop_app_action_queue_push(queue,
+                                                          DESKTOP_APP_ACTION_PERSONALIZE_PICK_COLOR,
+                                                          action->window, i,
+                                                          action->x, action->y,
+                                                          APP_PERSONALIZE);
+                            dirty = 1;
+                            break;
+                        }
+                    }
+                    if (!point_in_rect(&picker, action->x, action->y)) {
+                        desktop_app_action_queue_push(queue,
+                                                      DESKTOP_APP_ACTION_PERSONALIZE_CLOSE_COLOR_PICKER,
+                                                      action->window, -1,
+                                                      action->x, action->y,
+                                                      APP_PERSONALIZE);
+                        dirty = 1;
+                    }
+                } else {
+                    struct rect body = {g_windows[action->window].rect.x + 6,
+                                        g_windows[action->window].rect.y + 20,
+                                        g_windows[action->window].rect.w - 12,
+                                        g_windows[action->window].rect.h - 26};
+                    struct rect palette_panel = {body.x + 8, body.y + body.h - 98, 216, 88};
+                    struct rect more_colors_btn = {palette_panel.x + 8,
+                                                   palette_panel.y + 30,
+                                                   palette_panel.w - 16,
+                                                   14};
+
+                    if (point_in_rect(&more_colors_btn, action->x, action->y)) {
+                        desktop_app_action_queue_push(queue,
+                                                      DESKTOP_APP_ACTION_PERSONALIZE_OPEN_COLOR_PICKER,
+                                                      action->window, -1,
+                                                      action->x, action->y,
+                                                      APP_PERSONALIZE);
+                        dirty = 1;
+                    }
+
+                    for (int slot = 0; slot < THEME_SLOT_COUNT; ++slot) {
+                        struct rect tile = personalize_window_slot_rect(&g_windows[action->window].rect, slot);
+                        if (point_in_rect(&tile, action->x, action->y)) {
+                            desktop_app_action_queue_push(queue,
+                                                          DESKTOP_APP_ACTION_PERSONALIZE_SELECT_SLOT,
+                                                          action->window, slot,
+                                                          action->x, action->y,
+                                                          APP_PERSONALIZE);
+                            dirty = 1;
+                        }
+                    }
+                }
+                for (int i = -1; i < wallpaper_count; ++i) {
+                    struct rect button = personalize_window_wallpaper_button_rect(&g_windows[action->window].rect, i + 1);
+                    if (point_in_rect(&button, action->x, action->y)) {
+                        desktop_app_action_queue_push(queue,
+                                                      DESKTOP_APP_ACTION_PERSONALIZE_SET_WALLPAPER,
+                                                      action->window,
+                                                      i < 0 ? -1 : wallpaper_nodes[i],
+                                                      action->x, action->y,
+                                                      APP_PERSONALIZE);
+                        dirty = 1;
+                    }
+                }
+                {
+                    struct rect choose_button = personalize_window_wallpaper_choose_rect(&g_windows[action->window].rect);
+                    if (point_in_rect(&choose_button, action->x, action->y)) {
+                        desktop_app_action_queue_push(queue,
+                                                      DESKTOP_APP_ACTION_PERSONALIZE_CHOOSE_WALLPAPER,
+                                                      action->window, -1,
+                                                      action->x, action->y,
+                                                      APP_PERSONALIZE);
+                        dirty = 1;
+                    }
+                }
+                refresh_resolution_options();
+                for (int i = 0; i < g_resolution_option_count; ++i) {
+                    struct rect button = personalize_window_resolution_button_rect(&g_windows[action->window].rect, i);
+                    if (point_in_rect(&button, action->x, action->y)) {
+                        desktop_app_action_queue_push(queue,
+                                                      DESKTOP_APP_ACTION_PERSONALIZE_SET_RESOLUTION,
+                                                      action->window, i,
+                                                      action->x, action->y,
+                                                      APP_PERSONALIZE);
+                        dirty = 1;
+                        break;
+                    }
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_OPEN_COLOR_PICKER:
+            g_pers.color_picker_open = 1;
+            dirty = 1;
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_CLOSE_COLOR_PICKER:
+            if (g_pers.color_picker_open) {
+                g_pers.color_picker_open = 0;
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_PICK_COLOR:
+            if (action->target >= 0 &&
+                action->target < (int)(sizeof(g_color_palette_256) / sizeof(g_color_palette_256[0]))) {
+                ui_theme_set_slot(g_pers.selected_slot, g_color_palette_256[action->target]);
+                g_pers.color_picker_open = 0;
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_SELECT_SLOT:
+            if (action->target >= 0 && action->target < THEME_SLOT_COUNT) {
+                g_pers.selected_slot = (enum theme_slot)action->target;
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_SET_WALLPAPER:
+            if (action->target < 0) {
+                ui_wallpaper_clear();
+                dirty = 1;
+            } else if (ui_wallpaper_set_from_node(action->target) == 0) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_CHOOSE_WALLPAPER:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_PERSONALIZE) {
+                file_dialog_open_wallpaper(file_dialog, action->window);
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_PERSONALIZE_SET_RESOLUTION:
+            if (action->target < 0 || action->target >= g_resolution_option_count) {
+                break;
+            }
+            if (SCREEN_WIDTH == g_resolution_options[action->target].width &&
+                SCREEN_HEIGHT == g_resolution_options[action->target].height) {
+                set_personalize_resolution_status("Resolucao ja esta ativa");
+                dirty = 1;
+                break;
+            }
+            if (!g_resolution_can_set) {
+                set_personalize_resolution_status("driver atual: resolucao so no boot");
+                dirty = 1;
+                break;
+            }
+            if (ui_set_resolution(g_resolution_options[action->target].width,
+                                  g_resolution_options[action->target].height) == 0) {
+                set_personalize_resolution_status("Resolucao aplicada agora");
+                for (int w = 0; w < MAX_WINDOWS; ++w) {
+                    if (g_windows[w].active) {
+                        clamp_window_rect(&g_windows[w].rect);
+                        sync_window_instance_rect(w);
+                    }
+                }
+                *start_button = ui_taskbar_start_button_rect();
+                *menu_rect = ui_start_menu_rect();
+                *context_menu = desktop_context_menu_rect(context_menu->x, context_menu->y);
+                *fm_context_menu = filemanager_context_menu_rect(fm_context_menu->x, fm_context_menu->y);
+                mouse->x = (int)SCREEN_WIDTH / 2;
+                mouse->y = (int)SCREEN_HEIGHT / 2;
+                mouse->buttons = 0;
+                *dragging = -1;
+                *resizing = -1;
+                *menu_open = 0;
+                *context_open = 0;
+                *fm_context_open = 0;
+                *fm_context_has_wallpaper_action = 0;
+                dirty = 1;
+            } else {
+                set_personalize_resolution_status("Falha ao trocar resolucao");
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_TASKMGR_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_TASKMANAGER) {
+                struct taskmgr_action tm_action =
+                    taskmgr_handle_click(&g_tms[g_windows[action->window].instance],
+                                         g_windows,
+                                         MAX_WINDOWS,
+                                         action->x,
+                                         action->y,
+                                         sys_ticks());
+
+                if (tm_action.type == TASKMGR_ACTION_CLOSE_WINDOW &&
+                    tm_action.value >= 0 &&
+                    tm_action.value < MAX_WINDOWS &&
+                    g_windows[tm_action.value].active) {
+                    free_window(tm_action.value);
+                    if (*focused == tm_action.value) {
+                        *focused = -1;
+                    }
+                    dirty = 1;
+                } else if (tm_action.type == TASKMGR_ACTION_TERMINATE_PID &&
+                           tm_action.value > 0 &&
+                           sys_task_terminate((uint32_t)tm_action.value) == 0) {
+                    dirty = 1;
+                } else {
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_CALCULATOR_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_CALCULATOR) {
+                int button = calculator_hit_test(&g_calcs[g_windows[action->window].instance],
+                                                 action->x,
+                                                 action->y);
+                if (button >= 0) {
+                    calculator_press_key(&g_calcs[g_windows[action->window].instance],
+                                         calculator_button_key(button));
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_IMAGEVIEWER_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_IMAGEVIEWER &&
+                imageviewer_handle_click(&g_imageviewers[g_windows[action->window].instance],
+                                         action->x,
+                                         action->y)) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_AUDIO_PLAYER_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_AUDIO_PLAYER &&
+                audioplayer_handle_click(&g_audioplayers[g_windows[action->window].instance],
+                                         action->x,
+                                         action->y)) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_SKETCHPAD_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_SKETCHPAD) {
+                struct sketchpad_state *sketch = &g_sketches[g_windows[action->window].instance];
+                struct rect clear_button = sketchpad_clear_button_rect(sketch);
+                struct rect export_button = sketchpad_export_button_rect(sketch);
+                int color_index = sketchpad_hit_color(sketch, action->x, action->y);
+
+                if (point_in_rect(&clear_button, action->x, action->y)) {
+                    desktop_app_action_queue_push(queue,
+                                                  DESKTOP_APP_ACTION_SKETCHPAD_CLEAR,
+                                                  action->window, -1,
+                                                  action->x, action->y,
+                                                  APP_SKETCHPAD);
+                    dirty = 1;
+                } else if (point_in_rect(&export_button, action->x, action->y)) {
+                    desktop_app_action_queue_push(queue,
+                                                  DESKTOP_APP_ACTION_SKETCHPAD_EXPORT,
+                                                  action->window, -1,
+                                                  action->x, action->y,
+                                                  APP_SKETCHPAD);
+                    dirty = 1;
+                } else if (color_index >= 0) {
+                    desktop_app_action_queue_push(queue,
+                                                  DESKTOP_APP_ACTION_SKETCHPAD_SELECT_COLOR,
+                                                  action->window, color_index,
+                                                  action->x, action->y,
+                                                  APP_SKETCHPAD);
+                    dirty = 1;
+                } else {
+                    desktop_app_action_queue_push(queue,
+                                                  DESKTOP_APP_ACTION_SKETCHPAD_PAINT,
+                                                  action->window, -1,
+                                                  action->x, action->y,
+                                                  APP_SKETCHPAD);
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_SKETCHPAD_CLEAR:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_SKETCHPAD) {
+                sketchpad_clear(&g_sketches[g_windows[action->window].instance]);
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_SKETCHPAD_EXPORT:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_SKETCHPAD) {
+                struct sketchpad_state *sketch = &g_sketches[g_windows[action->window].instance];
+
+                if (sketch->last_export_path[0] != '\0') {
+                    char name[FS_NAME_MAX + 1];
+                    char ext[FS_NAME_MAX + 1];
+                    char filename[FS_NAME_MAX + 1];
+
+                    extract_basename_parts(sketch->last_export_path,
+                                           name, (int)sizeof(name),
+                                           ext, (int)sizeof(ext));
+                    filename[0] = '\0';
+                    str_copy_limited(filename, name, (int)sizeof(filename));
+                    if (ext[0] != '\0') {
+                        str_append(filename, ".", (int)sizeof(filename));
+                        str_append(filename, ext, (int)sizeof(filename));
+                    }
+                    if (sketchpad_export_bitmap_named(sketch, filename)) {
+                        dirty = 1;
+                    }
+                } else {
+                    file_dialog_open_sketch(file_dialog, action->window);
+                    dirty = 1;
+                }
+            }
+            break;
+        case DESKTOP_APP_ACTION_SKETCHPAD_SELECT_COLOR:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_SKETCHPAD &&
+                action->target >= 0) {
+                g_sketches[g_windows[action->window].instance].current_color = (uint8_t)action->target;
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_SKETCHPAD_PAINT:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_SKETCHPAD &&
+                sketchpad_paint_at(&g_sketches[g_windows[action->window].instance],
+                                   action->x,
+                                   action->y)) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_FLAP_BIRB_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_FLAP_BIRB &&
+                flap_birb_handle_click(&g_flap_birb[g_windows[action->window].instance])) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_DOOM_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_DOOM &&
+                doom_handle_click(&g_doom[g_windows[action->window].instance])) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_CRAFT_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_CRAFT &&
+                craft_handle_click(&g_craft[g_windows[action->window].instance])) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_TRASH_RESTORE:
+            if (g_trash.selected_entry >= 0) {
+                if (trash_restore_entry(g_trash.selected_entry,
+                                        g_trash.status,
+                                        (int)sizeof(g_trash.status)) == 0) {
+                    g_trash.selected_entry = -1;
+                }
+            } else {
+                set_trash_status("Selecione um item");
+            }
+            dirty = 1;
+            break;
+        case DESKTOP_APP_ACTION_TRASH_DELETE:
+            if (g_trash.selected_entry >= 0) {
+                if (trash_delete_entry(g_trash.selected_entry,
+                                       g_trash.status,
+                                       (int)sizeof(g_trash.status)) == 0) {
+                    g_trash.selected_entry = -1;
+                }
+            } else {
+                set_trash_status("Selecione um item");
+            }
+            dirty = 1;
+            break;
+        case DESKTOP_APP_ACTION_TRASH_EMPTY:
+            (void)trash_empty_all(g_trash.status, (int)sizeof(g_trash.status));
+            g_trash.selected_entry = -1;
+            dirty = 1;
+            break;
+        case DESKTOP_APP_ACTION_TRASH_SELECT_ENTRY:
+            g_trash.selected_entry = -1;
+            g_trash.status[0] = '\0';
+            g_trash.selected_entry = action->target;
+            dirty = 1;
+            break;
+        }
+    }
+
+    queue->count = 0;
+    return dirty;
+}
+
+static int desktop_flush_post_pointer_actions(struct desktop_session_action_queue *session_queue,
+                                              struct desktop_app_action_queue *app_queue,
+                                              struct desktop_window_action_queue *window_queue,
+                                              int *focused,
+                                              struct file_dialog_state *file_dialog,
+                                              struct rect *start_button,
+                                              struct rect *menu_rect,
+                                              struct rect *context_menu,
+                                              struct rect *fm_context_menu,
+                                              struct mouse_state *mouse,
+                                              int *dragging,
+                                              int *drag_offset_x,
+                                              int *drag_offset_y,
+                                              int *resizing,
+                                              struct rect *resize_origin,
+                                              int *resize_anchor_x,
+                                              int *resize_anchor_y,
+                                              int *menu_open,
+                                              int *menu_scroll_dragging,
+                                              int *context_open,
+                                              int *fm_context_open,
+                                              int *fm_context_window,
+                                              int *fm_context_target,
+                                              int *fm_context_has_wallpaper_action,
+                                              struct app_context_state *app_context,
+                                              char *start_menu_search,
+                                              int start_menu_search_cap,
+                                              int *start_menu_search_len,
+                                              int *start_menu_search_scroll) {
+    int dirty = 0;
+
+    dirty |= desktop_flush_session_actions(session_queue,
+                                           focused,
+                                           context_open,
+                                           context_menu,
+                                           fm_context_open,
+                                           fm_context_menu,
+                                           fm_context_window,
+                                           fm_context_target,
+                                           fm_context_has_wallpaper_action,
+                                           app_context,
+                                           menu_open,
+                                           menu_scroll_dragging,
+                                           start_menu_search,
+                                           start_menu_search_cap,
+                                           start_menu_search_len,
+                                           start_menu_search_scroll);
+    dirty |= desktop_process_app_action_queue(app_queue,
+                                              focused,
+                                              file_dialog,
+                                              start_button,
+                                              menu_rect,
+                                              context_menu,
+                                              fm_context_menu,
+                                              mouse,
+                                              dragging,
+                                              resizing,
+                                              menu_open,
+                                              context_open,
+                                              fm_context_open,
+                                              fm_context_has_wallpaper_action);
+    dirty |= desktop_flush_window_actions(window_queue,
+                                          focused,
+                                          dragging,
+                                          drag_offset_x,
+                                          drag_offset_y,
+                                          resizing,
+                                          resize_origin,
+                                          resize_anchor_x,
+                                          resize_anchor_y);
+
+    return dirty;
+}
+
+static int desktop_dispatch_window_content_click(struct desktop_app_action_queue *queue,
+                                                 int hit_window,
+                                                 int click_x,
+                                                 int click_y) {
+    enum app_type type;
+    int simple_action;
+
+    if (queue == 0 || hit_window < 0 || hit_window >= MAX_WINDOWS || !g_windows[hit_window].active) {
+        return 0;
+    }
+
+    type = g_windows[hit_window].type;
+
+    switch (type) {
+    case APP_EDITOR:
+        return desktop_dispatch_editor_content_click(queue,
+                                                     hit_window,
+                                                     click_x,
+                                                     click_y);
+    case APP_FILEMANAGER:
+        return desktop_dispatch_filemanager_content_click(queue,
+                                                          hit_window,
+                                                          click_x,
+                                                          click_y);
+    case APP_TRASH:
+        return desktop_dispatch_trash_content_click(queue,
+                                                    hit_window,
+                                                    click_x,
+                                                    click_y);
+    default:
+        break;
+    }
+
+    simple_action = desktop_simple_app_action_for_type(type);
+    if (simple_action >= 0) {
+        return desktop_queue_simple_app_click(queue,
+                                              hit_window,
+                                              click_x,
+                                              click_y,
+                                              type,
+                                              (enum desktop_app_action_type)simple_action);
+    }
+
+    return 0;
+}
+
+static int desktop_dispatch_editor_content_click(struct desktop_app_action_queue *queue,
+                                                 int hit_window,
+                                                 int click_x,
+                                                 int click_y) {
+    struct editor_state *ed;
+    struct rect save;
+
+    if (queue == 0 || hit_window < 0 || hit_window >= MAX_WINDOWS || !g_windows[hit_window].active ||
+        g_windows[hit_window].type != APP_EDITOR) {
+        return 0;
+    }
+
+    ed = &g_editors[g_windows[hit_window].instance];
+    save = editor_save_button_rect(ed);
+
+    if (!point_in_rect(&save, click_x, click_y)) {
+        return 0;
+    }
+
+    desktop_app_action_queue_push(queue,
+                                  DESKTOP_APP_ACTION_EDITOR_SAVE_BUTTON,
+                                  hit_window, -1,
+                                  click_x, click_y,
+                                  APP_EDITOR);
+    return 1;
+}
+
+static int desktop_dispatch_filemanager_content_click(struct desktop_app_action_queue *queue,
+                                                      int hit_window,
+                                                      int click_x,
+                                                      int click_y) {
+    struct filemanager_state *fm;
+    struct rect up;
+    struct rect list;
+
+    if (queue == 0 || hit_window < 0 || hit_window >= MAX_WINDOWS || !g_windows[hit_window].active ||
+        g_windows[hit_window].type != APP_FILEMANAGER) {
+        return 0;
+    }
+
+    fm = &g_fms[g_windows[hit_window].instance];
+    up = filemanager_up_button_rect(fm);
+    list = filemanager_list_rect(fm);
+
+    if (point_in_rect(&up, click_x, click_y)) {
+        desktop_app_action_queue_push(queue,
+                                      DESKTOP_APP_ACTION_FILEMANAGER_UP,
+                                      hit_window, FILEMANAGER_HIT_PARENT,
+                                      click_x, click_y,
+                                      APP_FILEMANAGER);
+        return 1;
+    }
+    if (point_in_rect(&list, click_x, click_y)) {
+        desktop_app_action_queue_push(queue,
+                                      DESKTOP_APP_ACTION_FILEMANAGER_LIST_CLICK,
+                                      hit_window,
+                                      filemanager_hit_test_entry(fm, click_x, click_y),
+                                      click_x, click_y,
+                                      APP_FILEMANAGER);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int desktop_dispatch_trash_content_click(struct desktop_app_action_queue *queue,
+                                                int hit_window,
+                                                int click_x,
+                                                int click_y) {
+    struct rect list;
+    struct rect restore_button;
+    struct rect delete_button;
+    struct rect empty_button;
+
+    if (queue == 0 || hit_window < 0 || hit_window >= MAX_WINDOWS || !g_windows[hit_window].active ||
+        g_windows[hit_window].type != APP_TRASH) {
+        return 0;
+    }
+
+    list = trash_window_list_rect(&g_trash);
+    restore_button = trash_window_restore_button_rect(&g_trash);
+    delete_button = trash_window_delete_button_rect(&g_trash);
+    empty_button = trash_window_empty_button_rect(&g_trash);
+
+    if (point_in_rect(&restore_button, click_x, click_y)) {
+        desktop_app_action_queue_push(queue,
+                                      DESKTOP_APP_ACTION_TRASH_RESTORE,
+                                      hit_window, -1,
+                                      click_x, click_y,
+                                      APP_TRASH);
+        return 1;
+    }
+    if (point_in_rect(&delete_button, click_x, click_y)) {
+        desktop_app_action_queue_push(queue,
+                                      DESKTOP_APP_ACTION_TRASH_DELETE,
+                                      hit_window, -1,
+                                      click_x, click_y,
+                                      APP_TRASH);
+        return 1;
+    }
+    if (point_in_rect(&empty_button, click_x, click_y)) {
+        desktop_app_action_queue_push(queue,
+                                      DESKTOP_APP_ACTION_TRASH_EMPTY,
+                                      hit_window, -1,
+                                      click_x, click_y,
+                                      APP_TRASH);
+        return 1;
+    }
+    if (point_in_rect(&list, click_x, click_y)) {
+        desktop_app_action_queue_push(queue,
+                                      DESKTOP_APP_ACTION_TRASH_SELECT_ENTRY,
+                                      hit_window,
+                                      trash_window_entry_at_point(&g_trash, click_x, click_y),
+                                      click_x, click_y,
+                                      APP_TRASH);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int desktop_dispatch_window_frame_click(struct desktop_window_action_queue *window_queue,
+                                               struct desktop_app_action_queue *app_queue,
+                                               int hit_window,
+                                               int click_x,
+                                               int click_y,
+                                               int *dirty) {
+    struct rect close;
+    struct rect min;
+    struct rect max;
+    struct rect title;
+    struct rect grip;
+
+    if (window_queue == 0 || app_queue == 0 || dirty == 0 ||
+        hit_window < 0 || hit_window >= MAX_WINDOWS || !g_windows[hit_window].active) {
+        return 0;
+    }
+
+    close = window_close_button(&g_windows[hit_window].rect);
+    min = window_min_button(&g_windows[hit_window].rect);
+    max = window_max_button(&g_windows[hit_window].rect);
+    title = window_title_bar(&g_windows[hit_window].rect);
+    grip = window_resize_grip(&g_windows[hit_window].rect);
+
+    desktop_window_action_queue_push(window_queue,
+                                     DESKTOP_WINDOW_ACTION_FOCUS_RAISE,
+                                     hit_window, click_x, click_y);
+
+    if (point_in_rect(&close, click_x, click_y)) {
+        desktop_window_action_queue_push(window_queue,
+                                         DESKTOP_WINDOW_ACTION_CLOSE,
+                                         hit_window, click_x, click_y);
+    } else if (point_in_rect(&min, click_x, click_y)) {
+        desktop_window_action_queue_push(window_queue,
+                                         DESKTOP_WINDOW_ACTION_MINIMIZE,
+                                         hit_window, click_x, click_y);
+    } else if (point_in_rect(&max, click_x, click_y)) {
+        desktop_window_action_queue_push(window_queue,
+                                         DESKTOP_WINDOW_ACTION_MAXIMIZE,
+                                         hit_window, click_x, click_y);
+    } else if (point_in_rect(&grip, click_x, click_y)) {
+        desktop_window_action_queue_push(window_queue,
+                                         DESKTOP_WINDOW_ACTION_BEGIN_RESIZE,
+                                         hit_window, click_x, click_y);
+    } else if (point_in_rect(&title, click_x, click_y)) {
+        desktop_window_action_queue_push(window_queue,
+                                         DESKTOP_WINDOW_ACTION_BEGIN_DRAG,
+                                         hit_window, click_x, click_y);
+    } else if (desktop_dispatch_window_content_click(app_queue,
+                                                     hit_window,
+                                                     click_x,
+                                                     click_y)) {
+        *dirty = 1;
+    }
+
+    *dirty = 1;
+    return 1;
+}
+
+static int desktop_dispatch_shell_window_click(struct desktop_window_action_queue *window_queue,
+                                               struct desktop_app_action_queue *app_queue,
+                                               int click_x,
+                                               int click_y,
+                                               int *dirty) {
+    int hit_window;
+
+    if (window_queue == 0 || app_queue == 0 || dirty == 0) {
+        return 0;
+    }
+
+    hit_window = topmost_window_at(click_x, click_y);
+    if (hit_window < 0) {
+        return 0;
+    }
+
+    return desktop_dispatch_window_frame_click(window_queue,
+                                               app_queue,
+                                               hit_window,
+                                               click_x,
+                                               click_y,
+                                               dirty);
+}
+
+static int desktop_dispatch_taskbar_window_click(struct desktop_session_action_queue *session_queue,
+                                                 struct desktop_window_action_queue *window_queue,
+                                                 int click_x,
+                                                 int click_y) {
+    if (session_queue == 0 || window_queue == 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < MAX_WINDOWS; ++i) {
+        struct rect task_button;
+
+        if (!g_windows[i].active) {
+            continue;
+        }
+        task_button = taskbar_button_rect_for_window(i);
+        if (point_in_rect(&task_button, click_x, click_y)) {
+            desktop_window_action_queue_push(window_queue,
+                                             DESKTOP_WINDOW_ACTION_TASKBAR_TOGGLE,
+                                             i, click_x, click_y);
+            desktop_queue_close_session_overlays(session_queue,
+                                                 click_x,
+                                                 click_y,
+                                                 1,
+                                                 1);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int desktop_close_shell_popups(int click_x, int click_y) {
+    int dirty = 0;
+    struct rect network_popup = network_applet_popup_rect();
+    struct rect sound_popup = sound_applet_popup_rect();
+    struct rect network_button = ui_taskbar_network_applet_rect();
+    struct rect sound_button = ui_taskbar_sound_applet_rect();
+
+    if (g_network_applet.popup_open &&
+        !point_in_rect(&network_popup, click_x, click_y) &&
+        !point_in_rect(&network_button, click_x, click_y)) {
+        g_network_applet.popup_open = 0;
+        g_network_applet.password_focus = 0;
+        dirty = 1;
+    }
+    if (g_sound_applet.popup_open &&
+        !point_in_rect(&sound_popup, click_x, click_y) &&
+        !point_in_rect(&sound_button, click_x, click_y)) {
+        g_sound_applet.popup_open = 0;
+        dirty = 1;
+    }
+
+    return dirty;
+}
+
+static void desktop_close_shell_overlays(struct desktop_session_action_queue *session_queue,
+                                         int click_x,
+                                         int click_y,
+                                         int menu_open,
+                                         const struct rect *menu_rect,
+                                         int context_open,
+                                         const struct rect *context_menu,
+                                         int fm_context_open,
+                                         const struct rect *fm_context_menu,
+                                         const struct app_context_state *app_context,
+                                         int *dirty) {
+    if (session_queue == 0 || menu_rect == 0 || context_menu == 0 ||
+        fm_context_menu == 0 || app_context == 0 || dirty == 0) {
+        return;
+    }
+
+    if (desktop_close_shell_popups(click_x, click_y)) {
+        *dirty = 1;
+    }
+
+    if (context_open && !point_in_rect(context_menu, click_x, click_y)) {
+        desktop_queue_close_contexts(session_queue, click_x, click_y);
+        *dirty = 1;
+    }
+    if (fm_context_open && !point_in_rect(fm_context_menu, click_x, click_y)) {
+        desktop_queue_close_contexts(session_queue, click_x, click_y);
+        *dirty = 1;
+    }
+    if (app_context->open && !point_in_rect(&app_context->menu, click_x, click_y)) {
+        desktop_queue_close_contexts(session_queue, click_x, click_y);
+        *dirty = 1;
+    }
+    if (menu_open && !point_in_rect(menu_rect, click_x, click_y)) {
+        desktop_queue_close_session_overlays(session_queue,
+                                             click_x,
+                                             click_y,
+                                             1,
+                                             0);
+        *dirty = 1;
+    }
+}
+
+static int desktop_dispatch_shell_click(struct desktop_session_action_queue *session_queue,
+                                        struct desktop_window_action_queue *window_queue,
+                                        struct desktop_app_action_queue *app_queue,
+                                        int click_x,
+                                        int click_y,
+                                        int menu_open,
+                                        const struct rect *menu_rect,
+                                        int context_open,
+                                        const struct rect *context_menu,
+                                        int fm_context_open,
+                                        const struct rect *fm_context_menu,
+                                        const struct app_context_state *app_context,
+                                        int *dirty) {
+    if (session_queue == 0 || window_queue == 0 || app_queue == 0 || menu_rect == 0 ||
+        context_menu == 0 || fm_context_menu == 0 || app_context == 0 || dirty == 0) {
+        return 0;
+    }
+
+    desktop_close_shell_overlays(session_queue,
+                                 click_x,
+                                 click_y,
+                                 menu_open,
+                                 menu_rect,
+                                 context_open,
+                                 context_menu,
+                                 fm_context_open,
+                                 fm_context_menu,
+                                 app_context,
+                                 dirty);
+
+    if (desktop_dispatch_taskbar_window_click(session_queue,
+                                              window_queue,
+                                              click_x,
+                                              click_y)) {
+        return 1;
+    }
+
+    return desktop_dispatch_shell_window_click(window_queue,
+                                               app_queue,
+                                               click_x,
+                                               click_y,
+                                               dirty);
+}
+
+static int desktop_process_window_action_queue(struct desktop_window_action_queue *queue,
+                                               int *focused,
+                                               int *dragging,
+                                               int *drag_offset_x,
+                                               int *drag_offset_y,
+                                               int *resizing,
+                                               struct rect *resize_origin,
+                                               int *resize_anchor_x,
+                                               int *resize_anchor_y) {
+    int dirty = 0;
+
+    if (queue == 0 || focused == 0 || dragging == 0 || drag_offset_x == 0 || drag_offset_y == 0 ||
+        resizing == 0 || resize_origin == 0 || resize_anchor_x == 0 || resize_anchor_y == 0) {
+        return 0;
+    }
+
+    for (int action_index = 0; action_index < queue->count; ++action_index) {
+        struct desktop_window_action *action = &queue->actions[action_index];
+        int widx = action->window;
+
+        if (widx < 0 || widx >= MAX_WINDOWS || !g_windows[widx].active) {
+            continue;
+        }
+
+        switch (action->type) {
+        case DESKTOP_WINDOW_ACTION_TASKBAR_TOGGLE:
+            restore_or_toggle_window(widx, focused);
+            dirty = 1;
+            break;
+        case DESKTOP_WINDOW_ACTION_FOCUS_RAISE:
+            *focused = raise_window_to_front(widx, focused);
+            dirty = 1;
+            break;
+        case DESKTOP_WINDOW_ACTION_CLOSE:
+            free_window(widx);
+            if (*focused == widx) {
+                *focused = -1;
+            }
+            dirty = 1;
+            break;
+        case DESKTOP_WINDOW_ACTION_MINIMIZE:
+            g_windows[widx].minimized = 1;
+            if (*focused == widx) {
+                *focused = -1;
+            }
+            dirty = 1;
+            break;
+        case DESKTOP_WINDOW_ACTION_MAXIMIZE:
+            maximize_window(widx);
+            dirty = 1;
+            break;
+        case DESKTOP_WINDOW_ACTION_BEGIN_RESIZE:
+            *resizing = widx;
+            *resize_origin = g_windows[widx].rect;
+            *resize_anchor_x = action->x;
+            *resize_anchor_y = action->y;
+            dirty = 1;
+            break;
+        case DESKTOP_WINDOW_ACTION_BEGIN_DRAG:
+            *dragging = widx;
+            *drag_offset_x = action->x - g_windows[widx].rect.x;
+            *drag_offset_y = action->y - g_windows[widx].rect.y;
+            dirty = 1;
+            break;
+        }
+    }
+
+    queue->count = 0;
+    return dirty;
+}
+
+static int desktop_flush_window_actions(struct desktop_window_action_queue *queue,
+                                        int *focused,
+                                        int *dragging,
+                                        int *drag_offset_x,
+                                        int *drag_offset_y,
+                                        int *resizing,
+                                        struct rect *resize_origin,
+                                        int *resize_anchor_x,
+                                        int *resize_anchor_y) {
+    return desktop_process_window_action_queue(queue,
+                                               focused,
+                                               dragging,
+                                               drag_offset_x,
+                                               drag_offset_y,
+                                               resizing,
+                                               resize_origin,
+                                               resize_anchor_x,
+                                               resize_anchor_y);
 }
 
 static int has_active_window_instance(enum app_type type, int instance) {
@@ -3320,6 +5872,148 @@ static void network_applet_sync_backend(int force) {
     network_applet_apply_saved_password_for_selected();
 }
 
+static int desktop_service_event_affects_layout(const struct mk_service_event *event) {
+    if (event == 0) {
+        return 0;
+    }
+
+    if (event->service_type != MK_SERVICE_VIDEO && event->service_type != MK_SERVICE_INPUT) {
+        return 0;
+    }
+
+    return event->event_type == MK_SERVICE_EVENT_OFFLINE ||
+           event->event_type == MK_SERVICE_EVENT_DEGRADED ||
+           event->event_type == MK_SERVICE_EVENT_RECOVERED ||
+           event->event_type == MK_SERVICE_EVENT_RESTARTED ||
+           event->event_type == MK_SERVICE_EVENT_ONLINE;
+}
+
+static int desktop_pump_async_service_events(void) {
+    int refresh_audio = 0;
+    int refresh_network = 0;
+    int refresh_layout = 0;
+    struct mk_service_event event;
+
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_AUDIO)) == 0u) {
+        if (sys_service_subscribe(MK_SERVICE_AUDIO) == 0) {
+            g_desktop_service_event_subscriptions |= (1u << MK_SERVICE_AUDIO);
+        }
+    }
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_NETWORK)) == 0u) {
+        if (sys_service_subscribe(MK_SERVICE_NETWORK) == 0) {
+            g_desktop_service_event_subscriptions |= (1u << MK_SERVICE_NETWORK);
+        }
+    }
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_VIDEO)) == 0u) {
+        if (sys_service_subscribe(MK_SERVICE_VIDEO) == 0) {
+            g_desktop_service_event_subscriptions |= (1u << MK_SERVICE_VIDEO);
+        }
+    }
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_INPUT)) == 0u) {
+        if (sys_service_subscribe(MK_SERVICE_INPUT) == 0) {
+            g_desktop_service_event_subscriptions |= (1u << MK_SERVICE_INPUT);
+        }
+    }
+
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_AUDIO)) != 0u) {
+        while (sys_service_event_receive(MK_SERVICE_AUDIO, &event, 0u) == 0) {
+            refresh_audio = 1;
+        }
+    }
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_NETWORK)) != 0u) {
+        while (sys_service_event_receive(MK_SERVICE_NETWORK, &event, 0u) == 0) {
+            refresh_network = 1;
+        }
+    }
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_VIDEO)) != 0u) {
+        while (sys_service_event_receive(MK_SERVICE_VIDEO, &event, 0u) == 0) {
+            if (desktop_service_event_affects_layout(&event)) {
+                refresh_layout = 1;
+            }
+        }
+    }
+    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_INPUT)) != 0u) {
+        while (sys_service_event_receive(MK_SERVICE_INPUT, &event, 0u) == 0) {
+            if (desktop_service_event_affects_layout(&event)) {
+                refresh_layout = 1;
+            }
+        }
+    }
+
+    if (refresh_audio) {
+        sound_applet_invalidate_backend_cache();
+        sound_applet_sync_backend(1);
+    }
+    if (refresh_network) {
+        network_applet_invalidate_backend_cache();
+        network_applet_sync_backend(1);
+    }
+    if (refresh_layout) {
+        ui_refresh_metrics();
+    }
+
+    return refresh_audio || refresh_network || refresh_layout;
+}
+
+static int desktop_pump_async_applet_events(void) {
+    int refresh_audio = 0;
+    int refresh_network = 0;
+    int refresh_layout = 0;
+    struct mk_audio_event audio_event;
+    struct mk_network_event network_event;
+    struct mk_video_event video_event;
+
+    if (!g_desktop_audio_event_subscription) {
+        if (sys_audio_event_subscribe() == 0) {
+            g_desktop_audio_event_subscription = 1;
+        }
+    }
+    if (!g_desktop_network_event_subscription) {
+        if (sys_network_event_subscribe() == 0) {
+            g_desktop_network_event_subscription = 1;
+        }
+    }
+    if (!g_desktop_video_event_subscription) {
+        if (sys_video_event_subscribe() == 0) {
+            g_desktop_video_event_subscription = 1;
+        }
+    }
+
+    if (g_desktop_audio_event_subscription) {
+        while (sys_audio_event_receive(&audio_event, 0u) == 0) {
+            refresh_audio = 1;
+        }
+    }
+    if (g_desktop_network_event_subscription) {
+        while (sys_network_event_receive(&network_event, 0u) == 0) {
+            refresh_network = 1;
+        }
+    }
+    if (g_desktop_video_event_subscription) {
+        while (sys_video_event_receive(&video_event, 0u) == 0) {
+            if (video_event.event_type == MK_VIDEO_EVENT_MODE_SET ||
+                video_event.event_type == MK_VIDEO_EVENT_LEAVE ||
+                video_event.event_type == MK_VIDEO_EVENT_PRESENT) {
+                refresh_layout = 1;
+            }
+        }
+    }
+
+    if (refresh_audio) {
+        sound_applet_invalidate_backend_cache();
+        sound_applet_sync_backend(1);
+    }
+    if (refresh_network) {
+        network_applet_invalidate_backend_cache();
+        network_applet_sync_backend(1);
+    }
+    if (refresh_layout) {
+        ui_refresh_metrics();
+    }
+
+    return desktop_pump_async_service_events() || refresh_audio || refresh_network || refresh_layout;
+}
+
 static const struct mk_network_scan_info *network_applet_selected_scan(void) {
     if (g_network_applet.selected_network < 0 ||
         g_network_applet.selected_network >= g_network_applet_cache.scan_count) {
@@ -3688,6 +6382,222 @@ static int network_applet_connect_ethernet(void) {
     connect_argv[2] = "ethernet";
     connect_argv[3] = 0;
     return lang_try_run(3, connect_argv);
+}
+
+static int desktop_dispatch_applet_click(struct desktop_session_action_queue *queue,
+                                         int click_x,
+                                         int click_y,
+                                         int *dirty) {
+    struct rect network_button = ui_taskbar_network_applet_rect();
+    struct rect sound_button = ui_taskbar_sound_applet_rect();
+
+    if (queue == 0 || dirty == 0) {
+        return 0;
+    }
+
+    if (point_in_rect(&network_button, click_x, click_y)) {
+        g_network_applet.popup_open = !g_network_applet.popup_open;
+        if (g_network_applet.popup_open) {
+            g_sound_applet.popup_open = 0;
+            network_applet_sync_backend(1);
+        }
+        g_network_applet.password_focus = 0;
+        desktop_queue_close_session_overlays(queue, click_x, click_y, 1, 1);
+        *dirty = 1;
+        return 1;
+    }
+    if (point_in_rect(&sound_button, click_x, click_y)) {
+        g_sound_applet.popup_open = !g_sound_applet.popup_open;
+        if (g_sound_applet.popup_open) {
+            g_network_applet.popup_open = 0;
+        }
+        desktop_queue_close_session_overlays(queue, click_x, click_y, 1, 1);
+        *dirty = 1;
+        return 1;
+    }
+    if (g_network_applet.popup_open &&
+        point_in_rect(&(struct rect){network_applet_popup_rect().x,
+                                     network_applet_popup_rect().y,
+                                     network_applet_popup_rect().w,
+                                     network_applet_popup_rect().h},
+                      click_x, click_y)) {
+        struct rect popup = network_applet_popup_rect();
+        struct rect auto_button = network_auto_rect(&popup);
+        struct rect forget_button = network_forget_rect(&popup);
+        struct rect ethernet_connect_button = network_ethernet_connect_rect(&popup);
+        struct rect ethernet_disconnect_button = network_ethernet_disconnect_rect(&popup);
+        struct rect password = network_password_rect(&popup);
+        struct rect connect_button = network_connect_rect(&popup);
+        struct rect disconnect_button = network_disconnect_rect(&popup);
+        struct network_profile *selected_profile;
+
+        g_network_applet.password_focus = point_in_rect(&password, click_x, click_y);
+        for (int i = 0; i < g_network_applet_cache.scan_count && i < 3; ++i) {
+            struct rect row = network_row_rect(&popup, i);
+            if (point_in_rect(&row, click_x, click_y)) {
+                g_network_applet.selected_network = i;
+                if (g_network_applet_cache.scans[i].security == MK_NETWORK_SECURITY_OPEN) {
+                    g_network_applet.password_len = 0;
+                    g_network_applet.password[0] = '\0';
+                } else {
+                    network_applet_apply_saved_password_for_selected();
+                }
+                if (g_network_applet_cache.scans[i].ssid[0] != '\0') {
+                    str_copy_limited(g_network_applet.selected_saved_ssid,
+                                     g_network_applet_cache.scans[i].ssid,
+                                     (int)sizeof(g_network_applet.selected_saved_ssid));
+                }
+                *dirty = 1;
+            }
+        }
+        for (int i = 0; i < network_profile_count() && i < 2; ++i) {
+            struct network_profile *profile = network_profile_at_visible_index(i);
+            struct rect row = network_saved_row_rect(&popup, i);
+
+            if (profile == 0 || !point_in_rect(&row, click_x, click_y)) {
+                continue;
+            }
+            str_copy_limited(g_network_applet.selected_saved_ssid,
+                             profile->ssid,
+                             (int)sizeof(g_network_applet.selected_saved_ssid));
+            for (int j = 0; j < g_network_applet_cache.scan_count; ++j) {
+                if (str_eq(g_network_applet_cache.scans[j].ssid, profile->ssid)) {
+                    g_network_applet.selected_network = j;
+                    network_applet_apply_saved_password_for_selected();
+                    *dirty = 1;
+                    break;
+                }
+            }
+            *dirty = 1;
+        }
+        selected_profile = network_applet_selected_profile();
+        if (point_in_rect(&auto_button, click_x, click_y) && selected_profile != 0) {
+            network_applet_set_autoconnect(selected_profile->ssid);
+            network_applet_export_manager_state();
+            *dirty = 1;
+        } else if (point_in_rect(&forget_button, click_x, click_y) && selected_profile != 0) {
+            network_applet_forget_profile(selected_profile->ssid);
+            network_applet_export_manager_state();
+            *dirty = 1;
+        } else if (point_in_rect(&ethernet_connect_button, click_x, click_y)) {
+            if (network_applet_connect_ethernet() == 0) {
+                network_applet_invalidate_backend_cache();
+                network_applet_sync_backend(1);
+                network_applet_export_manager_state();
+                *dirty = 1;
+            }
+        } else if (point_in_rect(&ethernet_disconnect_button, click_x, click_y)) {
+            char *disconnect_argv[4];
+
+            disconnect_argv[0] = "netmgrd";
+            disconnect_argv[1] = "disconnect";
+            disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
+                                     ? g_network_applet_cache.status.active_if
+                                     : "ethernet";
+            disconnect_argv[3] = 0;
+            if (lang_try_run(3, disconnect_argv) == 0) {
+                network_applet_invalidate_backend_cache();
+                network_applet_sync_backend(1);
+                network_applet_export_manager_state();
+                *dirty = 1;
+            }
+        }
+        if (point_in_rect(&connect_button, click_x, click_y)) {
+            if (network_applet_connect_selected() == 0) {
+                network_applet_invalidate_backend_cache();
+                network_applet_sync_backend(1);
+                network_applet_export_manager_state();
+                *dirty = 1;
+            }
+        } else if (point_in_rect(&disconnect_button, click_x, click_y)) {
+            char *disconnect_argv[4];
+
+            disconnect_argv[0] = "netmgrd";
+            disconnect_argv[1] = "disconnect";
+            disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
+                                     ? g_network_applet_cache.status.active_if
+                                     : "wlan0";
+            disconnect_argv[3] = 0;
+            if (lang_try_run(3, disconnect_argv) == 0) {
+                network_applet_invalidate_backend_cache();
+                network_applet_sync_backend(1);
+                network_applet_export_manager_state();
+                *dirty = 1;
+            }
+        }
+        return 1;
+    }
+    if (g_sound_applet.popup_open &&
+        point_in_rect(&(struct rect){sound_applet_popup_rect().x,
+                                     sound_applet_popup_rect().y,
+                                     sound_applet_popup_rect().w,
+                                     sound_applet_popup_rect().h},
+                      click_x, click_y)) {
+        struct rect popup = sound_applet_popup_rect();
+        struct rect out_slider = sound_output_slider_rect(&popup);
+        struct rect in_slider = sound_input_slider_rect(&popup);
+        struct rect out_mute = sound_output_mute_rect(&popup);
+        struct rect in_mute = sound_input_mute_rect(&popup);
+
+        for (int i = 0; i < g_sound_applet.output_count; ++i) {
+            struct rect out_row = sound_output_row_rect(&popup, i);
+            if (point_in_rect(&out_row, click_x, click_y)) {
+                g_sound_applet.selected_output = i;
+                sound_applet_write_enum(MK_AUDIO_MIXER_OUTPUT_DEFAULT, i);
+                sound_applet_invalidate_backend_cache();
+                sound_applet_save_settings();
+                sound_applet_export_service_state();
+                *dirty = 1;
+            }
+        }
+        for (int i = 0; i < g_sound_applet.input_count; ++i) {
+            struct rect in_row = sound_input_row_rect(&popup, i);
+            if (point_in_rect(&in_row, click_x, click_y)) {
+                g_sound_applet.selected_input = i;
+                sound_applet_write_enum(MK_AUDIO_MIXER_INPUT_DEFAULT, i);
+                sound_applet_invalidate_backend_cache();
+                sound_applet_save_settings();
+                sound_applet_export_service_state();
+                *dirty = 1;
+            }
+        }
+        if (point_in_rect(&out_slider, click_x, click_y)) {
+            g_sound_applet.output_volume = sound_slider_value_from_x(&out_slider, click_x);
+            g_sound_applet.output_muted = (g_sound_applet.output_volume == 0);
+            sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
+            sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+            sound_applet_invalidate_backend_cache();
+            sound_applet_save_settings();
+            sound_applet_export_service_state();
+            *dirty = 1;
+        } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_slider, click_x, click_y)) {
+            g_sound_applet.input_volume = sound_slider_value_from_x(&in_slider, click_x);
+            g_sound_applet.input_muted = (g_sound_applet.input_volume == 0);
+            sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
+            sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+            sound_applet_invalidate_backend_cache();
+            sound_applet_save_settings();
+            sound_applet_export_service_state();
+            *dirty = 1;
+        } else if (point_in_rect(&out_mute, click_x, click_y)) {
+            g_sound_applet.output_muted = !g_sound_applet.output_muted;
+            sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+            sound_applet_invalidate_backend_cache();
+            sound_applet_save_settings();
+            sound_applet_export_service_state();
+            *dirty = 1;
+        } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_mute, click_x, click_y)) {
+            g_sound_applet.input_muted = !g_sound_applet.input_muted;
+            sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+            sound_applet_invalidate_backend_cache();
+            sound_applet_save_settings();
+            sound_applet_export_service_state();
+            *dirty = 1;
+        }
+        return 1;
+    }
+
+    return 0;
 }
 
 static int desktop_clamp_percent_step(int value, int delta) {
@@ -4552,8 +7462,15 @@ void desktop_main(void) {
 
     while (running) {
         int key;
-        struct input_event queued_events[128];
-        int queued_event_count = 0;
+        struct desktop_input_batch input_batch;
+        struct desktop_ui_event_queue ui_event_queue;
+        struct desktop_key_event_queue key_event_queue;
+        struct desktop_window_action_queue window_action_queue;
+        struct desktop_session_action_queue session_action_queue;
+        struct desktop_app_action_queue app_action_queue;
+        memset(&window_action_queue, 0, sizeof(window_action_queue));
+        memset(&session_action_queue, 0, sizeof(session_action_queue));
+        memset(&app_action_queue, 0, sizeof(app_action_queue));
         fs_tick();
         dirty |= desktop_process_pending_launches(&focused);
         uint32_t ticks = sys_ticks();
@@ -4565,18 +7482,28 @@ void desktop_main(void) {
                                        ticks);
         network_applet_sync_backend(0);
         network_applet_try_autoconnect();
-        int mouse_event = 0;
-        int left_pressed = (mouse.buttons & 0x01u) != 0;
-        int right_pressed = (mouse.buttons & 0x02u) != 0;
-        int left_just_pressed = 0;
-        int right_just_pressed = 0;
         int start_hover;
-        int left_press_x = mouse.x;
-        int left_press_y = mouse.y;
-        int right_press_x = mouse.x;
-        int right_press_y = mouse.y;
-        int wheel_delta = 0;
-        struct input_event input_event;
+        int left_pressed;
+        int mouse_event;
+        int wheel_delta;
+
+        if (desktop_collect_input_batch(&input_batch, &mouse, &focused)) {
+            dirty = 1;
+        }
+        desktop_build_ui_event_queue(&ui_event_queue, &input_batch, &mouse);
+        desktop_build_key_event_queue(&key_event_queue, &input_batch);
+        left_pressed = input_batch.left_pressed;
+        mouse_event = 0;
+        wheel_delta = 0;
+        for (int ui_event_index = 0; ui_event_index < ui_event_queue.count; ++ui_event_index) {
+            struct desktop_ui_event *ui_event = &ui_event_queue.events[ui_event_index];
+
+            if (ui_event->type == DESKTOP_UI_EVENT_POINTER_MOVE) {
+                mouse_event = 1;
+            } else if (ui_event->type == DESKTOP_UI_EVENT_WHEEL) {
+                wheel_delta += ui_event->value;
+            }
+        }
 
         start_button = ui_taskbar_start_button_rect();
         menu_rect = ui_start_menu_rect();
@@ -4597,40 +7524,6 @@ void desktop_main(void) {
 
         for (int i = 0; i < START_MENU_ENTRY_COUNT; ++i) {
             menu_hover[i] = 0;
-        }
-
-        while (queued_event_count < (int)(sizeof(queued_events) / sizeof(queued_events[0])) &&
-               sys_next_input_event(&input_event)) {
-            queued_events[queued_event_count++] = input_event;
-        }
-
-        for (int event_index = 0; event_index < queued_event_count; ++event_index) {
-            int new_left;
-            int new_right;
-            struct input_event *queued = &queued_events[event_index];
-
-            if (queued->type != INPUT_EVENT_MOUSE) {
-                continue;
-            }
-
-            mouse = queued->mouse;
-            clamp_mouse_state(&mouse);
-            mouse_event = 1;
-            wheel_delta += queued->mouse.wheel;
-            new_left = (mouse.buttons & 0x01u) != 0;
-            new_right = (mouse.buttons & 0x02u) != 0;
-            if (new_left && !left_pressed) {
-                left_just_pressed = 1;
-                left_press_x = mouse.x;
-                left_press_y = mouse.y;
-            }
-            if (new_right && !right_pressed) {
-                right_just_pressed = 1;
-                right_press_x = mouse.x;
-                right_press_y = mouse.y;
-            }
-            left_pressed = new_left;
-            right_pressed = new_right;
         }
 
         start_hover = point_in_rect(&start_button, mouse.x, mouse.y);
@@ -4851,32 +7744,52 @@ void desktop_main(void) {
             }
         }
 
-        if (dragging >= 0 && left_pressed && mouse_event && !g_windows[dragging].maximized) {
-            g_windows[dragging].rect.x = mouse.x - drag_offset_x;
-            g_windows[dragging].rect.y = mouse.y - drag_offset_y;
-            clamp_window_rect(&g_windows[dragging].rect);
-            sync_window_instance_rect(dragging);
-            dirty = 1;
-        }
+        for (int ui_event_index = 0; ui_event_index < ui_event_queue.count; ++ui_event_index) {
+            struct desktop_ui_event *ui_event = &ui_event_queue.events[ui_event_index];
 
-        if (resizing >= 0 && left_pressed && mouse_event && !g_windows[resizing].maximized) {
-            g_windows[resizing].rect = resize_origin;
-            g_windows[resizing].rect.w += mouse.x - resize_anchor_x;
-            g_windows[resizing].rect.h += mouse.y - resize_anchor_y;
-            clamp_window_rect(&g_windows[resizing].rect);
-            sync_window_instance_rect(resizing);
-            dirty = 1;
-        }
+            if (ui_event->type != DESKTOP_UI_EVENT_POINTER_MOVE) {
+                continue;
+            }
 
-        if (menu_open && menu_scroll_dragging && left_pressed && mouse_event) {
-            int *scroll_ptr = start_menu_search_active(start_menu_search) ?
-                              &start_menu_search_scroll :
-                              &start_menu_scroll[(int)start_menu_tab];
+            if (dragging >= 0 && left_pressed && !g_windows[dragging].maximized) {
+                g_windows[dragging].rect.x = mouse.x - drag_offset_x;
+                g_windows[dragging].rect.y = mouse.y - drag_offset_y;
+                clamp_window_rect(&g_windows[dragging].rect);
+                sync_window_instance_rect(dragging);
+                dirty = 1;
+            }
 
-            *scroll_ptr = start_menu_scroll_from_thumb_y(filtered_count,
-                                                         mouse.y - menu_scroll_drag_offset_y);
-            start_menu_clamp_scroll(scroll_ptr, filtered_count);
-            dirty = 1;
+            if (resizing >= 0 && left_pressed && !g_windows[resizing].maximized) {
+                g_windows[resizing].rect = resize_origin;
+                g_windows[resizing].rect.w += mouse.x - resize_anchor_x;
+                g_windows[resizing].rect.h += mouse.y - resize_anchor_y;
+                clamp_window_rect(&g_windows[resizing].rect);
+                sync_window_instance_rect(resizing);
+                dirty = 1;
+            }
+
+            if (menu_open && menu_scroll_dragging && left_pressed) {
+                int *scroll_ptr = start_menu_search_active(start_menu_search) ?
+                                  &start_menu_search_scroll :
+                                  &start_menu_scroll[(int)start_menu_tab];
+
+                *scroll_ptr = start_menu_scroll_from_thumb_y(filtered_count,
+                                                             mouse.y - menu_scroll_drag_offset_y);
+                start_menu_clamp_scroll(scroll_ptr, filtered_count);
+                dirty = 1;
+            }
+
+            if (focused >= 0 &&
+                g_windows[focused].active &&
+                !g_windows[focused].minimized &&
+                g_windows[focused].type == APP_SKETCHPAD &&
+                left_pressed &&
+                dragging < 0 &&
+                resizing < 0) {
+                if (sketchpad_paint_at(&g_sketches[g_windows[focused].instance], mouse.x, mouse.y)) {
+                    dirty = 1;
+                }
+            }
         }
 
         if (!left_pressed) {
@@ -4885,1015 +7798,161 @@ void desktop_main(void) {
             menu_scroll_dragging = 0;
         }
 
-        if (focused >= 0 &&
-            g_windows[focused].active &&
-            !g_windows[focused].minimized &&
-            g_windows[focused].type == APP_SKETCHPAD &&
-            left_pressed &&
-            mouse_event &&
-            dragging < 0 &&
-            resizing < 0) {
-            if (sketchpad_paint_at(&g_sketches[g_windows[focused].instance], mouse.x, mouse.y)) {
-                dirty = 1;
+        for (int ui_event_index = 0; ui_event_index < ui_event_queue.count; ++ui_event_index) {
+            struct desktop_ui_event *ui_event = &ui_event_queue.events[ui_event_index];
+
+            if (ui_event->type != DESKTOP_UI_EVENT_RIGHT_CLICK) {
+                continue;
             }
+            desktop_dispatch_right_click(&session_action_queue,
+                                         &file_dialog,
+                                         ui_event->x,
+                                         ui_event->y,
+                                         &focused,
+                                         context_open,
+                                         fm_context_open,
+                                         app_context.open,
+                                         &dirty);
         }
 
-        if (right_just_pressed) {
-            int click_x = right_press_x;
-            int click_y = right_press_y;
-            int hit_window = topmost_window_at(click_x, click_y);
+        dirty |= desktop_flush_session_actions(&session_action_queue,
+                                               &focused,
+                                               &context_open,
+                                               &context_menu,
+                                               &fm_context_open,
+                                               &fm_context_menu,
+                                               &fm_context_window,
+                                               &fm_context_target,
+                                               &g_fm_context_has_wallpaper_action,
+                                               &app_context,
+                                               &menu_open,
+                                               &menu_scroll_dragging,
+                                               start_menu_search,
+                                               (int)sizeof(start_menu_search),
+                                               &start_menu_search_len,
+                                               &start_menu_search_scroll);
 
-            if (file_dialog.active) {
-                app_context.open = 0;
-                context_open = 0;
-                fm_context_open = 0;
-                dirty = 1;
-            } else if (hit_window >= 0 && g_windows[hit_window].type == APP_FILEMANAGER) {
-                struct filemanager_state *fm = &g_fms[g_windows[hit_window].instance];
-                struct rect list = filemanager_list_rect(fm);
+        for (int ui_event_index = 0; ui_event_index < ui_event_queue.count; ++ui_event_index) {
+            struct desktop_ui_event *ui_event = &ui_event_queue.events[ui_event_index];
 
-                if (point_in_rect(&list, click_x, click_y)) {
-                    int new_index = raise_window_to_front(hit_window, &focused);
-                    int target;
-
-                    focused = new_index;
-                    hit_window = new_index;
-                    fm = &g_fms[g_windows[hit_window].instance];
-                    target = filemanager_hit_test_entry(fm, click_x, click_y);
-                    g_fm_context_has_wallpaper_action = (target >= 0) && node_is_wallpaper_candidate(target);
-                    fm_context_menu = filemanager_context_menu_rect(click_x, click_y);
-                    fm_context_open = 1;
-                    fm_context_window = hit_window;
-                    fm_context_target = target;
-                    if (target >= 0) {
-                        fm->selected_node = target;
-                    } else if (target == FILEMANAGER_HIT_NONE) {
-                        fm->selected_node = -1;
-                    }
-                    context_open = 0;
-                    menu_open = 0;
-                    app_context.open = 0;
-                    dirty = 1;
-                } else if (fm_context_open || context_open) {
-                    fm_context_open = 0;
-                    g_fm_context_has_wallpaper_action = 0;
-                    context_open = 0;
-                    app_context.open = 0;
-                    dirty = 1;
-                }
-            } else if (hit_window >= 0 &&
-                       (g_windows[hit_window].type == APP_EDITOR || g_windows[hit_window].type == APP_SKETCHPAD)) {
-                int new_index = raise_window_to_front(hit_window, &focused);
-
-                focused = new_index;
-                app_context.open = 1;
-                app_context.window = new_index;
-                app_context.type = g_windows[new_index].type;
-                app_context.menu = app_context_menu_rect(click_x, click_y);
-                context_open = 0;
-                fm_context_open = 0;
-                menu_open = 0;
-                dirty = 1;
-            } else if (hit_window < 0 &&
-                       click_y < (int)SCREEN_HEIGHT - TASKBAR_HEIGHT) {
-                context_menu = desktop_context_menu_rect(click_x, click_y);
-                context_open = 1;
-                fm_context_open = 0;
-                app_context.open = 0;
-                menu_open = 0;
-                dirty = 1;
-            } else if (context_open || fm_context_open || app_context.open) {
-                context_open = 0;
-                fm_context_open = 0;
-                app_context.open = 0;
-                g_fm_context_has_wallpaper_action = 0;
-                dirty = 1;
+            if (ui_event->type != DESKTOP_UI_EVENT_LEFT_CLICK) {
+                continue;
             }
-        }
-
-        if (left_just_pressed) {
-            int click_x = left_press_x;
-            int click_y = left_press_y;
+            {
+            int click_x = ui_event->x;
+            int click_y = ui_event->y;
             int start_click_hover = point_in_rect(&start_button, click_x, click_y);
-            int hit_window = -1;
             int handled = 0;
 
-            if (file_dialog.active) {
-                struct rect close = file_dialog_close_rect(&file_dialog);
-                struct rect name_field = file_dialog_name_rect(&file_dialog);
-                struct rect ext_field = file_dialog_ext_rect(&file_dialog);
-                struct rect path_field = file_dialog_path_rect(&file_dialog);
-                struct rect ok = file_dialog_ok_rect(&file_dialog);
-                struct rect cancel = file_dialog_cancel_rect(&file_dialog);
-
+            if (desktop_dispatch_file_dialog_click(&file_dialog, click_x, click_y)) {
                 handled = 1;
-                if (point_in_rect(&close, click_x, click_y) ||
-                    point_in_rect(&cancel, click_x, click_y)) {
-                    file_dialog_reset(&file_dialog);
-                    dirty = 1;
-                } else if (point_in_rect(&ok, click_x, click_y)) {
-                    if (file_dialog_apply(&file_dialog)) {
-                        file_dialog_reset(&file_dialog);
-                    }
-                    dirty = 1;
-                } else if (file_dialog.mode == FILE_DIALOG_WALLPAPER_PATH &&
-                           point_in_rect(&path_field, click_x, click_y)) {
-                    file_dialog.active_field = 0;
-                    dirty = 1;
-                } else if (point_in_rect(&name_field, click_x, click_y)) {
-                    file_dialog.active_field = 0;
-                    dirty = 1;
-                } else if (file_dialog.mode != FILE_DIALOG_WALLPAPER_PATH &&
-                           point_in_rect(&ext_field, click_x, click_y)) {
-                    file_dialog.active_field = 1;
-                    dirty = 1;
-                }
-            }
-
-            if (!handled && app_context.open && point_in_rect(&app_context.menu, click_x, click_y)) {
-                handled = 1;
-                if (point_in_rect(&app_primary_rect, click_x, click_y)) {
-                    if (app_context.type == APP_EDITOR) {
-                        struct editor_state *ed = &g_editors[g_windows[app_context.window].instance];
-                        if (ed->file_node >= 0 && g_fs_nodes[ed->file_node].used) {
-                            if (editor_save(ed)) {
-                                dirty = 1;
-                            }
-                        } else {
-                            file_dialog_open_editor(&file_dialog, app_context.window);
-                            dirty = 1;
-                        }
-                    } else if (app_context.type == APP_SKETCHPAD) {
-                        struct sketchpad_state *sketch = &g_sketches[g_windows[app_context.window].instance];
-                        if (sketch->last_export_path[0] != '\0') {
-                            char name[FS_NAME_MAX + 1];
-                            char ext[FS_NAME_MAX + 1];
-                            char filename[FS_NAME_MAX + 1];
-
-                            extract_basename_parts(sketch->last_export_path,
-                                                   name, (int)sizeof(name),
-                                                   ext, (int)sizeof(ext));
-                            filename[0] = '\0';
-                            str_copy_limited(filename, name, (int)sizeof(filename));
-                            if (ext[0] != '\0') {
-                                str_append(filename, ".", (int)sizeof(filename));
-                                str_append(filename, ext, (int)sizeof(filename));
-                            }
-                            if (sketchpad_export_bitmap_named(sketch, filename)) {
-                                dirty = 1;
-                            }
-                        } else {
-                            file_dialog_open_sketch(&file_dialog, app_context.window);
-                            dirty = 1;
-                        }
-                    }
-                    app_context.open = 0;
-                } else if (point_in_rect(&app_save_as_rect, click_x, click_y)) {
-                    if (app_context.type == APP_EDITOR) {
-                        file_dialog_open_editor(&file_dialog, app_context.window);
-                    } else if (app_context.type == APP_SKETCHPAD) {
-                        file_dialog_open_sketch(&file_dialog, app_context.window);
-                    }
-                    app_context.open = 0;
-                    dirty = 1;
-                }
-            } else if (!handled && app_context.open && !point_in_rect(&app_context.menu, click_x, click_y)) {
-                app_context.open = 0;
                 dirty = 1;
             }
 
-            if (!handled && fm_context_open && fm_context_window >= 0 &&
-                g_windows[fm_context_window].active &&
-                g_windows[fm_context_window].type == APP_FILEMANAGER) {
-                struct filemanager_state *fm = &g_fms[g_windows[fm_context_window].instance];
-                struct rect fm_open_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_OPEN);
-                struct rect fm_copy_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_COPY);
-                struct rect fm_paste_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_PASTE);
-                struct rect fm_new_dir_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_NEW_DIR);
-                struct rect fm_new_file_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_NEW_FILE);
-                struct rect fm_rename_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_RENAME);
-                struct rect fm_trash_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_MOVE_TO_TRASH);
-                struct rect fm_set_wallpaper_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_SET_WALLPAPER);
-                int fm_open_hover = point_in_rect(&fm_open_rect, click_x, click_y);
-                int fm_copy_hover = point_in_rect(&fm_copy_rect, click_x, click_y);
-                int fm_paste_hover = point_in_rect(&fm_paste_rect, click_x, click_y);
-                int fm_new_dir_hover = point_in_rect(&fm_new_dir_rect, click_x, click_y);
-                int fm_new_file_hover = point_in_rect(&fm_new_file_rect, click_x, click_y);
-                int fm_rename_hover = point_in_rect(&fm_rename_rect, click_x, click_y);
-                int fm_trash_hover = point_in_rect(&fm_trash_rect, click_x, click_y);
-                int fm_set_wallpaper_hover = g_fm_context_has_wallpaper_action &&
-                                             point_in_rect(&fm_set_wallpaper_rect, click_x, click_y);
-                int target = fm_context_target;
-
-                if (fm_open_hover || fm_copy_hover || fm_paste_hover || fm_new_dir_hover || fm_new_file_hover ||
-                    fm_rename_hover || fm_trash_hover ||
-                    fm_set_wallpaper_hover) {
-                    if (target == FILEMANAGER_HIT_NONE) {
-                        target = fm->selected_node;
-                    }
-
-                    if (fm_open_hover && target != FILEMANAGER_HIT_NONE) {
-                        if (target >= 0 && !g_fs_nodes[target].is_dir) {
-                            if (image_node_is_supported(target)) {
-                                if (open_imageviewer_window_for_node(target, &focused) >= 0) {
-                                    dirty = 1;
-                                }
-                            } else if (audioplayer_node_is_supported(target)) {
-                                if (open_audioplayer_window_for_node(target, &focused) >= 0) {
-                                    dirty = 1;
-                                }
-                            } else if (open_editor_window_for_node(target, &focused) >= 0) {
-                                dirty = 1;
-                            }
-                        } else if (filemanager_open_node(fm, target)) {
-                            dirty = 1;
-                        } else if (target >= 0) {
-                            fm->selected_node = target;
-                            dirty = 1;
-                        }
-                    } else if (fm_copy_hover && target >= 0) {
-                        g_clipboard_node = target;
-                        dirty = 1;
-                    } else if (fm_paste_hover && g_clipboard_node >= 0) {
-                        if (clone_node_to_directory(g_clipboard_node, fm->cwd) >= 0) {
-                            dirty = 1;
-                        }
-                    } else if (fm_new_dir_hover) {
-                        int created = create_node_in_directory(fm->cwd, 1, "pasta");
-                        if (created >= 0) {
-                            fm->selected_node = created;
-                            dirty = 1;
-                        }
-                    } else if (fm_new_file_hover) {
-                        int created = create_node_in_directory(fm->cwd, 0, "arquivo");
-                        if (created >= 0) {
-                            fm->selected_node = created;
-                            dirty = 1;
-                        }
-                    } else if (fm_rename_hover && target >= 0) {
-                        file_dialog_open_rename(&file_dialog, fm_context_window, target);
-                        dirty = 1;
-                    } else if (fm_trash_hover && target >= 0) {
-                        if (trash_move_node_to_bin(target) == 0) {
-                            fm->selected_node = -1;
-                            dirty = 1;
-                        }
-                    } else if (fm_set_wallpaper_hover && target >= 0) {
-                        if (ui_wallpaper_set_from_node(target) == 0) {
-                            dirty = 1;
-                        }
-                    }
-
-                    fm_context_open = 0;
-                    fm_context_window = -1;
-                    fm_context_target = FILEMANAGER_HIT_NONE;
-                    g_fm_context_has_wallpaper_action = 0;
-                    dirty = 1;
-                    handled = 1;
-                } else if (!point_in_rect(&fm_context_menu, click_x, click_y)) {
-                    fm_context_open = 0;
-                    fm_context_window = -1;
-                    fm_context_target = FILEMANAGER_HIT_NONE;
-                    g_fm_context_has_wallpaper_action = 0;
-                    dirty = 1;
-                }
+            if (!handled &&
+                desktop_dispatch_contextual_click(&session_action_queue,
+                                                 &app_action_queue,
+                                                 &file_dialog,
+                                                 click_x,
+                                                 click_y,
+                                                 start_click_hover,
+                                                 context_open,
+                                                 &context_menu,
+                                                 fm_context_open,
+                                                 &fm_context_menu,
+                                                 fm_context_window,
+                                                 fm_context_target,
+                                                 g_fm_context_has_wallpaper_action,
+                                                 &app_context)) {
+                dirty = 1;
+                handled = 1;
             }
 
-            if (handled) {
-            } else if (context_open && point_in_rect(&context_menu, click_x, click_y)) {
-                if (open_window_or_focus_existing(APP_PERSONALIZE, &focused) >= 0) {
+            if (!handled) {
+                if (desktop_dispatch_applet_click(&session_action_queue,
+                                                  click_x,
+                                                  click_y,
+                                                  &dirty)) {
+                    handled = 1;
+                } else if (desktop_dispatch_desktop_shortcut_click(&session_action_queue,
+                                                                   click_x,
+                                                                   click_y)) {
                     dirty = 1;
-                }
-                context_open = 0;
-                fm_context_open = 0;
-                app_context.open = 0;
-                handled = 1;
-            } else if (start_click_hover) {
-                menu_open = !menu_open;
-                if (menu_open) {
-                    start_menu_search[0] = '\0';
-                    start_menu_search_len = 0;
-                    start_menu_search_scroll = 0;
-                } else {
-                    menu_scroll_dragging = 0;
-                }
-                context_open = 0;
-                fm_context_open = 0;
-                app_context.open = 0;
-                dirty = 1;
-            } else {
-                struct rect files_icon = ui_desktop_files_icon_rect();
-                struct rect craft_icon = ui_desktop_craft_icon_rect();
-                struct rect trash_icon = ui_desktop_trash_icon_rect();
-                struct rect network_button = ui_taskbar_network_applet_rect();
-                struct rect sound_button = ui_taskbar_sound_applet_rect();
-
-                if (point_in_rect(&network_button, click_x, click_y)) {
-                    g_network_applet.popup_open = !g_network_applet.popup_open;
-                    if (g_network_applet.popup_open) {
-                        g_sound_applet.popup_open = 0;
-                        network_applet_sync_backend(1);
-                    }
-                    g_network_applet.password_focus = 0;
-                    menu_open = 0;
-                    context_open = 0;
-                    fm_context_open = 0;
-                    app_context.open = 0;
-                    dirty = 1;
-                    handled = 1;
-                } else if (point_in_rect(&sound_button, click_x, click_y)) {
-                    g_sound_applet.popup_open = !g_sound_applet.popup_open;
-                    if (g_sound_applet.popup_open) {
-                        g_network_applet.popup_open = 0;
-                    }
-                    menu_open = 0;
-                    context_open = 0;
-                    fm_context_open = 0;
-                    app_context.open = 0;
-                    dirty = 1;
-                    handled = 1;
-                } else if (g_network_applet.popup_open &&
-                           point_in_rect(&(struct rect){network_applet_popup_rect().x,
-                                                        network_applet_popup_rect().y,
-                                                        network_applet_popup_rect().w,
-                                                        network_applet_popup_rect().h},
-                                         click_x, click_y)) {
-                    struct rect popup = network_applet_popup_rect();
-                    struct rect auto_button = network_auto_rect(&popup);
-                    struct rect forget_button = network_forget_rect(&popup);
-                    struct rect ethernet_connect_button = network_ethernet_connect_rect(&popup);
-                    struct rect ethernet_disconnect_button = network_ethernet_disconnect_rect(&popup);
-                    struct rect password = network_password_rect(&popup);
-                    struct rect connect_button = network_connect_rect(&popup);
-                    struct rect disconnect_button = network_disconnect_rect(&popup);
-                    struct network_profile *selected_profile;
-
-                    g_network_applet.password_focus = point_in_rect(&password, click_x, click_y);
-                    for (int i = 0; i < g_network_applet_cache.scan_count && i < 3; ++i) {
-                        struct rect row = network_row_rect(&popup, i);
-                        if (point_in_rect(&row, click_x, click_y)) {
-                            g_network_applet.selected_network = i;
-                            if (g_network_applet_cache.scans[i].security == MK_NETWORK_SECURITY_OPEN) {
-                                g_network_applet.password_len = 0;
-                                g_network_applet.password[0] = '\0';
-                            } else {
-                                network_applet_apply_saved_password_for_selected();
-                            }
-                            if (g_network_applet_cache.scans[i].ssid[0] != '\0') {
-                                str_copy_limited(g_network_applet.selected_saved_ssid,
-                                                 g_network_applet_cache.scans[i].ssid,
-                                                 (int)sizeof(g_network_applet.selected_saved_ssid));
-                            }
-                            dirty = 1;
-                        }
-                    }
-                    for (int i = 0; i < network_profile_count() && i < 2; ++i) {
-                        struct network_profile *profile = network_profile_at_visible_index(i);
-                        struct rect row = network_saved_row_rect(&popup, i);
-
-                        if (profile == 0 || !point_in_rect(&row, click_x, click_y)) {
-                            continue;
-                        }
-                        str_copy_limited(g_network_applet.selected_saved_ssid,
-                                         profile->ssid,
-                                         (int)sizeof(g_network_applet.selected_saved_ssid));
-                        for (int j = 0; j < g_network_applet_cache.scan_count; ++j) {
-                            if (str_eq(g_network_applet_cache.scans[j].ssid, profile->ssid)) {
-                                g_network_applet.selected_network = j;
-                                network_applet_apply_saved_password_for_selected();
-                                dirty = 1;
-                                break;
-                            }
-                        }
-                        dirty = 1;
-                    }
-                    selected_profile = network_applet_selected_profile();
-                    if (point_in_rect(&auto_button, click_x, click_y) && selected_profile != 0) {
-                        network_applet_set_autoconnect(selected_profile->ssid);
-                        network_applet_export_manager_state();
-                        dirty = 1;
-                    } else if (point_in_rect(&forget_button, click_x, click_y) && selected_profile != 0) {
-                        network_applet_forget_profile(selected_profile->ssid);
-                        network_applet_export_manager_state();
-                        dirty = 1;
-                    } else if (point_in_rect(&ethernet_connect_button, click_x, click_y)) {
-                        if (network_applet_connect_ethernet() == 0) {
-                            network_applet_invalidate_backend_cache();
-                            network_applet_sync_backend(1);
-                            network_applet_export_manager_state();
-                            dirty = 1;
-                        }
-                    } else if (point_in_rect(&ethernet_disconnect_button, click_x, click_y)) {
-                        char *disconnect_argv[4];
-
-                        disconnect_argv[0] = "netmgrd";
-                        disconnect_argv[1] = "disconnect";
-                        disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
-                                                 ? g_network_applet_cache.status.active_if
-                                                 : "ethernet";
-                        disconnect_argv[3] = 0;
-                        if (lang_try_run(3, disconnect_argv) == 0) {
-                            network_applet_invalidate_backend_cache();
-                            network_applet_sync_backend(1);
-                            network_applet_export_manager_state();
-                            dirty = 1;
-                        }
-                    }
-                    if (point_in_rect(&connect_button, click_x, click_y)) {
-                        if (network_applet_connect_selected() == 0) {
-                            network_applet_invalidate_backend_cache();
-                            network_applet_sync_backend(1);
-                            network_applet_export_manager_state();
-                            dirty = 1;
-                        }
-                    } else if (point_in_rect(&disconnect_button, click_x, click_y)) {
-                        char *disconnect_argv[4];
-
-                        disconnect_argv[0] = "netmgrd";
-                        disconnect_argv[1] = "disconnect";
-                        disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
-                                                 ? g_network_applet_cache.status.active_if
-                                                 : "wlan0";
-                        disconnect_argv[3] = 0;
-                        if (lang_try_run(3, disconnect_argv) == 0) {
-                            network_applet_invalidate_backend_cache();
-                            network_applet_sync_backend(1);
-                            network_applet_export_manager_state();
-                            dirty = 1;
-                        }
-                    }
-                    handled = 1;
-                } else if (g_sound_applet.popup_open &&
-                           point_in_rect(&(struct rect){sound_applet_popup_rect().x,
-                                                        sound_applet_popup_rect().y,
-                                                        sound_applet_popup_rect().w,
-                                                        sound_applet_popup_rect().h},
-                                         click_x, click_y)) {
-                    struct rect popup = sound_applet_popup_rect();
-                    struct rect out_slider = sound_output_slider_rect(&popup);
-                    struct rect in_slider = sound_input_slider_rect(&popup);
-                    struct rect out_mute = sound_output_mute_rect(&popup);
-                    struct rect in_mute = sound_input_mute_rect(&popup);
-
-                    for (int i = 0; i < g_sound_applet.output_count; ++i) {
-                        struct rect out_row = sound_output_row_rect(&popup, i);
-
-                        if (point_in_rect(&out_row, click_x, click_y)) {
-                            g_sound_applet.selected_output = i;
-                            sound_applet_write_enum(MK_AUDIO_MIXER_OUTPUT_DEFAULT, i);
-                            sound_applet_invalidate_backend_cache();
-                            sound_applet_save_settings();
-                            sound_applet_export_service_state();
-                            dirty = 1;
-                        }
-                    }
-                    for (int i = 0; i < g_sound_applet.input_count; ++i) {
-                        struct rect in_row = sound_input_row_rect(&popup, i);
-
-                        if (point_in_rect(&in_row, click_x, click_y)) {
-                            g_sound_applet.selected_input = i;
-                            sound_applet_write_enum(MK_AUDIO_MIXER_INPUT_DEFAULT, i);
-                            sound_applet_invalidate_backend_cache();
-                            sound_applet_save_settings();
-                            sound_applet_export_service_state();
-                            dirty = 1;
-                        }
-                    }
-                    if (point_in_rect(&out_slider, click_x, click_y)) {
-                        g_sound_applet.output_volume = sound_slider_value_from_x(&out_slider, click_x);
-                        g_sound_applet.output_muted = (g_sound_applet.output_volume == 0);
-                        sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
-                        sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
-                        sound_applet_invalidate_backend_cache();
-                        sound_applet_save_settings();
-                        sound_applet_export_service_state();
-                        dirty = 1;
-                    } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_slider, click_x, click_y)) {
-                        g_sound_applet.input_volume = sound_slider_value_from_x(&in_slider, click_x);
-                        g_sound_applet.input_muted = (g_sound_applet.input_volume == 0);
-                        sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
-                        sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
-                        sound_applet_invalidate_backend_cache();
-                        sound_applet_save_settings();
-                        sound_applet_export_service_state();
-                        dirty = 1;
-                    } else if (point_in_rect(&out_mute, click_x, click_y)) {
-                        g_sound_applet.output_muted = !g_sound_applet.output_muted;
-                        sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
-                        sound_applet_invalidate_backend_cache();
-                        sound_applet_save_settings();
-                        sound_applet_export_service_state();
-                        dirty = 1;
-                    } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_mute, click_x, click_y)) {
-                        g_sound_applet.input_muted = !g_sound_applet.input_muted;
-                        sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
-                        sound_applet_invalidate_backend_cache();
-                        sound_applet_save_settings();
-                        sound_applet_export_service_state();
-                        dirty = 1;
-                    }
-                    handled = 1;
-                } else if (point_in_rect(&files_icon, click_x, click_y)) {
-                    if (open_window_or_focus_existing(APP_FILEMANAGER, &focused) >= 0) {
-                        dirty = 1;
-                    }
-                    menu_open = 0;
-                    context_open = 0;
-                    fm_context_open = 0;
-                    app_context.open = 0;
-                    handled = 1;
-                } else if (point_in_rect(&craft_icon, click_x, click_y)) {
-                    if (open_window_or_focus_existing(APP_CRAFT, &focused) >= 0) {
-                        dirty = 1;
-                    }
-                    menu_open = 0;
-                    context_open = 0;
-                    fm_context_open = 0;
-                    app_context.open = 0;
-                    handled = 1;
-                } else if (point_in_rect(&trash_icon, click_x, click_y)) {
-                    if (open_window_or_focus_existing(APP_TRASH, &focused) >= 0) {
-                        dirty = 1;
-                    }
-                    menu_open = 0;
-                    context_open = 0;
-                    fm_context_open = 0;
-                    app_context.open = 0;
                     handled = 1;
                 }
 
                 if (!handled && menu_open) {
-                    enum app_type launch_type = APP_NONE;
-                    struct rect apps_tab = start_menu_tab_rect(START_MENU_TAB_APPS);
-                    struct rect games_tab = start_menu_tab_rect(START_MENU_TAB_GAMES);
-                    struct rect search_box = start_menu_search_rect();
-                    struct rect search_clear = start_menu_search_clear_rect();
-                    struct rect sidebar_files = start_menu_sidebar_button_rect(0);
-                    struct rect sidebar_terminal = start_menu_sidebar_button_rect(1);
-                    struct rect sidebar_personalize = start_menu_sidebar_button_rect(2);
-                    struct rect logout = start_menu_logout_rect();
-                    struct rect track = start_menu_scroll_track_rect();
-                    struct rect thumb = start_menu_scroll_thumb_rect(filtered_count,
-                                                                    start_menu_search_active(start_menu_search) ?
-                                                                    start_menu_search_scroll :
-                                                                    start_menu_scroll[(int)start_menu_tab]);
-                    int *scroll_ptr = start_menu_search_active(start_menu_search) ?
-                                      &start_menu_search_scroll :
-                                      &start_menu_scroll[(int)start_menu_tab];
-                    int menu_contains_click = point_in_rect(&menu_rect, click_x, click_y);
-                    const struct start_menu_entry *launch_entry = 0;
-
-                    if (menu_contains_click) {
-                        if (point_in_rect(&apps_tab, click_x, click_y)) {
-                            start_menu_tab = START_MENU_TAB_APPS;
-                            start_menu_clamp_scroll(&start_menu_scroll[(int)start_menu_tab], filtered_count);
-                            dirty = 1;
-                        } else if (point_in_rect(&games_tab, click_x, click_y)) {
-                            start_menu_tab = START_MENU_TAB_GAMES;
-                            start_menu_clamp_scroll(&start_menu_scroll[(int)start_menu_tab], filtered_count);
-                            dirty = 1;
-                        } else if (point_in_rect(&search_clear, click_x, click_y) && start_menu_search[0] != '\0') {
-                            start_menu_search[0] = '\0';
-                            start_menu_search_len = 0;
-                            start_menu_search_scroll = 0;
-                            dirty = 1;
-                        } else if (point_in_rect(&search_box, click_x, click_y)) {
-                            dirty = 1;
-                        } else if (point_in_rect(&sidebar_files, click_x, click_y)) {
-                            launch_type = APP_FILEMANAGER;
-                        } else if (point_in_rect(&sidebar_terminal, click_x, click_y)) {
-                            launch_type = APP_TERMINAL;
-                        } else if (point_in_rect(&sidebar_personalize, click_x, click_y)) {
-                            launch_type = APP_PERSONALIZE;
-                        } else if (point_in_rect(&logout, click_x, click_y)) {
-                            running = 0;
-                        } else if (filtered_count > start_menu_visible_count() &&
-                                   point_in_rect(&thumb, click_x, click_y)) {
-                            menu_scroll_dragging = 1;
-                            menu_scroll_drag_offset_y = click_y - thumb.y;
-                            dirty = 1;
-                        } else if (filtered_count > start_menu_visible_count() &&
-                                   point_in_rect(&track, click_x, click_y)) {
-                            int thumb_target_y = click_y - (thumb.h / 2);
-                            *scroll_ptr = start_menu_scroll_from_thumb_y(filtered_count, thumb_target_y);
-                            start_menu_clamp_scroll(scroll_ptr, filtered_count);
-                            dirty = 1;
-                        } else {
-                            int clicked_result = start_menu_result_at_point(filtered_count,
-                                                                            *scroll_ptr,
-                                                                            click_x,
-                                                                            click_y);
-
-                            if (clicked_result >= 0 && clicked_result < filtered_count) {
-                                launch_entry = &g_start_menu_entries[filtered_indices[clicked_result]];
-                            }
-                        }
-                        if (launch_entry != 0) {
-                            if (launch_start_menu_entry(launch_entry, &focused) >= 0) {
-                                dirty = 1;
-                            }
-                            menu_open = 0;
-                            menu_scroll_dragging = 0;
-                            context_open = 0;
-                            fm_context_open = 0;
-                            app_context.open = 0;
-                        } else if (launch_type != APP_NONE) {
-                            if (open_window_or_focus_existing(launch_type, &focused) >= 0) {
-                                dirty = 1;
-                            }
-                            menu_open = 0;
-                            menu_scroll_dragging = 0;
-                            context_open = 0;
-                            fm_context_open = 0;
-                            app_context.open = 0;
-                        }
-                        handled = 1;
-                    } else {
-                        menu_open = 0;
-                        menu_scroll_dragging = 0;
+                    handled = desktop_dispatch_start_menu_click(&session_action_queue,
+                                                                click_x,
+                                                                click_y,
+                                                                filtered_count,
+                                                                filtered_indices,
+                                                                &start_menu_tab,
+                                                                start_menu_scroll,
+                                                                &start_menu_search_scroll,
+                                                                start_menu_search,
+                                                                &start_menu_search_len,
+                                                                &menu_scroll_dragging,
+                                                                &menu_scroll_drag_offset_y,
+                                                                &running);
+                    if (handled) {
                         dirty = 1;
                     }
-
                 }
 
                 if (!handled) {
-                struct rect network_popup = network_applet_popup_rect();
-                struct rect sound_popup = sound_applet_popup_rect();
-                struct rect network_button = ui_taskbar_network_applet_rect();
-                struct rect sound_button = ui_taskbar_sound_applet_rect();
-
-                if (g_network_applet.popup_open &&
-                    !point_in_rect(&network_popup, click_x, click_y) &&
-                    !point_in_rect(&network_button, click_x, click_y)) {
-                    g_network_applet.popup_open = 0;
-                    g_network_applet.password_focus = 0;
-                    dirty = 1;
-                }
-                if (g_sound_applet.popup_open &&
-                    !point_in_rect(&sound_popup, click_x, click_y) &&
-                    !point_in_rect(&sound_button, click_x, click_y)) {
-                    g_sound_applet.popup_open = 0;
-                    dirty = 1;
-                }
-                if (context_open && !point_in_rect(&context_menu, click_x, click_y)) {
-                    context_open = 0;
-                    dirty = 1;
-                }
-                if (fm_context_open && !point_in_rect(&fm_context_menu, click_x, click_y)) {
-                    fm_context_open = 0;
-                    fm_context_window = -1;
-                    fm_context_target = FILEMANAGER_HIT_NONE;
-                    g_fm_context_has_wallpaper_action = 0;
-                    dirty = 1;
-                }
-                if (app_context.open && !point_in_rect(&app_context.menu, click_x, click_y)) {
-                    app_context.open = 0;
-                    dirty = 1;
-                }
-                for (int i = 0; i < MAX_WINDOWS; ++i) {
-                    struct rect task_button;
-                    if (!g_windows[i].active) {
-                        continue;
-                    }
-                    task_button = taskbar_button_rect_for_window(i);
-                    if (point_in_rect(&task_button, click_x, click_y)) {
-                        restore_or_toggle_window(i, &focused);
-                        menu_open = 0;
-                        context_open = 0;
-                        fm_context_open = 0;
-                        g_fm_context_has_wallpaper_action = 0;
-                        dirty = 1;
-                        hit_window = -2;
-                        break;
-                    }
-                }
-
-                if (hit_window != -2) {
-                    hit_window = topmost_window_at(click_x, click_y);
-                    if (menu_open && !point_in_rect(&menu_rect, click_x, click_y)) {
-                        menu_open = 0;
-                        dirty = 1;
-                    }
-
-                    if (hit_window >= 0) {
-                        struct rect close;
-                        struct rect min;
-                        struct rect max;
-                        struct rect title;
-                        struct rect grip;
-                        int type;
-
-                        hit_window = raise_window_to_front(hit_window, &focused);
-                        focused = hit_window;
-                        type = g_windows[hit_window].type;
-                        close = window_close_button(&g_windows[hit_window].rect);
-                        min = window_min_button(&g_windows[hit_window].rect);
-                        max = window_max_button(&g_windows[hit_window].rect);
-                        title = window_title_bar(&g_windows[hit_window].rect);
-                        grip = window_resize_grip(&g_windows[hit_window].rect);
-
-                        if (point_in_rect(&close, click_x, click_y)) {
-                            free_window(hit_window);
-                            focused = -1;
-                        } else if (point_in_rect(&min, click_x, click_y)) {
-                            g_windows[hit_window].minimized = 1;
-                            focused = -1;
-                        } else if (point_in_rect(&max, click_x, click_y)) {
-                            maximize_window(hit_window);
-                        } else if (point_in_rect(&grip, click_x, click_y)) {
-                            resizing = hit_window;
-                            resize_origin = g_windows[hit_window].rect;
-                            resize_anchor_x = click_x;
-                            resize_anchor_y = click_y;
-                        } else if (point_in_rect(&title, click_x, click_y)) {
-                            dragging = hit_window;
-                            drag_offset_x = click_x - g_windows[hit_window].rect.x;
-                            drag_offset_y = click_y - g_windows[hit_window].rect.y;
-                        } else if (type == APP_EDITOR) {
-                            struct editor_state *ed = &g_editors[g_windows[hit_window].instance];
-                            struct rect save = editor_save_button_rect(ed);
-
-                            if (point_in_rect(&save, click_x, click_y)) {
-                                if ((ed->file_node >= 0 && g_fs_nodes[ed->file_node].used) ? editor_save(ed) : (file_dialog_open_editor(&file_dialog, hit_window), 0)) {
-                                    dirty = 1;
-                                } else {
-                                    dirty = 1;
-                                }
-                            }
-                        } else if (type == APP_FILEMANAGER) {
-                            struct filemanager_state *fm = &g_fms[g_windows[hit_window].instance];
-                            struct rect up = filemanager_up_button_rect(fm);
-                            struct rect list = filemanager_list_rect(fm);
-                            int target = FILEMANAGER_HIT_NONE;
-
-                            if (point_in_rect(&up, click_x, click_y)) {
-                                if (filemanager_open_node(fm, FILEMANAGER_HIT_PARENT)) {
-                                    dirty = 1;
-                                }
-                            } else if (point_in_rect(&list, click_x, click_y)) {
-                                target = filemanager_hit_test_entry(fm, click_x, click_y);
-                                if (target == FILEMANAGER_HIT_PARENT) {
-                                    if (filemanager_open_node(fm, target)) {
-                                        dirty = 1;
-                                    }
-                                } else if (target >= 0) {
-                                    if (g_fs_nodes[target].is_dir) {
-                                        if (filemanager_open_node(fm, target)) {
-                                            dirty = 1;
-                                        }
-                                    } else {
-                                        fm->selected_node = target;
-                                        dirty = 1;
-                                    }
-                                } else {
-                                    fm->selected_node = -1;
-                                    dirty = 1;
-                                }
-                            }
-                        } else if (type == APP_TRASH) {
-                            struct rect list = trash_window_list_rect(&g_trash);
-                            struct rect restore_button = trash_window_restore_button_rect(&g_trash);
-                            struct rect delete_button = trash_window_delete_button_rect(&g_trash);
-                            struct rect empty_button = trash_window_empty_button_rect(&g_trash);
-
-                            if (point_in_rect(&restore_button, click_x, click_y)) {
-                                if (g_trash.selected_entry >= 0) {
-                                    if (trash_restore_entry(g_trash.selected_entry,
-                                                            g_trash.status,
-                                                            (int)sizeof(g_trash.status)) == 0) {
-                                        g_trash.selected_entry = -1;
-                                    }
-                                } else {
-                                    set_trash_status("Selecione um item");
-                                }
-                                dirty = 1;
-                            } else if (point_in_rect(&delete_button, click_x, click_y)) {
-                                if (g_trash.selected_entry >= 0) {
-                                    if (trash_delete_entry(g_trash.selected_entry,
-                                                           g_trash.status,
-                                                           (int)sizeof(g_trash.status)) == 0) {
-                                        g_trash.selected_entry = -1;
-                                    }
-                                } else {
-                                    set_trash_status("Selecione um item");
-                                }
-                                dirty = 1;
-                            } else if (point_in_rect(&empty_button, click_x, click_y)) {
-                                (void)trash_empty_all(g_trash.status, (int)sizeof(g_trash.status));
-                                g_trash.selected_entry = -1;
-                                dirty = 1;
-                            } else if (point_in_rect(&list, click_x, click_y)) {
-                                g_trash.selected_entry = -1;
-                                g_trash.status[0] = '\0';
-                                g_trash.selected_entry = trash_window_entry_at_point(&g_trash, click_x, click_y);
-                                dirty = 1;
-                            }
-                        } else if (type == APP_IMAGEVIEWER) {
-                            if (imageviewer_handle_click(&g_imageviewers[g_windows[hit_window].instance],
-                                                         click_x, click_y)) {
-                                dirty = 1;
-                            }
-                        } else if (type == APP_AUDIO_PLAYER) {
-                            if (audioplayer_handle_click(&g_audioplayers[g_windows[hit_window].instance],
-                                                         click_x, click_y)) {
-                                dirty = 1;
-                            }
-                        } else if (type == APP_TASKMANAGER) {
-                            struct taskmgr_action action =
-                                taskmgr_handle_click(&g_tms[g_windows[hit_window].instance],
-                                                     g_windows,
-                                                     MAX_WINDOWS,
+                    if (desktop_dispatch_shell_click(&session_action_queue,
+                                                     &window_action_queue,
+                                                     &app_action_queue,
                                                      click_x,
                                                      click_y,
-                                                     ticks);
-                            if (action.type == TASKMGR_ACTION_CLOSE_WINDOW && action.value >= 0) {
-                                free_window(action.value);
-                                if (action.value == hit_window) {
-                                    focused = -1;
-                                }
-                                dirty = 1;
-                            } else if (action.type == TASKMGR_ACTION_TERMINATE_PID && action.value > 0) {
-                                if (sys_task_terminate((uint32_t)action.value) == 0) {
-                                    dirty = 1;
-                                }
-                            } else {
-                                dirty = 1;
-                            }
-                        } else if (type == APP_CALCULATOR) {
-                            int button = calculator_hit_test(&g_calcs[g_windows[hit_window].instance],
-                                                             click_x,
-                                                             click_y);
-                            if (button >= 0) {
-                                calculator_press_key(&g_calcs[g_windows[hit_window].instance],
-                                                     calculator_button_key(button));
-                                dirty = 1;
-                            }
-                        } else if (type == APP_SKETCHPAD) {
-                            struct sketchpad_state *sketch = &g_sketches[g_windows[hit_window].instance];
-                            struct rect clear_button = sketchpad_clear_button_rect(sketch);
-                            struct rect export_button = sketchpad_export_button_rect(sketch);
-                            int color_index = sketchpad_hit_color(sketch, click_x, click_y);
-
-                            if (point_in_rect(&clear_button, click_x, click_y)) {
-                                sketchpad_clear(sketch);
-                                dirty = 1;
-                            } else if (point_in_rect(&export_button, click_x, click_y)) {
-                                if (sketch->last_export_path[0] != '\0') {
-                                    char name[FS_NAME_MAX + 1];
-                                    char ext[FS_NAME_MAX + 1];
-                                    char filename[FS_NAME_MAX + 1];
-
-                                    extract_basename_parts(sketch->last_export_path,
-                                                           name, (int)sizeof(name),
-                                                           ext, (int)sizeof(ext));
-                                    filename[0] = '\0';
-                                    str_copy_limited(filename, name, (int)sizeof(filename));
-                                    if (ext[0] != '\0') {
-                                        str_append(filename, ".", (int)sizeof(filename));
-                                        str_append(filename, ext, (int)sizeof(filename));
-                                    }
-                                    if (sketchpad_export_bitmap_named(sketch, filename)) {
-                                        dirty = 1;
-                                    }
-                                } else {
-                                    file_dialog_open_sketch(&file_dialog, hit_window);
-                                    dirty = 1;
-                                }
-                            } else if (color_index >= 0) {
-                                sketch->current_color = (uint8_t)color_index;
-                                dirty = 1;
-                            } else if (sketchpad_paint_at(sketch, click_x, click_y)) {
-                                dirty = 1;
-                            }
-                        } else if (type == APP_FLAP_BIRB) {
-                            if (flap_birb_handle_click(&g_flap_birb[g_windows[hit_window].instance])) {
-                                dirty = 1;
-                            }
-                        } else if (type == APP_DOOM) {
-                            if (doom_handle_click(&g_doom[g_windows[hit_window].instance])) {
-                                dirty = 1;
-                            }
-                        } else if (type == APP_CRAFT) {
-                            if (craft_handle_click(&g_craft[g_windows[hit_window].instance])) {
-                                dirty = 1;
-                            }
-                        } else if (type == APP_PERSONALIZE) {
-                            int wallpaper_nodes[3];
-                            int wallpaper_count = find_wallpaper_nodes(wallpaper_nodes, 3);
-
-                            if (g_pers.color_picker_open) {
-                                struct rect picker = personalize_color_picker_rect();
-
-                                for (int i = 0; i < 256; ++i) {
-                                    struct rect swatch = personalize_color_swatch_rect(&picker, i);
-                                    if (point_in_rect(&swatch, click_x, click_y)) {
-                                        ui_theme_set_slot(g_pers.selected_slot, g_color_palette_256[i]);
-                                        g_pers.color_picker_open = 0;
-                                        dirty = 1;
-                                        break;
-                                    }
-                                }
-                                if (!point_in_rect(&picker, click_x, click_y)) {
-                                    g_pers.color_picker_open = 0;
-                                }
-                            } else {
-                                struct rect body = {g_windows[hit_window].rect.x + 6,
-                                                   g_windows[hit_window].rect.y + 20,
-                                                   g_windows[hit_window].rect.w - 12,
-                                                   g_windows[hit_window].rect.h - 26};
-                                struct rect palette_panel = {body.x + 8, body.y + body.h - 98, 216, 88};
-                                struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 30, palette_panel.w - 16, 14};
-
-                                if (point_in_rect(&mais_cores_btn, click_x, click_y)) {
-                                    g_pers.color_picker_open = 1;
-                                    dirty = 1;
-                                }
-
-                                for (int slot = 0; slot < THEME_SLOT_COUNT; ++slot) {
-                                    struct rect tile = personalize_window_slot_rect(&g_windows[hit_window].rect, slot);
-                                    if (point_in_rect(&tile, click_x, click_y)) {
-                                        g_pers.selected_slot = (enum theme_slot)slot;
-                                        dirty = 1;
-                                    }
-                                }
-                            }
-                            for (int i = -1; i < wallpaper_count; ++i) {
-                                struct rect button = personalize_window_wallpaper_button_rect(&g_windows[hit_window].rect, i + 1);
-                                if (point_in_rect(&button, click_x, click_y)) {
-                                    if (i < 0) {
-                                        ui_wallpaper_clear();
-                                    } else {
-                                        (void)ui_wallpaper_set_from_node(wallpaper_nodes[i]);
-                                    }
-                                    dirty = 1;
-                                }
-                            }
-                            {
-                                struct rect choose_button = personalize_window_wallpaper_choose_rect(&g_windows[hit_window].rect);
-                                if (point_in_rect(&choose_button, click_x, click_y)) {
-                                    file_dialog_open_wallpaper(&file_dialog, hit_window);
-                                    dirty = 1;
-                                }
-                            }
-                            refresh_resolution_options();
-                            for (int i = 0; i < g_resolution_option_count; ++i) {
-                                struct rect button = personalize_window_resolution_button_rect(&g_windows[hit_window].rect, i);
-                                if (point_in_rect(&button, click_x, click_y)) {
-                                    if (SCREEN_WIDTH == g_resolution_options[i].width &&
-                                        SCREEN_HEIGHT == g_resolution_options[i].height) {
-                                        set_personalize_resolution_status("Resolucao ja esta ativa");
-                                        dirty = 1;
-                                        break;
-                                    }
-                                    if (!g_resolution_can_set) {
-                                        set_personalize_resolution_status("driver atual: resolucao so no boot");
-                                        dirty = 1;
-                                        break;
-                                    }
-                                    if (ui_set_resolution(g_resolution_options[i].width,
-                                                          g_resolution_options[i].height) == 0) {
-                                        set_personalize_resolution_status("Resolucao aplicada agora");
-                                        for (int w = 0; w < MAX_WINDOWS; ++w) {
-                                            if (g_windows[w].active) {
-                                                clamp_window_rect(&g_windows[w].rect);
-                                                sync_window_instance_rect(w);
-                                            }
-                                        }
-                                        start_button = ui_taskbar_start_button_rect();
-                                        menu_rect = ui_start_menu_rect();
-                                        context_menu = desktop_context_menu_rect(context_menu.x, context_menu.y);
-                                        fm_context_menu = filemanager_context_menu_rect(fm_context_menu.x, fm_context_menu.y);
-                                        mouse.x = (int)SCREEN_WIDTH / 2;
-                                        mouse.y = (int)SCREEN_HEIGHT / 2;
-                                        mouse.buttons = 0;
-                                        dragging = -1;
-                                        resizing = -1;
-                                        menu_open = 0;
-                                        context_open = 0;
-                                        fm_context_open = 0;
-                                        g_fm_context_has_wallpaper_action = 0;
-                                        dirty = 1;
-                                    } else {
-                                        set_personalize_resolution_status("Falha ao trocar resolucao");
-                                        dirty = 1;
-                                    }
-                                }
-                            }
-                        }
-                        dirty = 1;
+                                                     menu_open,
+                                                     &menu_rect,
+                                                     context_open,
+                                                     &context_menu,
+                                                     fm_context_open,
+                                                     &fm_context_menu,
+                                                     &app_context,
+                                                     &dirty)) {
+                        handled = 1;
                     }
                 }
-                }
+            }
             }
         }
 
-        for (int event_index = 0; event_index < queued_event_count; ++event_index) {
-            struct input_event *queued = &queued_events[event_index];
+        dirty |= desktop_flush_post_pointer_actions(&session_action_queue,
+                                                    &app_action_queue,
+                                                    &window_action_queue,
+                                                    &focused,
+                                                    &file_dialog,
+                                                    &start_button,
+                                                    &menu_rect,
+                                                    &context_menu,
+                                                    &fm_context_menu,
+                                                    &mouse,
+                                                    &dragging,
+                                                    &drag_offset_x,
+                                                    &drag_offset_y,
+                                                    &resizing,
+                                                    &resize_origin,
+                                                    &resize_anchor_x,
+                                                    &resize_anchor_y,
+                                                    &menu_open,
+                                                    &menu_scroll_dragging,
+                                                    &context_open,
+                                                    &fm_context_open,
+                                                    &fm_context_window,
+                                                    &fm_context_target,
+                                                    &g_fm_context_has_wallpaper_action,
+                                                    &app_context,
+                                                    start_menu_search,
+                                                    (int)sizeof(start_menu_search),
+                                                    &start_menu_search_len,
+                                                    &start_menu_search_scroll);
 
-            if (queued->type != INPUT_EVENT_KEY) {
-                continue;
-            }
-            key = queued->value;
+        for (int event_index = 0; event_index < key_event_queue.count; ++event_index) {
+            key = key_event_queue.keys[event_index];
             if (g_network_applet.popup_open && g_network_applet.password_focus) {
                 if (key == '\b' || key == 127) {
                     if (g_network_applet.password_len > 0) {
@@ -6206,8 +8265,9 @@ void desktop_main(void) {
                 }
                 if (key == '\n') {
                     if (terminal_execute_command(term)) {
-                        free_window(focused);
-                        focused = -1;
+                        desktop_window_action_queue_push(&window_action_queue,
+                                                         DESKTOP_WINDOW_ACTION_CLOSE,
+                                                         focused, 0, 0);
                     }
                     dirty = 1;
                     continue;
@@ -6305,8 +8365,9 @@ void desktop_main(void) {
                 }
             } else if (g_windows[focused].type == APP_CRAFT) {
                 if (key == 'q' || key == 'Q') {
-                    free_window(focused);
-                    focused = -1;
+                    desktop_window_action_queue_push(&window_action_queue,
+                                                     DESKTOP_WINDOW_ACTION_CLOSE,
+                                                     focused, 0, 0);
                     dirty = 1;
                     continue;
                 }
@@ -6315,6 +8376,16 @@ void desktop_main(void) {
                 }
             }
         }
+
+        dirty |= desktop_flush_window_actions(&window_action_queue,
+                                              &focused,
+                                              &dragging,
+                                              &drag_offset_x,
+                                              &drag_offset_y,
+                                              &resizing,
+                                              &resize_origin,
+                                              &resize_anchor_x,
+                                              &resize_anchor_y);
 
         if (dirty) {
             draw_desktop(&mouse, menu_open, start_hover,

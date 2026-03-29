@@ -9,6 +9,14 @@ int kernel_input_event_dequeue(struct input_event *event);
 int kernel_input_event_wait(struct input_event *event);
 void kernel_input_event_enqueue_key(int key);
 void kernel_input_event_enqueue_mouse(const struct mouse_state *state);
+int kernel_input_key_event_has_data(void);
+int kernel_input_key_event_dequeue(int *key);
+int kernel_input_key_event_wait(int *key);
+void kernel_input_key_event_enqueue(int key);
+int kernel_input_mouse_event_has_data(void);
+int kernel_input_mouse_event_dequeue(struct mouse_state *state);
+int kernel_input_mouse_event_wait(struct mouse_state *state);
+void kernel_input_mouse_event_enqueue(const struct mouse_state *state);
 
 /* Keyboard driver initialization */
 void kernel_keyboard_init(void);

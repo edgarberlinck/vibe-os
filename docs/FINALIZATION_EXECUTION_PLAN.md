@@ -167,6 +167,7 @@ Hierarquia de prioridade obrigatoria:
 
 Regra dura:
 - tudo deve rodar separado, mas servico de prioridade menor nunca pode travar um de prioridade maior
+- prioridade `5+` nao pode comprometer boot nem `startx`; se um worker/app dessa faixa travar durante a migracao, ele deve ser morto antes de sacrificar as prioridades `1..4`
 
 ## Ordem recomendada para finalizar
 

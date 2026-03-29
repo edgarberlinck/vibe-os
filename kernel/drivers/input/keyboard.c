@@ -5,7 +5,6 @@
 #include <headers/kernel/keymap.h>
 #include <include/string.h>
 
-#define KBD_QUEUE_SIZE 128
 #define PS2_STATUS_PORT 0x64u
 #define PS2_DATA_PORT 0x60u
 #define PS2_STATUS_OUTPUT_FULL 0x01u
@@ -33,9 +32,6 @@ static const keymap_t* g_available_keymaps[] = {
 };
 static const int g_num_available_keymaps = sizeof(g_available_keymaps) / sizeof(keymap_t*);
 
-static volatile uint16_t g_kernel_kbd_queue[KBD_QUEUE_SIZE];
-static volatile uint8_t g_kernel_kbd_head = 0u;
-static volatile uint8_t g_kernel_kbd_tail = 0u;
 static volatile uint8_t g_kernel_kbd_shift = 0u;
 static volatile uint8_t g_kernel_kbd_ctrl = 0u;
 static volatile uint8_t g_kernel_kbd_extended = 0u;
@@ -112,23 +108,14 @@ void kernel_keyboard_get_available_layouts(char* buffer, int size) {
 }
 
 static void kbd_push_key(uint16_t key) {
-    const uint8_t next = (uint8_t)((g_kernel_kbd_head + 1u) % KBD_QUEUE_SIZE);
-    if (next == g_kernel_kbd_tail) {
-        return;
-    }
-    g_kernel_kbd_queue[g_kernel_kbd_head] = key;
-    g_kernel_kbd_head = next;
-    kernel_input_event_enqueue_key((int)key);
+    kernel_input_key_event_enqueue((int)key);
 }
 
 int kernel_keyboard_read(void) {
     int value = 0;
-
-    if (g_kernel_kbd_tail != g_kernel_kbd_head) {
-        value = (int)g_kernel_kbd_queue[g_kernel_kbd_tail];
-        g_kernel_kbd_tail = (uint8_t)((g_kernel_kbd_tail + 1u) % KBD_QUEUE_SIZE);
+    if (kernel_input_key_event_dequeue(&value) == 0) {
+        return 0;
     }
-
     return value;
 }
 
@@ -229,8 +216,6 @@ void kernel_keyboard_irq_handler(void) {
 void kernel_keyboard_init(void) {
     uint8_t config;
 
-    g_kernel_kbd_head = 0u;
-    g_kernel_kbd_tail = 0u;
     g_kernel_kbd_shift = 0u;
     g_kernel_kbd_ctrl = 0u;
     g_kernel_kbd_extended = 0u;

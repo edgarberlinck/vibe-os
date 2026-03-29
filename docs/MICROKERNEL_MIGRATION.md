@@ -223,6 +223,8 @@ Rules:
 - standalone apps must not outrank network service continuity; apps come after network in the policy order
 - when the system is overloaded, optional/background work should be throttled before foreground interactivity is touched
 - restart policy should favor recovering lower-priority services around a still-live desktop instead of restarting the whole session
+- priority tiers `5+` (`audio`,`network`, `app`, and `background`) must never be allowed to compromise BIOS boot completion, `userland.app` bootstrap, or `startx` session bring-up
+- if a `5+` worker wedges the system during migration, the recovery policy should kill that worker first and continue preserving tiers `1..4` instead of sacrificing desktop/session continuity
 
 ### Phase A: Kernel Event Primitives
 
@@ -247,9 +249,14 @@ Rules:
 - [x] mouse polling can bypass degraded worker transport
 - [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; foreground modular apps still need the same treatment
 - [~] move input service to event publication ownership instead of kernel fallback ownership
-- [ ] split desktop input ingestion from desktop render/update loop
+- [~] move input service to event publication ownership instead of kernel fallback ownership
+: the shared `INPUT_EVENT` stream now sits on top of explicit kernel-owned keyboard and mouse queues with their own waitable contexts, so per-device capture no longer exists only as private driver-local state; the steady-state fallback path still exists and service ownership is not complete yet
+- [~] split desktop input ingestion from desktop render/update loop
+  : desktop agora coleta eventos de input em um batch explicito antes de update/render e consolida efeitos de mouse/async state nesse estagio; a separacao completa em workers/loops independentes ainda nao foi feita
 - [~] introduce explicit per-device queues for keyboard, mouse, and future gamepad/touch sources
+: keyboard and mouse now enqueue into dedicated kernel device queues in parallel with the compatibility aggregate stream used by current userland consumers; future gamepad/touch sources and a fully extracted input publisher are still pending
 - [~] convert desktop shortcuts, pointer motion, focus changes, and window actions into queued events
+  : pointer motion, wheel scroll e cliques do mouse agora entram primeiro em uma fila interna curta de eventos de UI, as teclas/atalhos do desktop tambem passam por uma fila explicita antes do processamento, drag/resize/menu-scroll-drag/pintura continua do sketchpad ja reagem aos eventos `POINTER_MOVE`, toggle/focus-raise/close/minimize/maximize/begin-drag/begin-resize de janelas ja passam por uma fila dedicada de acoes antes de mutar estado, a fila de acoes de sessao agora absorve parte importante do clique esquerdo como toggle/close do start menu, launch dos icones principais da area de trabalho, launch dos atalhos laterais do start menu, abertura de entradas do proprio start menu e fechamento pos-acao dos context menus de app/file manager, e uma fila curta de acoes de app ja despacha operacoes da Trash, as acoes primary/save-as de Editor/Sketchpad, o botao save do Editor, as interacoes principais de up/lista do File Manager, as operacoes do menu de contexto do proprio File Manager, praticamente todo o bloco de tema/wallpaper/resolucao do Personalize, os cliques principais de Task Manager/Calculator/Sketchpad e tambem os cliques de ImageViewer, Audio Player, Flap Birb, DOOM e Craft; Task Manager, Calculator, Sketchpad e Personalize agora tambem fazem o proprio hit-testing por esse dispatcher, os app-clicks simples desses blocos tambem ja passam por um helper compartilhado de enqueue e por um mapeamento central `app_type -> action`, `Editor`, `File Manager` e `Trash` agora tambem ja roteiam seu conteudo por helpers dedicados, o dispatcher de conteudo de janela ja foi achatado para um roteador mais direto por `switch`/tipo de app, e o flush das filas de sessao/janela no loop principal agora tambem passa por helpers dedicados, inclusive um flush composto pos-clique para sessao/app/janela; o loop principal passou a delegar o roteamento de conteudo de janela, a moldura/controles de janela, o fechamento de overlays/popups do shell, o taskbar-toggle de janelas, o roteamento final de janela sob clique no dispatcher de shell, os atalhos da area de trabalho, o clique do start menu, os cliques contextuais/sessao iniciais, o clique do file dialog, o clique direito do desktop/file manager/app context, o clique dos applets de rede/som e o bloco residual de shell/taskbar/janelas para helpers dedicados; alem disso, o fechamento de `CLOSE_CONTEXTS` e o fechamento de popups do shell agora tambem passam por helpers centrais reutilizados, mas ainda restam decisoes e acoes de app/janela no fluxo direto atual
 - [ ] make `startx` survive input-service restart without direct-driver fallback
 - [ ] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
 - [ ] prove keyboard and mouse remain live while audio/network/video workers restart
@@ -275,7 +282,7 @@ Rules:
 : `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated ABI, and `present submit` now returns a concrete `sequence` fence token that the desktop uses on its main path; a true queued presenter worker still remains open
 - [ ] stop doing heavyweight backend work directly from desktop paint cadence
 - [~] add evented mode-change / hotplug / backend-failure notifications
-: mode-change and leave-graphics notifications now exist on the new video-event stream; hotplug/backend-failure paths are still pending
+: mode-change and leave-graphics notifications now exist on the new video-event stream, and the desktop now consumes those events plus `video`/`input` supervision events to refresh metrics, clamp layout, and redraw immediately when the backend changes; hotplug/backend-failure paths are still pending
 - [ ] move video service off backend-shim steady-state execution
 - [ ] define what remains privileged for GPU/MMIO ownership versus what moves into service processes
 
@@ -290,7 +297,8 @@ Rules:
 ### Phase F: Network Async Split
 
 - [ ] replace current control-plane MVP with real packet TX/RX queues
-- [ ] add socket wakeup/readiness events
+- [~] add socket wakeup/readiness events
+: `network` now publishes `status`, `recv`, `accept`, `send`, and `closed` events through a dedicated event stream, and the desktop consumes those events to refresh network state reactively instead of relying only on periodic polling; true queued TX/RX ownership is still pending
 - [ ] add async DNS/DHCP completion flow
 - [ ] keep `netmgrd` as policy daemon, not datapath owner
 - [ ] remove steady-state dependence on kernel local handler execution for networking
