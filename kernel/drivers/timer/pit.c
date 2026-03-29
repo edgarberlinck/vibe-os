@@ -6,6 +6,7 @@
 
 static volatile uint32_t g_kernel_ticks = 0u;
 static volatile uint32_t g_timer_trace_budget = 8u;
+static kernel_timer_tick_hook_t g_timer_tick_hooks[4];
 
 uint32_t kernel_timer_get_ticks(void) {
     uint32_t flags = kernel_irq_save();
@@ -14,8 +15,52 @@ uint32_t kernel_timer_get_ticks(void) {
     return ticks;
 }
 
+int kernel_timer_register_tick_hook(kernel_timer_tick_hook_t hook) {
+    uint32_t flags;
+
+    if (hook == 0) {
+        return -1;
+    }
+
+    flags = kernel_irq_save();
+    for (uint32_t i = 0u; i < 4u; ++i) {
+        if (g_timer_tick_hooks[i] == hook) {
+            kernel_irq_restore(flags);
+            return 0;
+        }
+        if (g_timer_tick_hooks[i] == 0) {
+            g_timer_tick_hooks[i] = hook;
+            kernel_irq_restore(flags);
+            return 0;
+        }
+    }
+    kernel_irq_restore(flags);
+    return -1;
+}
+
+void kernel_timer_unregister_tick_hook(kernel_timer_tick_hook_t hook) {
+    uint32_t flags;
+
+    if (hook == 0) {
+        return;
+    }
+
+    flags = kernel_irq_save();
+    for (uint32_t i = 0u; i < 4u; ++i) {
+        if (g_timer_tick_hooks[i] == hook) {
+            g_timer_tick_hooks[i] = 0;
+        }
+    }
+    kernel_irq_restore(flags);
+}
+
 kernel_trap_frame_t *kernel_timer_irq_handler(kernel_trap_frame_t *frame) {
     g_kernel_ticks += 1u;
+    for (uint32_t i = 0u; i < 4u; ++i) {
+        if (g_timer_tick_hooks[i] != 0) {
+            g_timer_tick_hooks[i](g_kernel_ticks);
+        }
+    }
     if (g_timer_trace_budget != 0u && (g_kernel_ticks % 500u) == 0u) {
         g_timer_trace_budget -= 1u;
         kernel_debug_printf("timer: tick=%d\n", (int)g_kernel_ticks);

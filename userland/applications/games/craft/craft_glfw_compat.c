@@ -47,6 +47,7 @@ static int g_mouse_x = 0;
 static int g_mouse_y = 0;
 static int g_mouse_dx = 0;
 static int g_mouse_dy = 0;
+static double g_mouse_scroll_y = 0.0;
 static uint8_t g_mouse_buttons = 0u;
 static int g_mouse_inside = 0;
 static int g_window_focused = 0;
@@ -206,6 +207,7 @@ GLFWwindow *glfwCreateWindow(int width, int height, const char *title, GLFWmonit
     g_mouse_x = width / 2;
     g_mouse_y = height / 2;
     g_mouse_buttons = 0u;
+    g_mouse_scroll_y = 0.0;
     g_mouse_inside = 0;
     g_window_focused = 0;
     g_pending_key_count = 0;
@@ -318,6 +320,10 @@ void glfwPollEvents(void) {
             }
             g_window.mouse_states[button] = pressed ? GLFW_PRESS : GLFW_RELEASE;
         }
+        if (g_mouse_scroll_y != 0.0 && g_scroll_cb) {
+            g_scroll_cb(&g_window, 0.0, g_mouse_scroll_y);
+            g_mouse_scroll_y = 0.0;
+        }
         g_mouse_prev_x = g_mouse_x;
         g_mouse_prev_y = g_mouse_y;
         g_mouse_prev_buttons = buttons;
@@ -347,11 +353,12 @@ void craft_glfw_inject_key(int raw) {
 }
 
 void craft_glfw_set_mouse_state(int x, int y, int dx, int dy,
-                                uint8_t buttons, int focused, int inside) {
+                                int wheel, uint8_t buttons, int focused, int inside) {
     g_mouse_x = x;
     g_mouse_y = y;
     g_mouse_dx = dx;
     g_mouse_dy = dy;
+    g_mouse_scroll_y = (double)wheel;
     g_mouse_buttons = buttons;
     g_window_focused = focused || g_window.cursor_mode == GLFW_CURSOR_DISABLED;
     g_mouse_inside = inside || g_window.cursor_mode == GLFW_CURSOR_DISABLED;
@@ -378,6 +385,7 @@ void craft_glfw_reset_embedded(void) {
     g_window.cursor_y = g_window.height / 2;
     g_mouse_ready = 0;
     g_mouse_buttons = 0u;
+    g_mouse_scroll_y = 0.0;
     g_mouse_inside = 0;
     g_window_focused = 0;
     g_pending_key_count = 0;

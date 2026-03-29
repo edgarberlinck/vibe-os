@@ -6,6 +6,7 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/drivers/debug/debug.h>
+#include <include/userland_api.h>
 
 static struct mk_service_record g_services[MK_SERVICE_SLOTS];
 static int g_console_request_trace_emitted = 0;
@@ -551,6 +552,31 @@ int mk_service_backend_handle_current(const struct mk_message *request, struct m
     }
 
     return service->local_handler(request, reply, service->context);
+}
+
+void mk_service_fill_task_snapshot(struct task_snapshot_entry *entry) {
+    const struct mk_service_record *service;
+
+    if (entry == 0 || entry->service_type == MK_SERVICE_NONE) {
+        return;
+    }
+
+    service = mk_service_find_by_type(entry->service_type);
+    if (service == 0) {
+        return;
+    }
+
+    if (mk_service_process_online(service)) {
+        entry->flags |= TASK_SNAPSHOT_FLAG_SERVICE_ONLINE;
+    }
+    if (service->transport_degraded != 0u) {
+        entry->flags |= TASK_SNAPSHOT_FLAG_SERVICE_DEGRADED;
+    }
+    if (service->local_handler != 0 &&
+        (service->process != 0 || service->pid != 0 || service->launch_flags != 0u)) {
+        entry->flags |= TASK_SNAPSHOT_FLAG_SERVICE_RESTARTABLE;
+    }
+    entry->service_restart_count = service->restart_count;
 }
 
 const struct mk_service_record *mk_service_find_by_type(uint32_t type) {

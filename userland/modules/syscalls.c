@@ -171,6 +171,10 @@ int sys_launch_info(struct userland_launch_info *info) {
     return syscall5(SYSCALL_LAUNCH_INFO, (int)(uintptr_t)info, 0, 0, 0, 0);
 }
 
+int sys_launch_builtin_user(uint32_t target) {
+    return syscall5(SYSCALL_LAUNCH_BUILTIN_USER, (int)target, 0, 0, 0, 0);
+}
+
 int sys_task_snapshot(struct task_snapshot_summary *summary,
                       struct task_snapshot_entry *entries,
                       uint32_t max_entries) {
@@ -227,6 +231,10 @@ int sys_audio_stop(void) {
 
 int sys_audio_write(const void *data, uint32_t size) {
     return syscall5(SYSCALL_AUDIO_WRITE, (int)(uintptr_t)data, (int)size, 0, 0, 0);
+}
+
+int sys_audio_write_async(const void *data, uint32_t size) {
+    return syscall5(SYSCALL_AUDIO_WRITE_ASYNC, (int)(uintptr_t)data, (int)size, 0, 0, 0);
 }
 
 int sys_audio_read(void *data, uint32_t size) {

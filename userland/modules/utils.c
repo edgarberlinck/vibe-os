@@ -11,6 +11,7 @@
 #define AUDIO_WAV_AZALIA_ASYNC_CHUNK 2048
 #define AUDIO_WAV_COMPAT_ASYNC_CHUNK 2048
 #define AUDIO_WAV_UAUDIO_ASYNC_CHUNK 16384
+#define AUDIO_WAV_ASYNC_QUEUE_CHUNK 2048
 #define AUDIO_STATUS_BACKEND_MASK 0x000000ffu
 #define AUDIO_BACKEND_SOFT 0
 #define AUDIO_BACKEND_COMPAT_AC97 1
@@ -214,6 +215,11 @@ static int audio_debug_progress_enabled(const char *tag) {
     return 1;
 }
 
+static int audio_should_use_kernel_async(const char *tag) {
+    return tag != 0 &&
+           (str_eq(tag, "desktop-session") || str_eq(tag, "desktop"));
+}
+
 static int audio_backend_kind(void) {
     struct audio_status status;
 
@@ -221,6 +227,13 @@ static int audio_backend_kind(void) {
         return -1;
     }
     return status._spare[0] & (int)AUDIO_STATUS_BACKEND_MASK;
+}
+
+int audio_desktop_startup_wav_allowed(void) {
+    int backend_kind = audio_backend_kind();
+
+    return backend_kind != AUDIO_BACKEND_PCSPKR &&
+           backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO;
 }
 
 static int audio_wait_for_playback_idle(uint32_t expected_ticks) {
@@ -431,6 +444,10 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
             return -1;
         }
         written = sys_audio_write(buffer, chunk_size);
+        if (written == 0 && backend_kind == AUDIO_BACKEND_COMPAT_AC97) {
+            sys_yield();
+            continue;
+        }
         if (written <= 0) {
             audio_set_last_playback_error("write-failed");
             audio_update_last_playback_detail();
@@ -464,6 +481,7 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
 
     if (playback_ticks > 0u &&
         backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO &&
+        backend_kind != AUDIO_BACKEND_PCSPKR &&
         !(backend_kind == AUDIO_BACKEND_COMPAT_AZALIA && waited_for_hda_chunks)) {
         uint32_t started = sys_ticks();
         while ((uint32_t)(sys_ticks() - started) < playback_ticks) {
@@ -521,6 +539,7 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
     playback->backend_kind = audio_backend_kind();
     playback->node = node;
     playback->last_chunk_ticks = 0u;
+    playback->use_kernel_async = audio_should_use_kernel_async(tag);
     str_copy_limited(playback->tag, tag ? tag : "audio", (int)sizeof(playback->tag));
 
     if (playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
@@ -592,7 +611,11 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
         uint32_t chunk_size = playback->data_size - playback->streamed;
         int written;
 
-        if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
+        if (playback->use_kernel_async) {
+            if (chunk_size > AUDIO_WAV_ASYNC_QUEUE_CHUNK) {
+                chunk_size = AUDIO_WAV_ASYNC_QUEUE_CHUNK;
+            }
+        } else if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
             if (chunk_size > AUDIO_WAV_AZALIA_ASYNC_CHUNK) {
                 chunk_size = AUDIO_WAV_AZALIA_ASYNC_CHUNK;
             }
@@ -619,7 +642,12 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
             return -1;
         }
 
-        written = sys_audio_write(buffer, chunk_size);
+        written = playback->use_kernel_async ?
+                  sys_audio_write_async(buffer, chunk_size) :
+                  sys_audio_write(buffer, chunk_size);
+        if (written == 0 && playback->backend_kind == AUDIO_BACKEND_COMPAT_AC97) {
+            return 1;
+        }
         if (written <= 0) {
             audio_set_last_playback_error("write-failed");
             audio_update_last_playback_detail();
@@ -635,7 +663,15 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
             audio_debug_line("audio: wrote ", playback->tag, "\n");
         }
 
-        if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA ||
+        if (playback->use_kernel_async) {
+            if (playback->streamed >= playback->data_size) {
+                playback->waiting_for_idle = 1;
+                playback->finalizing = 1;
+                playback->idle_started = sys_ticks();
+                playback->idle_timeout = audio_idle_timeout_ticks(
+                    audio_estimated_playback_ticks(params, playback->data_size));
+            }
+        } else if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA ||
             (playback->backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO &&
              playback->streamed >= playback->data_size)) {
             playback->waiting_for_idle = 1;

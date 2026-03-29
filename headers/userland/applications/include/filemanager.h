@@ -10,6 +10,7 @@ struct filemanager_state {
     struct rect window;
     int cwd;
     int selected_node;
+    int scroll_offset;
 };
 
 void filemanager_init_state(struct filemanager_state *fm);
@@ -19,5 +20,6 @@ struct rect filemanager_up_button_rect(const struct filemanager_state *fm);
 struct rect filemanager_list_rect(const struct filemanager_state *fm);
 int filemanager_hit_test_entry(const struct filemanager_state *fm, int x, int y);
 int filemanager_open_node(struct filemanager_state *fm, int node);
+void filemanager_scroll_by(struct filemanager_state *fm, int delta);
 
 #endif // FILEMANAGER_H

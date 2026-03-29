@@ -1,5 +1,5 @@
 # Plano Consolidado de Finalizacao do VibeOS
-
+marcar com x o que estiver concluido
 Data da consolidacao: 2026-03-29
 
 ## Premissas desta consolidacao
@@ -118,9 +118,51 @@ Origem principal:
 - necessidade nova deste pedido
 
 Falta fechar:
-- scroll wheel do mouse no kernel
-- scroll wheel atravessando syscall/ABI ate o userland
-- scroll funcionando de verdade nas interfaces
+- [X] scroll wheel do mouse no kernel
+- [X] scroll wheel atravessando syscall/ABI ate o userland
+- [X] scroll funcionando de verdade nas interfaces
+
+### Bloco 8: migracao para arquitetura assincrona orientada a eventos
+
+Origem principal:
+- `docs/MICROKERNEL_MIGRATION.md`
+- problemas reais vistos em `make run` com audio/input/video no desktop
+
+Falta fechar:
+- transformar `yield/sleep + poll` em um modelo de eventos/waitables de verdade
+- tirar audio, video, input e storage do caminho sincrono visivel para a UI
+- fazer cada servico ter fila propria, progresso proprio e falha isolada
+- parar de depender de `backend-shim` em estado estavel
+- separar de vez:
+  - captura de input
+  - loop do desktop/compositor
+  - apresentacao de video
+  - playback/captura de audio
+  - I/O de storage/filesystem
+
+Checklist minimo para dizer "agora esta na arquitetura certa":
+- [X] existe primeira ABI async para audio (`AUDIO_WRITE_ASYNC`)
+- [ ] existem primitivas de evento/waitable/cancelamento no kernel
+- [ ] audio publica conclusao/progresso por evento, nao por poll oportunista
+- [ ] input vira publicacao de eventos, nao fallback permanente em leitura direta
+- [ ] video ganha fila de present/fence
+- [ ] filesystem/storage ganham fila de I/O e writeback
+- [ ] network ganha readiness/eventos de socket reais
+- [ ] queda/restart de um servico nao congela desktop
+- [ ] `backend-shim` sai do caminho principal e fica no maximo como rescue/boot bridge
+
+Hierarquia de prioridade obrigatoria:
+1. desktop
+2. teclado
+3. mouse
+4. video/compositor/present
+5. storage/filesystem do foreground
+6. audio
+7. rede/daemons
+8. tarefas opcionais em background
+
+Regra dura:
+- tudo deve rodar separado, mas servico de prioridade menor nunca pode travar um de prioridade maior
 
 ## Ordem recomendada para finalizar
 
@@ -132,8 +174,8 @@ Falta fechar:
 
 ### Etapa 1: melhorar UX base imediatamente
 
-- implementar scroll wheel no mouse
-- plugar scroll no desktop, start menu, listas e dialogs
+- [X] implementar scroll wheel no mouse
+- [X] plugar scroll no desktop, start menu, listas e dialogs
 - usar isso como melhoria de usabilidade e como exercicio de ABI/input sem risco alto
 
 ### Etapa 2: fechar audio de hardware real
@@ -141,6 +183,7 @@ Falta fechar:
 - atacar `compat-azalia` ate sair do estado fraco em notebook real
 - promover `compat-uaudio` para fallback USB util de verdade
 - consolidar a ordem de fallback por backend
+- antes de seguir fundo em playback/captura, fechar a base de eventos/waitables e tirar o desktop do caminho quente do playback
 
 ### Etapa 3: fechar rede real
 
@@ -165,6 +208,20 @@ Falta fechar:
 - fechar a matriz de modos reais
 - retomar SMP com deteccao/topologia suficiente para `2+ CPUs` no ambiente de validacao
 
+### Etapa 6: cortar a ponte hibrida e virar microkernel de verdade
+
+- introduzir waitables/eventos/cancelamento no kernel
+- transformar `init` em supervisor puro e manter `shell`/`desktop` em hosts separados
+- mover `audio`, `video`, `input`, `storage/filesystem` e `network` para datapath assíncrono orientado a eventos
+- fazer restart isolado de servico sem fallback destrutivo para UI
+- reduzir o kernel privilegiado ao nucleo duro:
+  - scheduler
+  - memoria/VM
+  - IPC
+  - interrupcoes
+  - supervisao
+  - mediacao minima de hardware
+
 ## Definicao pratica de "acabou"
 
 O projeto pode ser considerado fechado quando, ao mesmo tempo:
@@ -179,6 +236,24 @@ O projeto pode ser considerado fechado quando, ao mesmo tempo:
 - apps modulares principais passam em smoke
 - video sobe em QEMU e em pelo menos um backend real de hardware
 - mouse scroll funciona no desktop e nas listas/dialogs principais
+- desktop, teclado, mouse, video e audio continuam vivos mesmo com falha/restart de servico
+- apps comuns rodam abaixo de `network` na ordem de prioridade; shell/desktop continuam sendo classe separada
+- o caminho principal deixa de depender de bridge `backend-shim`
+- o kernel fica reduzido ao que faz sentido num microkernel de verdade
+
+## Checklist "microkernel de verdade"
+
+- [ ] nenhum caminho de UI depende de escrita sincrona em device/backend para continuar rodando
+- [ ] audio e captura funcionam em fila assíncrona com conclusao por evento
+- [ ] input chega por publicacao de eventos e fila por dispositivo
+- [ ] video apresenta frames por fila/fence e nao por trabalho pesado no loop do desktop
+- [ ] storage/filesystem usam workers de I/O/writeback
+- [ ] network tem readiness/eventos reais para sockets
+- [ ] apps comuns nao passam na frente de `network`; shell/desktop ficam em classe superior separada
+- [~] `init` ja comeca a lancar `shell-host` / `desktop-host` separados; falta estender isso para apps modulares AppFS
+- [ ] `backend-shim` saiu do steady state
+- [ ] queda de um servico nao derruba os demais
+- [ ] `make run` com `2+ CPUs` continua responsivo com som, input e video ativos
 
 ## Plano especifico: scroll do mouse
 
@@ -201,48 +276,50 @@ Adicionar wheel scroll no caminho completo:
 
 #### Fase A: kernel/input
 
-- detectar e habilitar protocolo de wheel no mouse PS/2 (`IntelliMouse`, pacote de 4 bytes)
-- estender `mouse_state` com delta de wheel
-- garantir que a fila de eventos preserve esse campo
+- [X] detectar e habilitar protocolo de wheel no mouse PS/2 (`IntelliMouse`, pacote de 4 bytes)
+- [X] estender `mouse_state` com delta de wheel
+- [X] garantir que a fila de eventos preserve esse campo
 
 #### Fase B: ABI/syscall
 
-- propagar o novo campo em `headers/include/userland_api.h`
-- atualizar syscall/input service/runtime sem quebrar o polling atual
-- manter compatibilidade com mouse sem wheel
+- [X] propagar o novo campo em `headers/include/userland_api.h`
+- [X] atualizar syscall/input service/runtime sem quebrar o polling atual
+- [X] manter compatibilidade com mouse sem wheel
 
 #### Fase C: desktop e UI base
 
-- ligar wheel no start menu
-- ligar wheel em listas de apps/resultados
-- ligar wheel em file dialogs
-- ligar wheel em areas com scroll futuro do file manager/editor/terminal quando houver viewport/lista adequada
+- [X] ligar wheel no start menu
+- [X] ligar wheel em listas de apps/resultados
+- [ ] ligar wheel em file dialogs
+- [X] ligar wheel em areas com scroll futuro do file manager/editor/terminal quando houver viewport/lista adequada
+: file manager e lixeira agora respondem a wheel; editor/terminal continuam pendentes quando houver viewport/lista adequada
 
 #### Fase D: apps e compat wrappers
 
-- verificar jogos/apps que ja esperam callback de scroll
-- avaliar se o compat de GLFW deve expor wheel para apps como Craft
+- [X] verificar jogos/apps que ja esperam callback de scroll
+- [X] avaliar se o compat de GLFW deve expor wheel para apps como Craft
 
 #### Fase E: validacao
 
-- QEMU com wheel
-- mouse USB/PS2 real
-- teste de regressao de clique/movimento sem wheel
+- [ ] QEMU com wheel
+- [ ] mouse USB/PS2 real
+- [ ] teste de regressao de clique/movimento sem wheel
 
 ### Criterio de pronto para scroll
 
-- wheel sobe no kernel sem quebrar movimento/clique
-- desktop responde a scroll em pelo menos start menu, listas e dialogs
-- regressao zero para mouse sem wheel
+- [X] wheel sobe no kernel sem quebrar movimento/clique
+- [ ] desktop responde a scroll em pelo menos start menu, listas e dialogs
+- [ ] regressao zero para mouse sem wheel
 
 ## Primeira sequencia de execucao recomendada
 
-1. Implementar scroll wheel do mouse.
+1. [X] Implementar scroll wheel do mouse.
 2. Fechar `compat-azalia` no hardware real alvo.
-3. Fazer Ethernet real com DHCP/DNS.
-4. Portar os comandos de rede/internet do terminal e integrar `links2 -g`.
-5. Fechar smoke modular e gaps POSIX mais visiveis.
-6. Voltar para video real e SMP com matriz de hardware/QEMU mais honesta.
+3. Implementar bloqueio real de tarefas e consertar `sleep` para estabilizar multitarefa, desktop e audio em single-core.
+4. Fazer Ethernet real com DHCP/DNS.
+5. Portar os comandos de rede/internet do terminal e integrar `links2 -g`.
+6. Fechar smoke modular e gaps POSIX mais visiveis.
+7. Voltar para video real e SMP com matriz de hardware/QEMU mais honesta.
 
 ## Plano especifico: terminal de internet
 

@@ -191,6 +191,32 @@ static const char *taskmgr_network_link_label(const struct mk_network_status *st
     }
 }
 
+static const char *taskmgr_priority_label(uint32_t tier) {
+    switch (tier) {
+    case 0: return "desktop";
+    case 1: return "input";
+    case 2: return "video";
+    case 3: return "storage";
+    case 4: return "audio";
+    case 5: return "network";
+    case 6: return "apps";
+    default: return "background";
+    }
+}
+
+static const char *taskmgr_service_health_label(const struct task_snapshot_entry *entry) {
+    if (entry == 0 || entry->service_type == 0u) {
+        return "n/a";
+    }
+    if ((entry->flags & TASK_SNAPSHOT_FLAG_SERVICE_DEGRADED) != 0u) {
+        return "degradado";
+    }
+    if ((entry->flags & TASK_SNAPSHOT_FLAG_SERVICE_ONLINE) != 0u) {
+        return "online";
+    }
+    return "offline";
+}
+
 static int taskmgr_parse_int(const char *text) {
     int value = 0;
 
@@ -989,8 +1015,8 @@ static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect content = taskmgr_content_rect(tm);
 
-    taskmgr_draw_header(&content, theme, "Detalhes", "PIDs reais, estado, nucleos e contadores");
-    sys_text(content.x + 12, content.y + 44, ui_color_muted(), "Nome         PID  Estado       CPU  Ult  Stack  Runtime  Trocas");
+    taskmgr_draw_header(&content, theme, "Detalhes", "PIDs reais, prioridade, reinicios e estado");
+    sys_text(content.x + 12, content.y + 44, ui_color_muted(), "Nome         PID  Estado       CPU  Prio      Rest  Runtime");
 
     for (int i = 0; i < tm->task_count; ++i) {
         struct rect row = taskmgr_details_row_rect(tm, i);
@@ -1026,15 +1052,16 @@ static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
         while (str_len(line) < 35) {
             str_append(line, " ", (int)sizeof(line));
         }
-        append_int(line, tm->tasks[i].last_cpu, (int)sizeof(line));
-        while (str_len(line) < 40) {
+        str_append(line, taskmgr_priority_label(tm->tasks[i].priority_tier), (int)sizeof(line));
+        while (str_len(line) < 46) {
             str_append(line, " ", (int)sizeof(line));
         }
-        append_uint(line, tm->tasks[i].stack_size / 1024u, (int)sizeof(line));
-        str_append(line, "K ", (int)sizeof(line));
+        append_uint(line, tm->tasks[i].service_restart_count, (int)sizeof(line));
+        while (str_len(line) < 52) {
+            str_append(line, " ", (int)sizeof(line));
+        }
         append_uint(line, tm->tasks[i].runtime_ticks / 100u, (int)sizeof(line));
-        str_append(line, "s ", (int)sizeof(line));
-        append_uint(line, tm->tasks[i].context_switches, (int)sizeof(line));
+        str_append(line, "s", (int)sizeof(line));
         sys_text(row.x + 6, row.y + 4, text_color, line);
 
         if (tm->tasks[i].pid != tm->summary.current_pid &&
@@ -1061,7 +1088,11 @@ static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
             append_uint(detail, selected->pid, (int)sizeof(detail));
             str_append(detail, "  tipo ", (int)sizeof(detail));
             str_append(detail, taskmgr_kind_label(selected->kind), (int)sizeof(detail));
-            str_append(detail, "  afinidade pref ", (int)sizeof(detail));
+            str_append(detail, "  prio ", (int)sizeof(detail));
+            str_append(detail, taskmgr_priority_label(selected->priority_tier), (int)sizeof(detail));
+            str_append(detail, "  saude ", (int)sizeof(detail));
+            str_append(detail, taskmgr_service_health_label(selected), (int)sizeof(detail));
+            str_append(detail, "  pref ", (int)sizeof(detail));
             append_int(detail, selected->preferred_cpu, (int)sizeof(detail));
             sys_text(content.x + 12, content.y + content.h - 14, ui_color_muted(), detail);
         }

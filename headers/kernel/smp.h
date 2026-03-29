@@ -11,5 +11,8 @@ int smp_scheduler_enabled(void);
 void smp_wakeup_ipi_handler(void);
 uint32_t smp_cpu_stage(uint32_t cpu_index);
 uint8_t smp_trampoline_debug_stage(void);
+void smp_persist_trace_arm(void);
+void smp_persist_trace_mark(uint8_t code);
+void smp_persist_trace_disarm(void);
 
 #endif

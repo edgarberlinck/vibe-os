@@ -52,6 +52,7 @@ off_t sys_lseek(int fd, off_t offset, int whence);
 int sys_stat(const char *path, struct stat *buf);
 int sys_fstat(int fd, struct stat *buf);
 int sys_launch_info(struct userland_launch_info *info);
+int sys_launch_builtin_user(uint32_t target);
 int sys_task_snapshot(struct task_snapshot_summary *summary,
                       struct task_snapshot_entry *entries,
                       uint32_t max_entries);
@@ -67,6 +68,7 @@ int sys_audio_set_params(const struct audio_swpar *params);
 int sys_audio_start(void);
 int sys_audio_stop(void);
 int sys_audio_write(const void *data, uint32_t size);
+int sys_audio_write_async(const void *data, uint32_t size);
 int sys_audio_read(void *data, uint32_t size);
 int sys_audio_control_info(uint32_t index, struct mk_audio_control_info *info);
 int sys_audio_mixer_read(mixer_ctrl_t *control);

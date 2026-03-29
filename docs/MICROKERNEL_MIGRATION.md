@@ -153,6 +153,175 @@ These are the items that still prevent the migration from being considered fully
 - `network` and `audio` are not feature-complete services yet. Their current implementations provide ABI shape, supervision, and service lifecycle, but not a real NIC packet path, socket stack, audio DMA pipeline, or mixer/playback backend.
 - The current `stage2` path is still a pragmatic FAT32 loader, not a fully general filesystem loader. It is reliable for the current image layout, but it still relies on the current contiguous/linear loading strategy documented above.
 
+## Event-Driven Async Migration Plan
+
+This is the concrete migration path from the current hybrid service model toward a genuinely event-driven microkernel.
+
+The target end-state is:
+
+- user-facing apps never block the desktop/UI loop on storage, input, network, audio, or video backend progress
+- every long-lived subsystem owns an explicit event queue and worker context
+- syscalls become enqueue/subscribe/ack style boundaries where possible, instead of synchronous "do the whole job now" traps
+- service hosts stop calling back into preserved kernel local handlers for steady-state operation
+- the privileged kernel shrinks toward scheduling, memory, IPC, interrupt routing, supervision, and a minimal hardware isolation layer
+
+### Architecture Principles
+
+- queue work, do not run full device transactions in UI-facing code paths
+- prefer request submission + progress notification over synchronous polling loops
+- separate control plane from data plane for audio, video, network, and storage
+- separate input capture from desktop rendering, and desktop rendering from presentation
+- allow degraded services to fail independently without taking the desktop event loop down with them
+- treat compatibility bridges as temporary migration shims, not permanent architecture
+- treat the desktop session as the primary user-facing workload regardless of CPU count
+- treat mouse and keyboard responsiveness as irrevocable requirements
+- run non-desktop work in independent async worker contexts that generate auditable events
+- run `userland.app`, shell, desktop, and foreground apps outside the bootstrap/main thread in their own independent worker/thread contexts
+- reduce the bootstrap/main thread to supervision, event routing, and recovery orchestration only
+- let supervision restart non-desktop services instead of allowing them to stall desktop responsiveness
+
+### Non-Negotiable UX Contract
+
+- the desktop must remain responsive even when optional services are degraded
+- pointer motion, clicks, and keyboard input must not depend on audio, storage, video, or network backends making progress
+- the shell, desktop session, and userland apps must not monopolize or live inside the bootstrap/main thread
+- startup sound and background work may fail fast; desktop, mouse, and keyboard may not
+- scheduler and supervision policy should explicitly favor desktop/input continuity over optional background throughput
+- service failures should trigger restart/isolation semantics, not UI-wide stalls
+
+### Priority Order
+
+Everything should run in separated async worker/service contexts, but not with equal priority.
+
+Priority tiers for scheduling, event dispatch, supervision, and restart policy:
+
+1. desktop session continuity
+2. keyboard input
+3. mouse / pointer input
+4. compositor / frame present / video session continuity
+5. core storage/filesystem operations needed by the foreground session
+6. audio playback/capture
+7. network datapath and background daemons
+8. foreground/background apps outside desktop/shell
+9. optional/background work
+
+Rules:
+
+- a lower-priority worker must never be allowed to stall a higher-priority one
+- desktop, keyboard, and mouse paths should always retain forward progress first
+- standalone apps must not outrank network service continuity; apps come after network in the policy order
+- when the system is overloaded, optional/background work should be throttled before foreground interactivity is touched
+- restart policy should favor recovering lower-priority services around a still-live desktop instead of restarting the whole session
+
+### Phase A: Kernel Event Primitives
+
+- [x] process/service bootstrap and request/reply IPC exist
+- [x] service supervision/restart exists in initial form
+- [x] cooperative execution points exist through `yield`/`sleep`
+- [~] timer-driven tick hooks now exist as an initial event substrate, but not yet as the final waitable model
+- [ ] add first-class kernel event objects (`queue`, `waitable`, `signal`, `completion`)
+- [ ] add per-service event mailbox/ring abstraction instead of ad-hoc request transport only
+- [ ] add timeout/cancel primitives for pending work items
+- [ ] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
+- [ ] add subscription model for async completion and state-change notifications
+- [ ] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
+- [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
+- [ ] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
+
+### Phase B: Input / Desktop Decoupling
+
+- [x] keyboard polling can bypass degraded worker transport
+- [x] mouse polling can bypass degraded worker transport
+- [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; foreground modular apps still need the same treatment
+- [ ] move input service to event publication ownership instead of kernel fallback ownership
+- [ ] split desktop input ingestion from desktop render/update loop
+- [ ] introduce explicit per-device queues for keyboard, mouse, and future gamepad/touch sources
+- [ ] convert desktop shortcuts, pointer motion, focus changes, and window actions into queued events
+- [ ] make `startx` survive input-service restart without direct-driver fallback
+- [ ] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
+- [ ] prove keyboard and mouse remain live while audio/network/video workers restart
+
+### Phase C: Audio Async Data Plane
+
+- [x] control/status ABI exists
+- [x] direct write path exists for current backends
+- [x] async enqueue syscall exists for startup playback (`SYSCALL_AUDIO_WRITE_ASYNC`)
+- [x] startup sound no longer needs to run as a synchronous desktop-owned playback loop
+- [ ] move audio queue ownership entirely into `audiosvc`
+- [ ] add evented playback completions / underrun notifications back to userland
+- [ ] add async capture queue and delivery path
+- [ ] stop using the desktop process as a cooperative pump participant for audio progress
+- [ ] make `compat-auich`, `compat-azalia`, and future `compat-uaudio` complete playback/capture without UI-coupled progress
+- [ ] move mixer policy/default-route policy fully out of kernel local handlers
+
+### Phase D: Video / Presentation Split
+
+- [ ] separate window/compositor logic from framebuffer/present backend logic
+- [ ] introduce explicit present queue / frame fence model
+- [ ] stop doing heavyweight backend work directly from desktop paint cadence
+- [ ] add evented mode-change / hotplug / backend-failure notifications
+- [ ] move video service off backend-shim steady-state execution
+- [ ] define what remains privileged for GPU/MMIO ownership versus what moves into service processes
+
+### Phase E: Storage / Filesystem Async Split
+
+- [ ] replace synchronous request/response-only file path with queued IO requests where it matters
+- [ ] add async block IO completion path
+- [ ] add writeback worker model so persistence flush does not block unrelated app/UI work
+- [ ] move VFS execution/discovery off placeholder/stub bridging toward native executable lookup
+- [ ] remove filesystem steady-state dependence on kernel local handler execution
+
+### Phase F: Network Async Split
+
+- [ ] replace current control-plane MVP with real packet TX/RX queues
+- [ ] add socket wakeup/readiness events
+- [ ] add async DNS/DHCP completion flow
+- [ ] keep `netmgrd` as policy daemon, not datapath owner
+- [ ] remove steady-state dependence on kernel local handler execution for networking
+
+### Phase G: Strict Microkernel Cutover
+
+- [ ] remove backend-shim syscall from steady-state service execution
+- [ ] keep kernel-side local handlers only for bootstrap/rescue, or remove them entirely
+- [ ] move storage/filesystem/video/input/console/network/audio backend ownership to service processes or narrowly-scoped driver tasks
+- [ ] define per-domain crash containment and restart contracts
+- [ ] prove that one failed service does not freeze unrelated UI/control loops
+- [ ] audit privileged kernel code down to scheduler, VM, IPC, interrupts, supervision, and minimal hardware mediation
+- [ ] codify desktop/input primacy in scheduler and supervision policy, not just in docs
+
+## Checklist For "Microkernel For Real"
+
+The system should only be called a real microkernel in the strict sense when all items below are true together:
+
+- [ ] desktop input, render, audio startup, and app launch paths are all asynchronous and queue-driven
+- [ ] no desktop/UI path depends on synchronous device writes to make forward progress
+- [ ] storage/filesystem/video/input/console/network/audio no longer rely on backend-shim steady-state execution
+- [ ] service restarts are normal and recoverable, not a path that requires direct kernel fallback to preserve usability
+- [ ] audio has real async playback and capture with completion/wakeup events
+- [ ] network has real async packet IO and socket readiness semantics
+- [ ] video has explicit present queues/fences and no desktop-owned hot path into device progress
+- [ ] input is event-published by a service boundary, not preserved through permanent direct-driver syscall escape hatches
+- [ ] there is a wait/signal primitive richer than "poll + yield + sleep"
+- [ ] each major task class runs in an independent async worker/thread context that emits auditable events
+- [ ] shell, desktop, and foreground userland apps all execute outside the bootstrap/main thread
+- [ ] compatibility stubs are either gone or clearly isolated to rescue/boot mode
+- [ ] native USB runtime storage and audio backends exist
+- [ ] failure of one service host does not freeze pointer motion, keyboard input, repaint cadence, or unrelated services
+- [ ] scheduler policy explicitly protects desktop, mouse, and keyboard responsiveness over optional background work
+
+## Checklist For "System Perfect"
+
+This is the practical quality bar on top of the stricter architectural one:
+
+- [ ] `make run`, `make run-debug`, `run-azalia`, and the hardware-profile targets all boot to a responsive desktop on `2+` CPUs
+- [ ] startup sound works or fails fast without ever freezing input/video
+- [ ] keyboard, mouse, video, and audio remain responsive while services degrade/restart
+- [ ] desktop stability remains the top priority independent of processor count or backend quality
+- [ ] HDA/AC97/USB audio backend selection is deterministic and explained in telemetry
+- [ ] every major service exports actionable health/progress/error state
+- [ ] the desktop can survive service restart of audio, input, network, and video without reboot
+- [ ] the validation matrix covers QEMU plus the known real laptop classes already tracked in-tree
+
 ## Document Reality Audit
 
 The statements below classify how much of this document is literally true in the current tree.
@@ -174,6 +343,7 @@ The statements below classify how much of this document is literally true in the
 ### Not Yet True If Read Literally As End-State Claims
 
 - VibeOS is not yet a fully extracted service-oriented microkernel in the strict sense. The repository is currently a hybrid system with real service boundaries plus compatibility bridges back into in-kernel handlers.
+- `init` has started moving toward supervisor-only behavior by launching separate built-in shell/desktop hosts, but modular AppFS apps still do not get independent task contexts yet.
 - `network` is not yet a real networking stack/service. It is currently a query/capability stub with request ABI scaffolding.
 - `audio` is not yet a real playback/capture service. It is currently a query/control stub with no real DMA/ring/mixer backend.
 - The boot loader is not yet a fully general FAT32 loader. It is a robust current-path loader tuned to the current image layout.

@@ -22,6 +22,7 @@ int to_upper(int c);
 int audio_play_wav_best_effort(const char *path, const char *tag);
 const char *audio_last_playback_error(void);
 const char *audio_last_playback_detail(void);
+int audio_desktop_startup_wav_allowed(void);
 
 struct audio_async_playback {
     int active;
@@ -36,6 +37,7 @@ struct audio_async_playback {
     uint32_t idle_timeout;
     uint32_t last_chunk_ticks;
     uint32_t params_storage[16];
+    int use_kernel_async;
     char tag[32];
 };
 

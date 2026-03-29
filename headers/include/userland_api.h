@@ -79,7 +79,15 @@ enum syscall_id {
     SYSCALL_NETWORK_ACCEPT = 72,
     SYSCALL_NETWORK_CONNECT_ETHERNET = 73,
     SYSCALL_NETWORK_CONFIGURE_ETHERNET = 74,
-    SYSCALL_AUDIO_READ = 75
+    SYSCALL_AUDIO_READ = 75,
+    SYSCALL_AUDIO_WRITE_ASYNC = 76,
+    SYSCALL_LAUNCH_BUILTIN_USER = 77
+};
+
+enum userland_builtin_target {
+    USERLAND_BUILTIN_NONE = 0,
+    USERLAND_BUILTIN_SHELL = 1,
+    USERLAND_BUILTIN_DESKTOP = 2
 };
 
 enum input_keycode {
@@ -95,6 +103,7 @@ struct mouse_state {
     int y;
     int dx;
     int dy;
+    int wheel;
     uint8_t buttons;
 };
 
@@ -226,9 +235,16 @@ struct userland_launch_info {
     char name[16];
 };
 
-#define TASK_SNAPSHOT_ABI_VERSION 1u
+#define TASK_SNAPSHOT_ABI_VERSION 2u
 #define TASK_SNAPSHOT_NAME_MAX 16u
 #define TASK_SNAPSHOT_MAX 32u
+
+#define TASK_SNAPSHOT_FLAG_BOOTSTRAP (1u << 0)
+#define TASK_SNAPSHOT_FLAG_CRITICAL (1u << 1)
+#define TASK_SNAPSHOT_FLAG_BUILTIN (1u << 2)
+#define TASK_SNAPSHOT_FLAG_SERVICE_ONLINE (1u << 16)
+#define TASK_SNAPSHOT_FLAG_SERVICE_DEGRADED (1u << 17)
+#define TASK_SNAPSHOT_FLAG_SERVICE_RESTARTABLE (1u << 18)
 
 struct task_snapshot_entry {
     uint32_t pid;
@@ -241,6 +257,8 @@ struct task_snapshot_entry {
     uint32_t runtime_ticks;
     uint32_t context_switches;
     uint32_t service_type;
+    uint32_t priority_tier;
+    uint32_t service_restart_count;
     uint32_t flags;
     char name[TASK_SNAPSHOT_NAME_MAX];
 };

@@ -6,6 +6,7 @@
 
 struct process;
 struct mk_message;
+struct task_snapshot_entry;
 
 #define MK_SERVICE_NAME_MAX 16u
 #define MK_SERVICE_SLOTS 32u
@@ -64,6 +65,7 @@ int mk_service_is_online(uint32_t type);
 int mk_service_ensure(uint32_t type);
 int mk_service_request(uint32_t type, const struct mk_message *request, struct mk_message *reply);
 int mk_service_backend_handle_current(const struct mk_message *request, struct mk_message *reply);
+void mk_service_fill_task_snapshot(struct task_snapshot_entry *entry);
 const struct mk_service_record *mk_service_find_by_type(uint32_t type);
 const struct mk_service_record *mk_service_find_by_name(const char *name);
 

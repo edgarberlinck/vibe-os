@@ -3,6 +3,7 @@
 #include <kernel/kernel_string.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
+#include <kernel/microkernel/service.h>
 #include <kernel/kernel.h>    /* for panic if allocation fails */
 #include <kernel/memory/heap.h>   /* kernel_malloc, kernel_free */
 
@@ -21,6 +22,38 @@ static uint32_t process_normalize_stack_size(uint32_t stack_size) {
 
 static int g_next_pid = 1;
 
+static uint32_t process_priority_for(enum process_kind kind,
+                                     uint32_t service_type,
+                                     uint32_t launch_flags) {
+    if (kind == PROCESS_KIND_USER) {
+        if ((launch_flags & (MK_LAUNCH_FLAG_USER_SHELL | MK_LAUNCH_FLAG_USER_DESKTOP)) != 0u) {
+            return PROCESS_PRIORITY_DESKTOP_USER;
+        }
+        return PROCESS_PRIORITY_APP;
+    }
+    if (kind == PROCESS_KIND_SERVICE) {
+        switch (service_type) {
+        case MK_SERVICE_INPUT:
+            return PROCESS_PRIORITY_INPUT;
+        case MK_SERVICE_VIDEO:
+        case MK_SERVICE_CONSOLE:
+            return PROCESS_PRIORITY_VIDEO;
+        case MK_SERVICE_STORAGE:
+        case MK_SERVICE_FILESYSTEM:
+            return PROCESS_PRIORITY_STORAGE;
+        case MK_SERVICE_AUDIO:
+            return PROCESS_PRIORITY_AUDIO;
+        case MK_SERVICE_NETWORK:
+            return PROCESS_PRIORITY_NETWORK;
+        case MK_SERVICE_INIT:
+            return PROCESS_PRIORITY_DESKTOP_USER;
+        default:
+            return PROCESS_PRIORITY_BACKGROUND;
+        }
+    }
+    return PROCESS_PRIORITY_BACKGROUND;
+}
+
 void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
     kernel_trap_frame_t *frame;
 
@@ -38,16 +71,17 @@ void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t s
 }
 
 process_t *process_create(void (*entry)(void)) {
-    return process_create_with_stack(entry, PROCESS_KIND_USER, 0u, PROCESS_DEFAULT_STACK_SIZE);
+    return process_create_with_stack(entry, PROCESS_KIND_USER, 0u, 0u, PROCESS_DEFAULT_STACK_SIZE);
 }
 
 process_t *process_create_kind(void (*entry)(void), enum process_kind kind, uint32_t service_type) {
-    return process_create_with_stack(entry, kind, service_type, PROCESS_DEFAULT_STACK_SIZE);
+    return process_create_with_stack(entry, kind, service_type, 0u, PROCESS_DEFAULT_STACK_SIZE);
 }
 
 process_t *process_create_with_stack(void (*entry)(void),
                                      enum process_kind kind,
                                      uint32_t service_type,
+                                     uint32_t launch_flags,
                                      uint32_t stack_size) {
     uint32_t normalized_stack_size;
 
@@ -69,6 +103,7 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->state = PROCESS_READY;
     p->kind = kind;
     p->service_type = service_type;
+    p->priority_tier = process_priority_for(kind, service_type, launch_flags);
     p->stack_size = normalized_stack_size;
     p->runtime_ticks = 0u;
     p->last_start_tick = 0u;

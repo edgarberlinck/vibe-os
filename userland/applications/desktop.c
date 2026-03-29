@@ -82,6 +82,7 @@ struct personalize_state {
 struct trash_state {
     struct rect window;
     int selected_entry;
+    int scroll_offset;
     char status[64];
 };
 static struct personalize_state g_pers;
@@ -159,6 +160,10 @@ static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
         }
 
         *pending = 0;
+        if (!audio_desktop_startup_wav_allowed()) {
+            sys_write_debug("desktop: startup sound deferred for backend\n");
+            return;
+        }
         sys_write_debug("desktop: startup sound begin\n");
         if (audio_play_wav_async_start(playback, "/assets/vibe_os_desktop.wav", "desktop-session") != 0) {
             sys_write_debug("desktop: startup sound returned\n");
@@ -558,6 +563,10 @@ static void clamp_window_rect(struct rect *r);
 static void append_uint_limited(char *buf, unsigned value, int max_len);
 static void debug_window_event(const char *tag, int widx, enum app_type type, int instance);
 static void clamp_mouse_state(struct mouse_state *mouse);
+static int desktop_scroll_lines(int wheel_delta);
+static int trash_window_visible_rows(const struct trash_state *state);
+static void trash_window_clamp_scroll(struct trash_state *state);
+static int trash_window_entry_at_point(const struct trash_state *state, int x, int y);
 
 static int app_type_valid(enum app_type type) {
     return type > APP_NONE && type <= APP_TRASH;
@@ -797,6 +806,13 @@ static void clamp_mouse_state(struct mouse_state *mouse) {
     if (mouse->y < 0) mouse->y = 0;
     if (mouse->x >= (int)SCREEN_WIDTH) mouse->x = (int)SCREEN_WIDTH - 1;
     if (mouse->y >= (int)SCREEN_HEIGHT) mouse->y = (int)SCREEN_HEIGHT - 1;
+}
+
+static int desktop_scroll_lines(int wheel_delta) {
+    if (wheel_delta == 0) {
+        return 0;
+    }
+    return -wheel_delta;
 }
 
 static int fs_child_by_name(int parent, const char *name) {
@@ -2395,6 +2411,7 @@ static int alloc_window(enum app_type type) {
                 g_trash_used = 1;
                 g_trash.window = (struct rect){28, 28, 456, 324};
                 g_trash.selected_entry = -1;
+                g_trash.scroll_offset = 0;
                 g_trash.status[0] = '\0';
                 instance = 0;
                 rect = g_trash.window;
@@ -3742,6 +3759,60 @@ static struct rect trash_window_row_rect(const struct trash_state *state, int ro
     return r;
 }
 
+static int trash_window_visible_rows(const struct trash_state *state) {
+    struct rect list = trash_window_list_rect(state);
+    int visible = list.h / 16;
+
+    if (visible < 1) {
+        visible = 1;
+    }
+    return visible;
+}
+
+static void trash_window_clamp_scroll(struct trash_state *state) {
+    int entries[FS_MAX_NODES];
+    int count;
+    int limit;
+
+    if (state == 0) {
+        return;
+    }
+    count = trash_collect_entries(entries, FS_MAX_NODES);
+    limit = count - trash_window_visible_rows(state);
+    if (limit < 0) {
+        limit = 0;
+    }
+    if (state->scroll_offset < 0) {
+        state->scroll_offset = 0;
+    }
+    if (state->scroll_offset > limit) {
+        state->scroll_offset = limit;
+    }
+}
+
+static int trash_window_entry_at_point(const struct trash_state *state, int x, int y) {
+    int entries[FS_MAX_NODES];
+    int count;
+    struct rect list;
+
+    if (state == 0) {
+        return -1;
+    }
+    count = trash_collect_entries(entries, FS_MAX_NODES);
+    list = trash_window_list_rect(state);
+    for (int row = state->scroll_offset; row < count; ++row) {
+        struct rect row_rect = trash_window_row_rect(state, row - state->scroll_offset);
+
+        if (row_rect.y + row_rect.h > list.y + list.h) {
+            break;
+        }
+        if (point_in_rect(&row_rect, x, y)) {
+            return entries[row];
+        }
+    }
+    return -1;
+}
+
 static struct rect trash_window_restore_button_rect(const struct trash_state *state) {
     struct rect r = {state->window.x + state->window.w - 94, state->window.y + 68, 78, 14};
     return r;
@@ -4302,6 +4373,7 @@ static void draw_trash_window(struct trash_state *state,
     if (!selected_visible) {
         state->selected_entry = -1;
     }
+    trash_window_clamp_scroll(state);
 
     draw_window_frame(&state->window, "Lixeira", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
@@ -4309,8 +4381,8 @@ static void draw_trash_window(struct trash_state *state,
     ui_draw_inset(&list, ui_color_window_bg());
     sys_text(hero.x + 6, hero.y + 6, theme->text, "Arquivos enviados para a lixeira");
 
-    for (int i = 0; i < count; ++i) {
-        struct rect row = trash_window_row_rect(state, i);
+    for (int i = state->scroll_offset; i < count; ++i) {
+        struct rect row = trash_window_row_rect(state, i - state->scroll_offset);
         char label[24];
         int hover;
 
@@ -4500,6 +4572,7 @@ void desktop_main(void) {
         int left_press_y = mouse.y;
         int right_press_x = mouse.x;
         int right_press_y = mouse.y;
+        int wheel_delta = 0;
         struct mouse_state polled_mouse;
 
         start_button = ui_taskbar_start_button_rect();
@@ -4530,6 +4603,7 @@ void desktop_main(void) {
             mouse = polled_mouse;
             clamp_mouse_state(&mouse);
             mouse_event = 1;
+            wheel_delta += polled_mouse.wheel;
             new_left = (mouse.buttons & 0x01u) != 0;
             new_right = (mouse.buttons & 0x02u) != 0;
             if (new_left && !left_pressed) {
@@ -4632,6 +4706,51 @@ void desktop_main(void) {
             dirty = 1;
         }
 
+        if (wheel_delta != 0) {
+            int wheel_lines = desktop_scroll_lines(wheel_delta);
+
+            if (menu_open) {
+                struct rect menu_view = start_menu_list_view_rect();
+                int *scroll_ptr = start_menu_search_active(start_menu_search) ?
+                                  &start_menu_search_scroll :
+                                  &start_menu_scroll[(int)start_menu_tab];
+
+                if (point_in_rect(&menu_view, mouse.x, mouse.y)) {
+                    *scroll_ptr += wheel_lines;
+                    start_menu_clamp_scroll(scroll_ptr, filtered_count);
+                    menu_scroll_dragging = 0;
+                    dirty = 1;
+                }
+            }
+
+            for (int i = MAX_WINDOWS - 1; i >= 0; --i) {
+                if (!g_windows[i].active || g_windows[i].minimized) {
+                    continue;
+                }
+                if (!point_in_rect(&g_windows[i].rect, mouse.x, mouse.y)) {
+                    continue;
+                }
+                if (g_windows[i].type == APP_FILEMANAGER) {
+                    struct filemanager_state *fm = &g_fms[g_windows[i].instance];
+                    struct rect list = filemanager_list_rect(fm);
+
+                    if (point_in_rect(&list, mouse.x, mouse.y)) {
+                        filemanager_scroll_by(fm, wheel_lines);
+                        dirty = 1;
+                    }
+                } else if (g_windows[i].type == APP_TRASH) {
+                    struct rect list = trash_window_list_rect(&g_trash);
+
+                    if (point_in_rect(&list, mouse.x, mouse.y)) {
+                        g_trash.scroll_offset += wheel_lines;
+                        trash_window_clamp_scroll(&g_trash);
+                        dirty = 1;
+                    }
+                }
+                break;
+            }
+        }
+
         for (int i = 0; i < MAX_CLOCKS; ++i) {
             if (g_clock_used[i] && !has_active_window_instance(APP_CLOCK, i)) {
                 g_clock_used[i] = 0;
@@ -4711,7 +4830,7 @@ void desktop_main(void) {
                                    focused >= 0 &&
                                    g_windows[focused].type == APP_CRAFT &&
                                    g_windows[focused].instance == i,
-                                   mouse.x, mouse.y, mouse.dx, mouse.dy,
+                                   mouse.x, mouse.y, mouse.dx, mouse.dy, wheel_delta,
                                    mouse.buttons);
                 if (craft_step(&g_craft[i], ticks)) {
                     dirty = 1;
@@ -5551,22 +5670,9 @@ void desktop_main(void) {
                                 g_trash.selected_entry = -1;
                                 dirty = 1;
                             } else if (point_in_rect(&list, click_x, click_y)) {
-                                int entries[FS_MAX_NODES];
-                                int count = trash_collect_entries(entries, FS_MAX_NODES);
-
                                 g_trash.selected_entry = -1;
                                 g_trash.status[0] = '\0';
-                                for (int row = 0; row < count; ++row) {
-                                    struct rect row_rect = trash_window_row_rect(&g_trash, row);
-
-                                    if (row_rect.y + row_rect.h > list.y + list.h) {
-                                        break;
-                                    }
-                                    if (point_in_rect(&row_rect, click_x, click_y)) {
-                                        g_trash.selected_entry = entries[row];
-                                        break;
-                                    }
-                                }
+                                g_trash.selected_entry = trash_window_entry_at_point(&g_trash, click_x, click_y);
                                 dirty = 1;
                             }
                         } else if (type == APP_IMAGEVIEWER) {

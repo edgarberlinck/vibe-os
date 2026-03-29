@@ -158,6 +158,7 @@ static int mk_input_local_handler(const struct mk_message *request,
         int y;
         int dx;
         int dy;
+        int wheel;
         uint8_t buttons;
 
         if (request->payload_size != 0u) {
@@ -167,11 +168,12 @@ static int mk_input_local_handler(const struct mk_message *request,
             return mk_input_reply_mouse(reply, 0, 0);
         }
 
-        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
+        kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
         state.x = x;
         state.y = y;
         state.dx = dx;
         state.dy = dy;
+        state.wheel = wheel;
         state.buttons = buttons;
         return mk_input_reply_mouse(reply, 1, &state);
     }
@@ -253,6 +255,7 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
     int y;
     int dx;
     int dy;
+    int wheel;
     uint8_t buttons;
 
     if (state == 0) {
@@ -264,11 +267,12 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
             memset(state, 0, sizeof(*state));
             return 0;
         }
-        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
+        kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
         state->x = x;
         state->y = y;
         state->dx = dx;
         state->dy = dy;
+        state->wheel = wheel;
         state->buttons = buttons;
         return 1;
     }
@@ -279,11 +283,12 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
             memset(state, 0, sizeof(*state));
             return 0;
         }
-        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
+        kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
         state->x = x;
         state->y = y;
         state->dx = dx;
         state->dy = dy;
+        state->wheel = wheel;
         state->buttons = buttons;
         return 1;
     }

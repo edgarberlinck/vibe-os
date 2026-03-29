@@ -31,7 +31,7 @@ void kernel_mouse_init(void);
 int kernel_mouse_has_data(void);
 
 /* Read absolute mouse state plus raw relative deltas. */
-void kernel_mouse_read(int *x, int *y, int *dx, int *dy, uint8_t *buttons);
+void kernel_mouse_read(int *x, int *y, int *dx, int *dy, int *wheel, uint8_t *buttons);
 
 /* Re-center and clamp the mouse to the current video mode. */
 void kernel_mouse_sync_to_video(void);

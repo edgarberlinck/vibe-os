@@ -44,6 +44,18 @@ make apps-clean   # Remove /bin and /lib directories
 make run
 ```
 
+Default `make run` profile now uses a T61-ish QEMU setup:
+- `-cpu core2duo`
+- `-smp 2,sockets=1,cores=2,threads=1,maxcpus=2`
+- `-machine pc`
+
+You can override it inline when needed:
+```bash
+make run QEMU_RUN_CPU=pentium
+make run QEMU_RUN_SMP=1
+make run QEMU_RUN_MACHINE=q35
+```
+
 ### Run with Debug Serial Output
 ```bash
 make run-debug

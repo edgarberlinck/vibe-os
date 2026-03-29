@@ -30,7 +30,8 @@ int mk_launch_validate_descriptor(const struct mk_launch_descriptor *descriptor)
         return -1;
     }
     if (descriptor->kind != MK_LAUNCH_KIND_DRIVER &&
-        descriptor->kind != MK_LAUNCH_KIND_SERVICE) {
+        descriptor->kind != MK_LAUNCH_KIND_SERVICE &&
+        descriptor->kind != MK_LAUNCH_KIND_USER) {
         return -1;
     }
     if (descriptor->kind == MK_LAUNCH_KIND_SERVICE &&
@@ -108,6 +109,7 @@ int mk_launch_bootstrap(const struct mk_launch_descriptor *descriptor) {
     process = process_create_with_stack(descriptor->entry,
                                         process_kind,
                                         descriptor->service_type,
+                                        descriptor->flags,
                                         descriptor->stack_size == 0u
                                             ? MK_LAUNCH_STACK_SIZE_DEFAULT
                                             : descriptor->stack_size);

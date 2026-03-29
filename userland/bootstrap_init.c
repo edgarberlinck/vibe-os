@@ -1,7 +1,5 @@
 #include <userland/modules/include/console.h>
 #include <userland/modules/include/fs.h>
-#include <userland/modules/include/lang_loader.h>
-#include <userland/modules/include/shell.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
 #include <kernel/bootinfo.h>
@@ -34,58 +32,26 @@ static void bootstrap_print_banner(void) {
 }
 
 static int bootstrap_run_startup_apps(void) {
-    char *userland_argv[2];
-    char *startx_argv[2];
-    int rc;
-    int used_direct_startx = 0;
     struct userland_launch_info info;
-    extern void kernel_debug_puts(const char *);
 
     if (sys_launch_info(&info) == 0 &&
         (info.boot_flags & BOOTINFO_FLAG_BOOT_RESCUE_SHELL) != 0u) {
-        kernel_debug_puts("init: rescue shell requested, skipping userland app\n");
+        sys_write_debug("init: rescue shell requested, skipping desktop launch\n");
         return -2;
     }
 
-    userland_argv[0] = "userland";
-    userland_argv[1] = 0;
-    startx_argv[0] = "startx";
-    startx_argv[1] = 0;
-
-    kernel_debug_puts("init: startup app begin\n");
-    lang_invalidate_directory_cache();
-    rc = lang_try_run(1, userland_argv);
-    if (rc != 0) {
-        kernel_debug_puts("init: userland app first attempt failed, retrying\n");
-        sys_yield();
-        lang_invalidate_directory_cache();
-        rc = lang_try_run(1, userland_argv);
-    }
-    if (rc != 0 &&
-        (info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
+    if ((info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
         (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
-        kernel_debug_puts("init: userland app unavailable, trying startx directly\n");
-        used_direct_startx = 1;
-        sys_yield();
-        lang_invalidate_directory_cache();
-        rc = lang_try_run(1, startx_argv);
-        if (rc != 0) {
-            kernel_debug_puts("init: direct startx failed, retrying\n");
-            sys_yield();
-            lang_invalidate_directory_cache();
-            rc = lang_try_run(1, startx_argv);
+        int pid = sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP);
+
+        if (pid > 0) {
+            sys_write_debug("init: desktop host launched\n");
+            return 0;
         }
+        sys_write_debug("init: desktop host launch failed\n");
     }
-    if (rc == 0) {
-        if (used_direct_startx) {
-            kernel_debug_puts("init: direct startx returned\n");
-        } else {
-            kernel_debug_puts("init: userland app returned\n");
-        }
-    } else {
-        kernel_debug_puts("init: userland app missing\n");
-    }
-    return rc;
+
+    return -1;
 }
 
 static void bootstrap_storage_smoke_test(void) {
@@ -139,7 +105,12 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     fs_init();
     kernel_debug_puts("init: fs_init returned\n");
     bootstrap_storage_smoke_test();
-    bootstrap_try_play_boot_sound();
+    if ((info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) == 0u ||
+        (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) != 0u) {
+        bootstrap_try_play_boot_sound();
+    } else {
+        sys_write_debug("init: boot sound deferred for desktop boot\n");
+    }
 
     sys_write_debug("init: appfs launcher ready\n");
     kernel_debug_puts("init: appfs launcher ready\n");
@@ -149,15 +120,21 @@ __attribute__((section(".entry"))) void userland_entry(void) {
 
     rc = bootstrap_run_startup_apps();
     if (rc != 0) {
-        if (rc == -2) {
-            console_write("init: rescue shell builtin ativa\n");
+        int shell_pid = sys_launch_builtin_user(USERLAND_BUILTIN_SHELL);
+
+        if (shell_pid > 0) {
+            if (rc == -2) {
+                console_write("init: rescue shell host ativa\n");
+            } else {
+                console_write("init: fallback para shell host embutida\n");
+            }
+            kernel_debug_puts("init: shell host launched\n");
         } else {
-            console_write("init: fallback para shell embutido userland/modules\n");
+            console_write("init: shell host launch failed\n");
+            kernel_debug_puts("init: shell host launch failed\n");
         }
     }
-    kernel_debug_puts("init: bootstrap shell active\n");
-    shell_start_ready();
-    kernel_debug_puts("init: bootstrap shell returned, halting\n");
+    kernel_debug_puts("init: supervisor idle\n");
     for (;;)
-        __asm__ volatile("hlt");
+        sys_yield();
 }

@@ -39,16 +39,6 @@ struct bootdebug_persist {
 static volatile struct bootdebug_persist *const bootdebug_persist =
     (volatile struct bootdebug_persist *)(uintptr_t)BOOTDEBUG_ADDR;
 
-static int kernel_smp_boot_experiment_enabled(void) {
-    const volatile struct bootinfo *bootinfo =
-        (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
-
-    if (bootinfo->magic != BOOTINFO_MAGIC || bootinfo->version != BOOTINFO_VERSION) {
-        return 0;
-    }
-    return (bootinfo->flags & BOOTINFO_FLAG_EXPERIMENTAL_SMP) != 0u;
-}
-
 static const char *kernel_smp_skip_reason(void) {
     const struct kernel_cpu_topology *topology = kernel_cpu_topology();
 
@@ -58,11 +48,13 @@ static const char *kernel_smp_skip_reason(void) {
     if (!topology->apic_supported) {
         return "local apic unavailable";
     }
-    if (!topology->mp_table_present && !topology->synthetic_apic_map) {
+    if (!topology->mp_table_present &&
+        !topology->acpi_madt_present &&
+        !topology->synthetic_apic_map) {
         return "no multiprocessor topology";
     }
-    if (!kernel_smp_boot_experiment_enabled()) {
-        return "experimental toggle off";
+    if (!topology->mp_table_present && !topology->acpi_madt_present) {
+        return "synthetic apic map only";
     }
     if (!local_apic_enabled()) {
         return "local apic not enabled";
@@ -372,14 +364,10 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
         kernel_text_puts("CPU topology: single processor\n");
         kernel_debug_puts("CPU topology: single processor\n");
     }
-    if (kernel_cpu_is_smp_capable() && kernel_smp_boot_experiment_enabled()) {
+    if (kernel_cpu_is_smp_capable() &&
+        (kernel_cpu_topology()->mp_table_present ||
+         kernel_cpu_topology()->acpi_madt_present)) {
         local_apic_init();
-    } else if (kernel_cpu_is_smp_capable()) {
-        kernel_text_puts("LAPIC/SMP experimental toggle is OFF\n");
-        kernel_text_puts("SMP fallback: experimental toggle OFF\n");
-        kernel_debug_puts("LAPIC/SMP experimental toggle is OFF\n");
-        kernel_debug_puts("SMP fallback: experimental toggle OFF\n");
-        kernel_debug_printf("smp: fallback reason=%s\n", kernel_smp_skip_reason());
     } else {
         kernel_text_puts("LAPIC/SMP deferred on this platform\n");
         kernel_text_puts("SMP fallback: platform not APIC-ready\n");
@@ -515,11 +503,19 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_usb_host_init();
     kernel_text_puts("Scheduler OK\n");
 
-    if (kernel_cpu_is_smp_capable() && local_apic_enabled()) {
+    if (kernel_cpu_is_smp_capable() &&
+        (kernel_cpu_topology()->mp_table_present ||
+         kernel_cpu_topology()->acpi_madt_present) &&
+        local_apic_enabled()) {
+        kernel_text_puts("SMP bring-up...\n");
+        smp_persist_trace_arm();
+        smp_persist_trace_mark('B');
         smp_init();
+        smp_persist_trace_mark('R');
         if (smp_started_cpu_count() > 1u) {
             kernel_text_puts("SMP OK\n");
             kernel_debug_puts("SMP OK\n");
+            smp_persist_trace_disarm();
         } else {
             kernel_text_puts("SMP partial\n");
             kernel_debug_puts("SMP partial\n");

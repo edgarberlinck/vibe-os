@@ -7,6 +7,7 @@
    because the bootloader already sets protected mode and a flat GDT. */
 void cpu_init(void);
 void gdt_init(void);
+void kernel_cpu_enable_current_features(void);
 int kernel_cpu_has_pat(void);
 int kernel_cpu_has_sse2(void);
 int kernel_cpu_sse_enabled(void);
@@ -22,6 +23,7 @@ struct kernel_cpu_topology {
     uint32_t cpuid_model;
     uint32_t cpuid_stepping;
     uint32_t mp_table_present;
+    uint32_t acpi_madt_present;
     uint32_t synthetic_apic_map;
     char vendor[13];
 };

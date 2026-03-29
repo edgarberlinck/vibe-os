@@ -89,6 +89,15 @@ QEMU_SERIAL_LOG ?= build/qemu-serial.log
 QEMU_AUDIO_CAPTURE_WAV ?= build/qemu-audio.wav
 QEMU_IMAGE_OPTS ?= format=raw,file=$(IMAGE),snapshot=on
 QEMU_NET_OPTS ?= -netdev user,id=net0 -device virtio-net-pci,netdev=net0
+QEMU_RUN_MACHINE ?= pc
+QEMU_RUN_CPU ?= core2duo
+QEMU_RUN_SMP ?= 2,sockets=1,cores=2,threads=1,maxcpus=2
+QEMU_RUN_VGA ?= std
+QEMU_RUN_GPU_OPTS ?=
+QEMU_RUN_VIDEO_OPTS ?= -vga $(QEMU_RUN_VGA) $(QEMU_RUN_GPU_OPTS)
+QEMU_RUN_RTC_OPTS ?= -rtc base=localtime
+QEMU_RUN_USB_OPTS ?= -usb
+QEMU_RUN_COMMON_OPTS ?= -machine $(QEMU_RUN_MACHINE) -cpu $(QEMU_RUN_CPU) -smp $(QEMU_RUN_SMP) $(QEMU_RUN_VIDEO_OPTS) $(QEMU_RUN_RTC_OPTS) $(QEMU_RUN_USB_OPTS)
 QEMU_AUDIO_DEVICE ?= AC97
 QEMU_AUDIO_LIVE_CONTROLLER ?= intel-hda
 QEMU_AUDIO_LIVE_CODEC ?= hda-output
@@ -113,9 +122,11 @@ endif
 ifeq ($(strip $(QEMU_AUDIO_DRIVER)),)
 QEMU_AUDIO_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
 QEMU_AUDIO_LIVE_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
+QEMU_AUDIO_HDA_LIVE_OPTS ?= -device intel-hda -device hda-duplex
 else
 QEMU_AUDIO_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
 QEMU_AUDIO_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_LIVE_CONTROLLER) -device $(QEMU_AUDIO_LIVE_CODEC),audiodev=snd0
+QEMU_AUDIO_HDA_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0
 endif
 QEMU_AUDIO_CAPTURE_OPTS ?= -audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
 ifeq ($(strip $(PYTHON)),)
@@ -416,6 +427,7 @@ endif
 USERLAND_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 KERNEL_USERLAND_SRCS := \
 	$(USERLAND_DIR)/bootstrap_init.c \
+	$(USERLAND_DIR)/bootstrap_hosts.c \
 	$(USERLAND_DIR)/bootstrap_service.c \
 	$(USERLAND_DIR)/bootstrap_runtime.c \
 	$(USERLAND_DIR)/modules/shell.c \
@@ -1494,12 +1506,12 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 
 run: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
+		$(QEMU) $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64"; \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
+			qemu-system-x86_64 $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
@@ -1514,10 +1526,10 @@ run-debug-gui: $(IMAGE)
 	@rm -f $(QEMU_SERIAL_LOG)
 	@echo "QEMU GUI debug ativo. Serial do kernel: $(QEMU_SERIAL_LOG)"
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+		$(QEMU) $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+			qemu-system-x86_64 $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1526,10 +1538,10 @@ run-debug-gui: $(IMAGE)
 
 run-headless-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
+		$(QEMU) $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1556,6 +1568,88 @@ run-headless-audio-debug: $(IMAGE)
 			exit 1; \
 		fi; \
 	fi
+
+run-azalia: $(IMAGE)
+	@echo "Perfil: QEMU live audio via Intel HDA/Azalia com Core 2 Duo SMP"
+	@$(MAKE) --no-print-directory run \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_AUDIO_LIVE_OPTS="$(QEMU_AUDIO_HDA_LIVE_OPTS)"
+
+run-debug-azalia: $(IMAGE)
+	@echo "Perfil: debug GUI com Intel HDA/Azalia e serial em $(QEMU_SERIAL_LOG)"
+	@$(MAKE) --no-print-directory run-debug-gui \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_AUDIO_LIVE_OPTS="$(QEMU_AUDIO_HDA_LIVE_OPTS)"
+
+run-gpu-intel: $(IMAGE)
+	@echo "Preset GPU Intel-like: plataforma q35 + std-vga/bochs (aproximacao QEMU)"
+	@$(MAKE) --no-print-directory run \
+		QEMU_RUN_MACHINE=q35 \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_RUN_VGA=std \
+		QEMU_RUN_GPU_OPTS=
+
+run-gpu-nvidia: $(IMAGE)
+	@echo "Preset GPU Nvidia-like: plataforma pc + vmware SVGA (aproximacao discreta no QEMU)"
+	@$(MAKE) --no-print-directory run \
+		QEMU_RUN_MACHINE=pc \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_RUN_VGA=vmware \
+		QEMU_RUN_GPU_OPTS=
+
+run-gpu-amd: $(IMAGE)
+	@echo "Preset GPU AMD/ATI-like: plataforma q35 + ati-vga"
+	@$(MAKE) --no-print-directory run \
+		QEMU_RUN_MACHINE=q35 \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_RUN_VGA=none \
+		QEMU_RUN_GPU_OPTS='-device ati-vga'
+
+run-t61: $(IMAGE)
+	@echo "Perfil ThinkPad T61: Core 2 Duo, 2 GiB, Intel HDA, GPU Intel-like"
+	@$(MAKE) --no-print-directory run \
+		QEMU_MEMORY_MB=2048 \
+		QEMU_RUN_MACHINE=pc \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_RUN_VGA=std \
+		QEMU_AUDIO_LIVE_OPTS="$(QEMU_AUDIO_HDA_LIVE_OPTS)"
+
+run-t400: $(IMAGE)
+	@echo "Perfil ThinkPad T400: Core 2 Duo, 4 GiB, Intel HDA, chipset q35, GPU Intel-like"
+	@$(MAKE) --no-print-directory run \
+		QEMU_MEMORY_MB=4096 \
+		QEMU_RUN_MACHINE=q35 \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_RUN_VGA=std \
+		QEMU_AUDIO_LIVE_OPTS="$(QEMU_AUDIO_HDA_LIVE_OPTS)"
+
+run-acer: $(IMAGE)
+	@echo "Perfil Acer Aspire-like: Core 2 Duo, 3 GiB, Intel HDA, GPU AMD/ATI-like"
+	@$(MAKE) --no-print-directory run \
+		QEMU_MEMORY_MB=3072 \
+		QEMU_RUN_MACHINE=q35 \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_RUN_VGA=none \
+		QEMU_RUN_GPU_OPTS='-device ati-vga' \
+		QEMU_AUDIO_LIVE_OPTS="$(QEMU_AUDIO_HDA_LIVE_OPTS)"
+
+run-dell: $(IMAGE)
+	@echo "Perfil Dell Latitude-like: Core 2 Duo, 4 GiB, Intel HDA, GPU Nvidia-like"
+	@$(MAKE) --no-print-directory run \
+		QEMU_MEMORY_MB=4096 \
+		QEMU_RUN_MACHINE=pc \
+		QEMU_RUN_CPU=core2duo \
+		QEMU_RUN_SMP='2,sockets=1,cores=2,threads=1,maxcpus=2' \
+		QEMU_RUN_VGA=vmware \
+		QEMU_AUDIO_LIVE_OPTS="$(QEMU_AUDIO_HDA_LIVE_OPTS)"
 
 run-headless-core2duo-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \

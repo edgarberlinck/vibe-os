@@ -2,6 +2,7 @@
 #include <kernel/cpu/cpu.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/hal/io.h>
 
 #define IA32_APIC_BASE_MSR 0x1Bu
 #define IA32_APIC_BASE_BSP 0x100u
@@ -73,6 +74,16 @@ static int local_apic_wait_icr_idle(void) {
         }
     }
     return -1;
+}
+
+static void local_apic_wait_ticks(uint32_t ticks) {
+    uint32_t start = kernel_timer_get_ticks();
+    uint32_t deadline = start + ticks;
+
+    while ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
+        io_wait();
+        __asm__ volatile("pause");
+    }
 }
 
 void local_apic_init(void) {
@@ -150,9 +161,15 @@ int local_apic_send_init(uint32_t apic_id) {
     if (local_apic_wait_icr_idle() != 0) {
         return -1;
     }
+    /* Older chipsets can require the INIT assert window to be held for a real delay. */
+    local_apic_wait_ticks(1u);
     local_apic_write(LAPIC_ICRHI_REG, apic_id << 24);
     local_apic_write(LAPIC_ICRLO_REG, LAPIC_DM_INIT | LAPIC_TRIGGER_LEVEL);
-    return local_apic_wait_icr_idle();
+    if (local_apic_wait_icr_idle() != 0) {
+        return -1;
+    }
+    local_apic_wait_ticks(1u);
+    return 0;
 }
 
 int local_apic_send_startup(uint32_t apic_id, uint8_t vector) {
@@ -167,6 +184,13 @@ int local_apic_send_startup(uint32_t apic_id, uint8_t vector) {
     local_apic_write(LAPIC_ICRHI_REG, apic_id << 24);
     local_apic_write(LAPIC_ICRLO_REG, LAPIC_DM_STARTUP | (uint32_t)vector);
     __asm__ volatile("pause");
+    if (local_apic_wait_icr_idle() != 0) {
+        kernel_debug_printf("lapic: startup postwait timeout apic=%x icr=%x\n",
+                            apic_id,
+                            local_apic_read(LAPIC_ICRLO_REG));
+        return -1;
+    }
+    local_apic_wait_ticks(1u);
     return 0;
 }
 

@@ -14,6 +14,8 @@
 #include <kernel/userland_service.h>
 
 #define MK_AUDIO_SOFT_BUFFER_SIZE 16384u
+#define MK_AUDIO_ASYNC_WRITE_BUFFER_SIZE 65536u
+#define MK_AUDIO_ASYNC_WRITE_CHUNK 4096u
 #define PCI_CLASS_MULTIMEDIA 0x04u
 #define PCI_SUBCLASS_MULTIMEDIA_AUDIO 0x01u
 #define PCI_SUBCLASS_MULTIMEDIA_HDA 0x03u
@@ -525,12 +527,16 @@ struct mk_audio_service_state {
     uint8_t default_input;
     uint8_t playback_buffer[MK_AUDIO_SOFT_BUFFER_SIZE];
     uint8_t capture_buffer[MK_AUDIO_SOFT_BUFFER_SIZE];
+    uint8_t async_write_buffer[MK_AUDIO_ASYNC_WRITE_BUFFER_SIZE];
     uint32_t playback_head;
     uint32_t playback_tail;
     uint32_t playback_fill;
     uint32_t capture_head;
     uint32_t capture_tail;
     uint32_t capture_fill;
+    uint32_t async_write_head;
+    uint32_t async_write_tail;
+    uint32_t async_write_fill;
     uint32_t playback_bytes_written;
     uint32_t playback_write_calls;
     uint32_t playback_bytes_consumed;
@@ -758,6 +764,12 @@ static uint32_t mk_audio_hda_input_mask(uint32_t pin_caps, uint32_t config_defau
 static int mk_audio_hda_output_priority(uint32_t pin_caps, uint32_t config_default);
 static void mk_audio_normalize_params(struct audio_swpar *params);
 static void mk_audio_normalize_uaudio_params(struct audio_swpar *params);
+static void mk_audio_state_reset_async_write(void);
+static uint32_t mk_audio_async_ring_write(const uint8_t *data, uint32_t size);
+static uint32_t mk_audio_async_ring_peek(uint8_t *data, uint32_t size);
+static void mk_audio_async_ring_consume(uint32_t size);
+static uint32_t mk_audio_async_pump_chunk_limit(void);
+static void mk_audio_service_tick(uint32_t tick);
 static uint32_t mk_audio_uaudio_frame_bytes(void);
 static void mk_audio_reset_uaudio_runtime(void);
 static void mk_audio_uaudio_update_output_progress(void);
@@ -8183,12 +8195,83 @@ static void mk_audio_state_reset_playback(void) {
     memset(g_audio_state.playback_buffer, 0, sizeof(g_audio_state.playback_buffer));
 }
 
+static void mk_audio_state_reset_async_write(void) {
+    g_audio_state.async_write_head = 0u;
+    g_audio_state.async_write_tail = 0u;
+    g_audio_state.async_write_fill = 0u;
+    memset(g_audio_state.async_write_buffer, 0, sizeof(g_audio_state.async_write_buffer));
+}
+
 static void mk_audio_state_reset_capture(void) {
     g_audio_state.capture_head = 0u;
     g_audio_state.capture_tail = 0u;
     g_audio_state.capture_fill = 0u;
     g_audio_state.capture_bytes_read = 0u;
     memset(g_audio_state.capture_buffer, 0, sizeof(g_audio_state.capture_buffer));
+}
+
+static uint32_t mk_audio_async_ring_write(const uint8_t *data, uint32_t size) {
+    uint32_t writable;
+    uint32_t i;
+
+    if (data == 0 || size == 0u) {
+        return 0u;
+    }
+
+    writable = MK_AUDIO_ASYNC_WRITE_BUFFER_SIZE - g_audio_state.async_write_fill;
+    if (size > writable) {
+        size = writable;
+    }
+    for (i = 0u; i < size; ++i) {
+        g_audio_state.async_write_buffer[g_audio_state.async_write_tail] = data[i];
+        g_audio_state.async_write_tail =
+            (g_audio_state.async_write_tail + 1u) % MK_AUDIO_ASYNC_WRITE_BUFFER_SIZE;
+    }
+    g_audio_state.async_write_fill += size;
+    return size;
+}
+
+static uint32_t mk_audio_async_ring_peek(uint8_t *data, uint32_t size) {
+    uint32_t readable;
+    uint32_t i;
+    uint32_t index;
+
+    if (data == 0 || size == 0u) {
+        return 0u;
+    }
+
+    readable = g_audio_state.async_write_fill;
+    if (size > readable) {
+        size = readable;
+    }
+    index = g_audio_state.async_write_head;
+    for (i = 0u; i < size; ++i) {
+        data[i] = g_audio_state.async_write_buffer[index];
+        index = (index + 1u) % MK_AUDIO_ASYNC_WRITE_BUFFER_SIZE;
+    }
+    return size;
+}
+
+static void mk_audio_async_ring_consume(uint32_t size) {
+    if (size > g_audio_state.async_write_fill) {
+        size = g_audio_state.async_write_fill;
+    }
+    g_audio_state.async_write_head =
+        (g_audio_state.async_write_head + size) % MK_AUDIO_ASYNC_WRITE_BUFFER_SIZE;
+    g_audio_state.async_write_fill -= size;
+}
+
+static uint32_t mk_audio_async_pump_chunk_limit(void) {
+    switch (g_audio_state.backend_kind) {
+    case MK_AUDIO_BACKEND_COMPAT_AUICH:
+        return AUICH_DMA_SLOT_SIZE;
+    case MK_AUDIO_BACKEND_COMPAT_AZALIA:
+        return 4096u;
+    case MK_AUDIO_BACKEND_COMPAT_UAUDIO:
+        return 16384u;
+    default:
+        return 1024u;
+    }
 }
 
 static void mk_audio_capture_ring_write(const uint8_t *data, uint32_t size) {
@@ -8257,7 +8340,8 @@ static void mk_audio_refresh_status_snapshot(void) {
         g_audio_state.info.status.active =
             (g_audio_state.compat_output_running ||
              g_audio_state.compat_output_pending > 0u ||
-             g_audio_state.compat_input_running) ? 1 : 0;
+             g_audio_state.compat_input_running ||
+             g_audio_state.async_write_fill > 0u) ? 1 : 0;
     } else if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_AZALIA) {
         if (g_audio_state.status_snapshot_tick != now_ticks) {
             if (!g_audio_state.azalia_output_running ||
@@ -8266,13 +8350,17 @@ static void mk_audio_refresh_status_snapshot(void) {
                 g_audio_state.azalia_output_poll_tick = now_ticks;
             }
         }
-        g_audio_state.info.status.active = g_audio_state.azalia_output_running ? 1 : 0;
+        g_audio_state.info.status.active =
+            (g_audio_state.azalia_output_running || g_audio_state.async_write_fill > 0u) ? 1 : 0;
     } else if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_UAUDIO) {
         queued_bytes = mk_audio_uaudio_pending_bytes();
+        queued_bytes += g_audio_state.async_write_fill;
         g_audio_state.info.status.active = queued_bytes != 0u ? 1 : 0;
     } else {
         g_audio_state.info.status.active =
-            (g_audio_state.playback_fill > 0u || g_audio_state.capture_fill > 0u) ? 1 : 0;
+            (g_audio_state.playback_fill > 0u ||
+             g_audio_state.capture_fill > 0u ||
+             g_audio_state.async_write_fill > 0u) ? 1 : 0;
     }
 
     if (g_audio_state.compat_irq_registered || g_audio_state.azalia_irq_registered) {
@@ -8301,11 +8389,13 @@ static void mk_audio_refresh_status_snapshot(void) {
 
     g_audio_state.info.status._spare[0] = (int)runtime_flags;
     if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_AZALIA) {
-        g_audio_state.info.status._spare[1] = (int)(g_audio_state.azalia_output_running ? 1u : 0u);
+        g_audio_state.info.status._spare[1] =
+            (int)((g_audio_state.azalia_output_running ? 1u : 0u) + g_audio_state.async_write_fill);
     } else if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_UAUDIO) {
         g_audio_state.info.status._spare[1] = (int)queued_bytes;
     } else {
-        g_audio_state.info.status._spare[1] = (int)g_audio_state.compat_output_pending;
+        g_audio_state.info.status._spare[1] =
+            (int)(g_audio_state.compat_output_pending + g_audio_state.async_write_fill);
     }
     g_audio_state.info.status._spare[2] = (int)g_audio_state.playback_bytes_written;
     g_audio_state.info.status._spare[3] = (int)g_audio_state.playback_bytes_consumed;
@@ -8697,6 +8787,8 @@ static int mk_audio_backend_compat_write(const uint8_t *data, uint32_t size) {
         dma_chunk_limit = AUICH_DMA_SLOT_SIZE;
     }
 
+    mk_audio_compat_update_output_progress();
+
     while (offset < size) {
         uint8_t slot;
         uint32_t chunk_size = size - offset;
@@ -8712,20 +8804,7 @@ static int mk_audio_backend_compat_write(const uint8_t *data, uint32_t size) {
         }
 
         if (g_audio_state.compat_output_pending >= (AUICH_DMALIST_MAX - 1u)) {
-            uint32_t wait_count = 0u;
-
-            while (g_audio_state.compat_output_pending >= (AUICH_DMALIST_MAX - 1u) &&
-                   wait_count < 200000u) {
-                mk_audio_compat_update_output_progress();
-                if (g_audio_state.compat_output_pending < (AUICH_DMALIST_MAX - 1u)) {
-                    break;
-                }
-                mk_audio_compat_delay();
-                if ((wait_count & 0x3fu) == 0x3fu) {
-                    yield();
-                }
-                wait_count++;
-            }
+            mk_audio_compat_update_output_progress();
             if (g_audio_state.compat_output_pending >= (AUICH_DMALIST_MAX - 1u)) {
                 break;
             }
@@ -8761,7 +8840,7 @@ static int mk_audio_backend_compat_write(const uint8_t *data, uint32_t size) {
     if (offset != 0u) {
         (void)mk_audio_backend_soft_write(data, offset);
     }
-    return offset != 0u ? (int)offset : -1;
+    return (int)offset;
 }
 
 static int mk_audio_backend_compat_read(uint8_t *data, uint32_t size) {
@@ -9322,7 +9401,9 @@ void mk_audio_service_init(void) {
     g_audio_state.default_output = 0u;
     g_audio_state.default_input = 0u;
     mk_audio_state_reset_playback();
+    mk_audio_state_reset_async_write();
     mk_audio_state_reset_capture();
+    (void)kernel_timer_register_tick_hook(mk_audio_service_tick);
     mk_audio_select_soft_backend();
     mk_audio_refresh_usb_attach_snapshot();
     kernel_debug_puts("audio: service init enter\n");
@@ -9651,6 +9732,54 @@ int mk_audio_service_write(const void *data, uint32_t size) {
     }
 
     return (int)total_written;
+}
+
+int mk_audio_service_write_direct(const void *data, uint32_t size) {
+    if (data == 0 || size == 0u || g_audio_backend == 0 || g_audio_backend->write == 0) {
+        return -1;
+    }
+    return g_audio_backend->write((const uint8_t *)data, size);
+}
+
+int mk_audio_service_write_async(const void *data, uint32_t size) {
+    if (data == 0 || size == 0u) {
+        return -1;
+    }
+    return (int)mk_audio_async_ring_write((const uint8_t *)data, size);
+}
+
+static void mk_audio_service_tick(uint32_t tick) {
+    (void)tick;
+    mk_audio_service_pump_async();
+}
+
+void mk_audio_service_pump_async(void) {
+    uint8_t chunk[MK_AUDIO_ASYNC_WRITE_CHUNK];
+
+    if (g_audio_backend == 0 || g_audio_backend->write == 0) {
+        return;
+    }
+
+    if (g_audio_state.async_write_fill != 0u) {
+        uint32_t chunk_size = g_audio_state.async_write_fill;
+        int written;
+        uint32_t chunk_limit = mk_audio_async_pump_chunk_limit();
+
+        if (chunk_limit == 0u || chunk_limit > (uint32_t)sizeof(chunk)) {
+            chunk_limit = (uint32_t)sizeof(chunk);
+        }
+        if (chunk_size > chunk_limit) {
+            chunk_size = chunk_limit;
+        }
+        if (mk_audio_async_ring_peek(chunk, chunk_size) == 0u) {
+            return;
+        }
+        written = g_audio_backend->write(chunk, chunk_size);
+        if (written <= 0) {
+            return;
+        }
+        mk_audio_async_ring_consume((uint32_t)written);
+    }
 }
 
 int mk_audio_service_read(void *data, uint32_t size) {

@@ -8,6 +8,7 @@
 #include <kernel/fs.h>
 #include <kernel/microkernel.h>
 #include <kernel/microkernel/launch.h>
+#include <kernel/microkernel/service.h>
 #include <kernel/ipc.h>
 #include <kernel/process.h>
 #include <kernel/hal/io.h>
@@ -23,9 +24,12 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 76
+#define MAX_SYSCALLS 78
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
+
+extern void userland_shell_host_entry(void);
+extern void userland_desktop_host_entry(void);
 
 static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
@@ -255,10 +259,39 @@ static uint32_t sys_fs_fstat(uint32_t fd, uint32_t stat_ptr, uint32_t c,
 
 static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
                                 uint32_t d, uint32_t e) {
+    struct mouse_state *state;
+    int x;
+    int y;
+    int dx;
+    int dy;
+    int wheel;
+    uint8_t buttons;
+
     (void)b; (void)c; (void)d; (void)e;
-    if (state_ptr == 0)
+    if (state_ptr == 0u) {
         return 0;
-    return (uint32_t)mk_input_service_poll_mouse((struct mouse_state *)(uintptr_t)state_ptr);
+    }
+
+    /*
+     * Keep desktop mouse polling on the direct PS/2 queue, just like keyboard
+     * reads already do. The input service host remains useful for supervision
+     * and layout/state APIs, but pointer motion should not depend on the
+     * worker transport staying healthy while the GUI is live.
+     */
+    state = (struct mouse_state *)(uintptr_t)state_ptr;
+    if (!kernel_mouse_has_data()) {
+        memset(state, 0, sizeof(*state));
+        return 0;
+    }
+
+    kernel_mouse_read(&x, &y, &dx, &dy, &wheel, &buttons);
+    state->x = x;
+    state->y = y;
+    state->dx = dx;
+    state->dy = dy;
+    state->wheel = wheel;
+    state->buttons = buttons;
+    return 1u;
 }
 
 static uint32_t sys_network_listen(uint32_t handle, uint32_t backlog, uint32_t c,
@@ -302,6 +335,7 @@ static uint32_t sys_launch_info(uint32_t out_ptr, uint32_t b, uint32_t c,
 static uint32_t sys_yield(uint32_t a, uint32_t b, uint32_t c,
                           uint32_t d, uint32_t e) {
     (void)a; (void)b; (void)c; (void)d; (void)e;
+    mk_audio_service_pump_async();
     yield();
     return 0;
 }
@@ -355,6 +389,7 @@ static uint32_t sys_text_write(uint32_t a, uint32_t b, uint32_t c,
 static uint32_t sys_sleep(uint32_t a, uint32_t b, uint32_t c,
                           uint32_t d, uint32_t e) {
     (void)a; (void)b; (void)c; (void)d; (void)e;
+    mk_audio_service_pump_async();
     __asm__ volatile("hlt");
     return 0;
 }
@@ -450,7 +485,16 @@ static uint32_t sys_audio_write(uint32_t data_ptr, uint32_t size, uint32_t c,
     if (data_ptr == 0u || size == 0u) {
         return (uint32_t)-1;
     }
-    return (uint32_t)mk_audio_service_write((const void *)(uintptr_t)data_ptr, size);
+    return (uint32_t)mk_audio_service_write_direct((const void *)(uintptr_t)data_ptr, size);
+}
+
+static uint32_t sys_audio_write_async(uint32_t data_ptr, uint32_t size, uint32_t c,
+                                      uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (data_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_write_async((const void *)(uintptr_t)data_ptr, size);
 }
 
 static uint32_t sys_audio_read(uint32_t data_ptr, uint32_t size, uint32_t c,
@@ -731,10 +775,40 @@ static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, ui
                 entries[i].flags = context->flags;
                 entries[i].service_type = context->service_type;
             }
+            mk_service_fill_task_snapshot(&entries[i]);
         }
     }
 
     return count;
+}
+
+static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
+                                        uint32_t d, uint32_t e) {
+    struct mk_launch_descriptor descriptor;
+
+    (void)b; (void)c; (void)d; (void)e;
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
+    descriptor.kind = MK_LAUNCH_KIND_USER;
+    descriptor.stack_size = 65536u;
+    descriptor.flags = MK_LAUNCH_FLAG_BUILTIN;
+
+    switch (target) {
+    case USERLAND_BUILTIN_SHELL:
+        descriptor.flags |= MK_LAUNCH_FLAG_USER_SHELL;
+        memcpy(descriptor.name, "shell-host", 11u);
+        descriptor.entry = userland_shell_host_entry;
+        break;
+    case USERLAND_BUILTIN_DESKTOP:
+        descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        memcpy(descriptor.name, "desktop-host", 13u);
+        descriptor.entry = userland_desktop_host_entry;
+        break;
+    default:
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)mk_launch_bootstrap(&descriptor);
 }
 
 static uint32_t sys_task_terminate(uint32_t pid, uint32_t b, uint32_t c,
@@ -813,6 +887,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_AUDIO_START] = sys_audio_start;
     syscall_table[SYSCALL_AUDIO_STOP] = sys_audio_stop;
     syscall_table[SYSCALL_AUDIO_WRITE] = sys_audio_write;
+    syscall_table[SYSCALL_AUDIO_WRITE_ASYNC] = sys_audio_write_async;
     syscall_table[SYSCALL_AUDIO_READ] = sys_audio_read;
     syscall_table[SYSCALL_AUDIO_CONTROL_INFO] = sys_audio_control_info;
     syscall_table[SYSCALL_AUDIO_MIXER_READ] = sys_audio_mixer_read;
@@ -844,6 +919,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
     syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
     syscall_table[SYSCALL_TASK_SNAPSHOT] = sys_task_snapshot;
+    syscall_table[SYSCALL_LAUNCH_BUILTIN_USER] = sys_launch_builtin_user;
     syscall_table[SYSCALL_TASK_TERMINATE] = sys_task_terminate;
 }
 

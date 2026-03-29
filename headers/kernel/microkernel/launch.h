@@ -13,13 +13,17 @@ struct process;
 enum mk_launch_kind {
     MK_LAUNCH_KIND_NONE = 0,
     MK_LAUNCH_KIND_DRIVER = 1,
-    MK_LAUNCH_KIND_SERVICE = 2
+    MK_LAUNCH_KIND_SERVICE = 2,
+    MK_LAUNCH_KIND_USER = 3
 };
 
 enum mk_launch_flags {
     MK_LAUNCH_FLAG_BOOTSTRAP = 1u << 0,
     MK_LAUNCH_FLAG_CRITICAL = 1u << 1,
-    MK_LAUNCH_FLAG_BUILTIN = 1u << 2
+    MK_LAUNCH_FLAG_BUILTIN = 1u << 2,
+    MK_LAUNCH_FLAG_USER_SHELL = 1u << 8,
+    MK_LAUNCH_FLAG_USER_DESKTOP = 1u << 9,
+    MK_LAUNCH_FLAG_USER_APP = 1u << 10
 };
 
 struct mk_launch_descriptor {

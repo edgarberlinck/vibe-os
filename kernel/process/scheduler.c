@@ -15,10 +15,13 @@
 static process_t *g_head = NULL;
 static process_t *g_current[32];
 static process_t *g_cursor[32];
+static uint32_t g_timeslice_remaining[32];
 static spinlock_t g_scheduler_lock;
 static int g_scheduler_boot_trace_emitted = 0;
 static int g_scheduler_switch_trace_budget = 24;
 static volatile int g_scheduler_preemption_ready = 0;
+
+#define SCHEDULER_TIMESLICE_TICKS 4u
 
 static void scheduler_account_runtime(process_t *task, uint32_t now_ticks) {
     if (task == NULL || task->state != PROCESS_RUNNING || task->last_start_tick == 0u) {
@@ -108,16 +111,20 @@ static process_t *scheduler_first_runnable(void) {
 }
 
 static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
+    int affinity_score;
+
+    if (task == NULL) {
+        return 0x7fffffff;
+    }
+    affinity_score = 3;
     if (task->preferred_cpu == (int)cpu_index) {
-        return 0;
+        affinity_score = 0;
+    } else if (task->last_cpu == (int)cpu_index) {
+        affinity_score = 1;
+    } else if (task->preferred_cpu < 0) {
+        affinity_score = 2;
     }
-    if (task->last_cpu == (int)cpu_index) {
-        return 1;
-    }
-    if (task->preferred_cpu < 0) {
-        return 2;
-    }
-    return 3;
+    return (int)(task->priority_tier * 16u) + affinity_score;
 }
 
 void scheduler_init(void) {
@@ -127,6 +134,7 @@ void scheduler_init(void) {
     for (i = 0; i < 32u; ++i) {
         g_current[i] = NULL;
         g_cursor[i] = NULL;
+        g_timeslice_remaining[i] = SCHEDULER_TIMESLICE_TICKS;
     }
     spinlock_init(&g_scheduler_lock);
     g_scheduler_preemption_ready = 0;
@@ -216,11 +224,22 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
     if (cpu_index >= 32u) {
         cpu_index = 0u;
     }
+    current = g_current[cpu_index];
     if (!g_scheduler_preemption_ready) {
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         return frame;
     }
-    current = g_current[cpu_index];
+    if (preemptive &&
+        current != NULL &&
+        current->state == PROCESS_RUNNING &&
+        current->current_cpu == (int)cpu_index) {
+        current->context = frame;
+        if (g_timeslice_remaining[cpu_index] > 1u) {
+            g_timeslice_remaining[cpu_index] -= 1u;
+            spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+            return frame;
+        }
+    }
     if (current && current->state == PROCESS_RUNNING && current->current_cpu == (int)cpu_index) {
         current->context = frame;
         scheduler_account_runtime(current, now_ticks);
@@ -235,9 +254,11 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
             current->current_cpu = (int)cpu_index;
             current->last_cpu = (int)cpu_index;
             current->last_start_tick = now_ticks;
+            g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
             g_current[cpu_index] = current;
             resume_frame = current->context != NULL ? current->context : frame;
         } else {
+            g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
             resume_frame = frame;
         }
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
@@ -253,6 +274,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         next->last_cpu = (int)cpu_index;
         next->last_start_tick = now_ticks;
         next->context_switches += 1u;
+        g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
         g_current[cpu_index] = next;
         resume_frame = next->context;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
@@ -274,6 +296,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         current->last_cpu = (int)cpu_index;
         current->last_start_tick = now_ticks;
         current->context = frame;
+        g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
         resume_frame = current->context;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         return resume_frame != NULL ? resume_frame : frame;
@@ -435,6 +458,7 @@ uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
             entry->runtime_ticks = runtime_ticks;
             entry->context_switches = task->context_switches;
             entry->service_type = task->service_type;
+            entry->priority_tier = task->priority_tier;
             count += 1u;
         }
     }
