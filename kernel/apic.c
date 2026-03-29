@@ -1,6 +1,7 @@
 #include <kernel/apic.h>
 #include <kernel/cpu/cpu.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/timer/timer.h>
 
 #define IA32_APIC_BASE_MSR 0x1Bu
 #define IA32_APIC_BASE_BSP 0x100u
@@ -59,12 +60,17 @@ static void local_apic_write(uint32_t reg, uint32_t value) {
 }
 
 static int local_apic_wait_icr_idle(void) {
-    uint32_t spins = 8000000u;
+    uint32_t start_ticks = kernel_timer_get_ticks();
+    uint32_t spins = 10000u;
+
     while (spins-- > 0u) {
         if ((local_apic_read(LAPIC_ICRLO_REG) & LAPIC_ICR_DELIVERY_STATUS) == 0u) {
             return 0;
         }
         __asm__ volatile("pause");
+        if ((uint32_t)(kernel_timer_get_ticks() - start_ticks) >= 5u) {
+            break;
+        }
     }
     return -1;
 }
@@ -154,11 +160,14 @@ int local_apic_send_startup(uint32_t apic_id, uint8_t vector) {
         return -1;
     }
     if (local_apic_wait_icr_idle() != 0) {
-        return -1;
+        kernel_debug_printf("lapic: startup prewait timeout apic=%x icr=%x\n",
+                            apic_id,
+                            local_apic_read(LAPIC_ICRLO_REG));
     }
     local_apic_write(LAPIC_ICRHI_REG, apic_id << 24);
     local_apic_write(LAPIC_ICRLO_REG, LAPIC_DM_STARTUP | (uint32_t)vector);
-    return local_apic_wait_icr_idle();
+    __asm__ volatile("pause");
+    return 0;
 }
 
 int local_apic_send_ipi(uint32_t apic_id, uint8_t vector) {

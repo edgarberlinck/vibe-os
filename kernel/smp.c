@@ -24,7 +24,7 @@
 #define AP_TRAMPOLINE_PMODE_OFFSET 0x33u
 #define AP_TRAMPOLINE_DEBUG_STAGE_ADDR 0x6FF0u
 #define AP_STACK_SIZE 4096u
-#define AP_START_TIMEOUT 2000000u
+#define AP_START_TIMEOUT_TICKS 20u
 
 enum {
     SMP_CPU_STAGE_NONE = 0u,
@@ -84,8 +84,8 @@ static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
 }
 
 static int smp_wait_for_cpu(uint32_t expected_count) {
-    uint32_t spins = AP_START_TIMEOUT;
-    while (spins-- > 0u) {
+    uint32_t deadline = kernel_timer_get_ticks() + AP_START_TIMEOUT_TICKS;
+    while ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
         if (g_smp_started_cpus >= expected_count) {
             return 0;
         }
@@ -95,9 +95,18 @@ static int smp_wait_for_cpu(uint32_t expected_count) {
 }
 
 static void smp_wait_ticks(uint32_t ticks) {
+    uint32_t start = kernel_timer_get_ticks();
     uint32_t deadline = kernel_timer_get_ticks() + ticks;
-    while ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
+    uint32_t spins = 5000u;
+
+    while (spins-- > 0u && (int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
         __asm__ volatile("pause");
+    }
+    if ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
+        kernel_debug_printf("smp: wait fallback ticks=%u start=%u now=%u\n",
+                            (unsigned)ticks,
+                            (unsigned)start,
+                            (unsigned)kernel_timer_get_ticks());
     }
 }
 
@@ -211,6 +220,9 @@ void smp_init(void) {
             g_smp_cpu_stage[i] = SMP_CPU_STAGE_INIT_SENT;
             kernel_debug_printf("smp: init sent apic=%x\n", cpu->apic_id);
             smp_wait_ticks(2u);
+            kernel_debug_printf("smp: attempting sipi1 apic=%x vec=%x\n",
+                                cpu->apic_id,
+                                (unsigned)AP_TRAMPOLINE_VECTOR);
             if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI1_SENT;
                 kernel_debug_printf("smp: sipi1 sent apic=%x vec=%x\n",
@@ -221,7 +233,9 @@ void smp_init(void) {
                                     cpu->apic_id,
                                     (unsigned)smp_trampoline_debug_stage());
             }
-            smp_wait_ticks(1u);
+            kernel_debug_printf("smp: attempting sipi2 apic=%x vec=%x\n",
+                                cpu->apic_id,
+                                (unsigned)AP_TRAMPOLINE_VECTOR);
             if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI2_SENT;
                 kernel_debug_printf("smp: sipi2 sent apic=%x vec=%x\n",

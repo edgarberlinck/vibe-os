@@ -746,6 +746,80 @@ $(TR_APP): $(TR_ELF)
 
 ported-tr: $(TR_APP)
 
+# === IFCONFIG APP ===
+
+IFCONFIG_SRCS := applications/ported/ifconfig/ifconfig.c
+IFCONFIG_OBJS := build/ported/ifconfig.o \
+	build/app_entry_ifconfig.o \
+	build/app_runtime_ifconfig.o
+
+IFCONFIG_ELF := build/ported/ifconfig.elf
+IFCONFIG_APP := build/ported/ifconfig.app
+
+build/app_entry_ifconfig.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"ifconfig\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_ifconfig.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/ifconfig.o: $(IFCONFIG_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(IFCONFIG_ELF): $(IFCONFIG_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(IFCONFIG_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(IFCONFIG_APP): $(IFCONFIG_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Ifconfig app: $@"
+
+ported-ifconfig: $(IFCONFIG_APP)
+
+# === ROUTE APP ===
+
+ROUTE_SRCS := applications/ported/route/route.c
+ROUTE_OBJS := build/ported/route.o \
+	build/app_entry_route.o \
+	build/app_runtime_route.o
+
+ROUTE_ELF := build/ported/route.elf
+ROUTE_APP := build/ported/route.app
+
+build/app_entry_route.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"route\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_route.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/route.o: $(ROUTE_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(ROUTE_ELF): $(ROUTE_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(ROUTE_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(ROUTE_APP): $(ROUTE_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Route app: $@"
+
+ported-route: $(ROUTE_APP)
+
 # General rules
 build:
 	@mkdir -p $@
@@ -804,6 +878,12 @@ ported-sync-clean:
 ported-tr-clean:
 	rm -f $(TR_OBJS) $(TR_ELF) $(TR_APP)
 
+ported-ifconfig-clean:
+	rm -f $(IFCONFIG_OBJS) $(IFCONFIG_ELF) $(IFCONFIG_APP)
+
+ported-route-clean:
+	rm -f $(ROUTE_OBJS) $(ROUTE_ELF) $(ROUTE_APP)
+
 PORTED_APP_TARGETS := \
 	$(ECHO_APP) \
 	$(CAT_APP) \
@@ -822,10 +902,12 @@ PORTED_APP_TARGETS := \
 	$(PRINTF_APP) \
 	$(UNAME_APP) \
 	$(SYNC_APP) \
-	$(TR_APP)
+	$(TR_APP) \
+	$(IFCONFIG_APP) \
+	$(ROUTE_APP)
 
 ported-all: $(PORTED_APP_TARGETS)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean ported-ifconfig-clean ported-route-clean
 
-.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-uname ported-sync ported-tr ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean
+.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-uname ported-sync ported-tr ported-ifconfig ported-route ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean ported-ifconfig-clean ported-route-clean

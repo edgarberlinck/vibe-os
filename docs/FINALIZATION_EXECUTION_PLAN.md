@@ -30,6 +30,32 @@ Falta fechar:
 - caminho de socket/rede real em vez de control-plane parcial
 - Wi-Fi com scan, senha e conexao
 - navegador integrado ao desktop usando a rede real
+- conjunto minimo de comandos de internet/diagnostico no terminal
+- port do `links2` como browser de terminal com modo grafico padrao (`links2 -g`)
+
+Comandos-alvo de terminal para considerar a internet "utilizavel":
+- `ifconfig`
+- `ping`
+- `route`
+- `netstat`
+- `host`
+- `dig`
+- `ftp`
+- `curl`
+
+Origem atual no tree:
+- `compat/sbin/ifconfig/ifconfig.c`
+- `compat/sbin/ping/ping.c`
+- `compat/sbin/route/route.c`
+- `compat/usr.bin/netstat/netstat.h`
+- `compat/usr.bin/netstat/route.c`
+- `compat/usr.bin/dig/dig.c`
+- `compat/usr.bin/dig/host.c`
+- `compat/usr.bin/ftp/ftp.c`
+
+Observacao importante:
+- `curl` nao esta pronto no `compat` local como os demais comandos acima; ele entra como port/import dedicado e nao como simples reaproveitamento igual a `ping`/`ifconfig`.
+- `links2` ja existe no tree em `userland/applications/network/links2`; falta transformar isso em port/build/runtime integrado.
 
 ### Bloco 2: audio real em hardware
 
@@ -120,8 +146,11 @@ Falta fechar:
 
 - transformar o caminho atual de Ethernet em datapath real
 - subir DHCP e DNS
+- portar o conjunto base de comandos de terminal de rede (`ifconfig`, `ping`, `route`, `netstat`, `host`, `dig`, `ftp`, `curl`)
+- padronizar aliases e local de instalacao para eles no terminal
 - depois subir Wi-Fi e UX de senha/conexao
 - por fim integrar navegador real ao desktop
+- incluir `links2` como browser de terminal e fazer sites abrirem por padrao com `links2 -g`
 
 ### Etapa 4: fechar validacao modular e runtime
 
@@ -141,10 +170,12 @@ Falta fechar:
 O projeto pode ser considerado fechado quando, ao mesmo tempo:
 
 - Ethernet sobe, recebe lease e resolve DNS
+- terminal consegue diagnosticar e usar internet com `ifconfig`, `ping`, `route`, `netstat`, `host`/`dig`, `ftp` e `curl`
 - Wi-Fi lista redes, pede senha e conecta
 - audio toca em QEMU e em hardware real no backend correto
 - fallback USB audio e util de verdade
 - navegador abre pelo desktop e usa a rede real
+- `links2` funciona no terminal e a abertura padrao de sites usa `links2 -g`
 - apps modulares principais passam em smoke
 - video sobe em QEMU e em pelo menos um backend real de hardware
 - mouse scroll funciona no desktop e nas listas/dialogs principais
@@ -209,6 +240,56 @@ Adicionar wheel scroll no caminho completo:
 1. Implementar scroll wheel do mouse.
 2. Fechar `compat-azalia` no hardware real alvo.
 3. Fazer Ethernet real com DHCP/DNS.
-4. Integrar navegador e UX de rede.
+4. Portar os comandos de rede/internet do terminal e integrar `links2 -g`.
 5. Fechar smoke modular e gaps POSIX mais visiveis.
 6. Voltar para video real e SMP com matriz de hardware/QEMU mais honesta.
+
+## Plano especifico: terminal de internet
+
+### Meta
+
+Chegar num terminal que seja util para diagnostico e uso real da internet, no estilo BSD/Linux:
+
+- `ifconfig` para interfaces e enderecamento
+- `ping` para conectividade
+- `route` para tabela/rota default
+- `netstat` para sockets/estatisticas
+- `host` e `dig` para DNS
+- `ftp` para transferencia simples
+- `curl` para HTTP/HTTPS e automacao
+- `links2` como browser de terminal
+
+### Ordem recomendada
+
+#### Fase A: diagnostico basico
+
+- `ifconfig`
+- `ping`
+- `route`
+- `netstat`
+
+#### Fase B: DNS e resolucao
+
+- `host`
+- `dig`
+
+#### Fase C: transferencia e web
+
+- `ftp`
+- `curl`
+- `links2`
+
+### Plano de integracao do links2
+
+- usar o codigo ja presente em `userland/applications/network/links2`
+- criar um port/build controlado em vez de depender do `configure` legado cru
+- priorizar primeiro o caminho minimo necessario para abrir sites
+- padronizar a invocacao principal como `links2 -g`
+- tratar `links2` como app de terminal: o fluxo normal do usuario deve ser chamar pelo shell ou via launch helper textual
+
+### Criterio de pronto para terminal de internet
+
+- `ifconfig` e `ping` funcionam em QEMU e em pelo menos uma maquina real
+- `host`/`dig` confirmam DNS real
+- `curl` baixa uma URL real e suporta HTTPS no minimo basico necessario
+- `links2 -g https://example.org` abre com sucesso no ambiente suportado

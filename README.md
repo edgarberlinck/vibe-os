@@ -514,3 +514,9 @@ Adicionar ou atualizar uma seção com objetivos futuros:
 - melhorar VFS
 - adicionar mais runtimes de linguagem
 - melhorar terminal
+
+## Licenca
+
+O repositório usa GPLv3 no root em [LICENSE](/Users/mel/Documents/vibe-os/LICENSE), com a ressalva de que árvores importadas de terceiros podem continuar sob suas licenças originais.
+
+Veja também [THIRD_PARTY_LICENSES.md](/Users/mel/Documents/vibe-os/THIRD_PARTY_LICENSES.md).
