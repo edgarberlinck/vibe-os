@@ -204,6 +204,60 @@ static const char *taskmgr_priority_label(uint32_t tier) {
     }
 }
 
+static const char *taskmgr_service_name(uint32_t service_type) {
+    switch (service_type) {
+    case 1u: return "init";
+    case 2u: return "storage";
+    case 3u: return "filesystem";
+    case 4u: return "video";
+    case 5u: return "input";
+    case 6u: return "console";
+    case 7u: return "network";
+    case 8u: return "audio";
+    default: return "unknown";
+    }
+}
+
+static const char *taskmgr_service_event_name(uint32_t event_type) {
+    switch (event_type) {
+    case MK_SERVICE_EVENT_ONLINE: return "online";
+    case MK_SERVICE_EVENT_OFFLINE: return "offline";
+    case MK_SERVICE_EVENT_DEGRADED: return "degraded";
+    case MK_SERVICE_EVENT_RECOVERED: return "recovered";
+    case MK_SERVICE_EVENT_RESTARTED: return "restarted";
+    default: return "unknown";
+    }
+}
+
+static const char *taskmgr_audio_event_name(uint32_t event_type) {
+    switch (event_type) {
+    case MK_AUDIO_EVENT_QUEUED: return "queued";
+    case MK_AUDIO_EVENT_IDLE: return "idle";
+    case MK_AUDIO_EVENT_UNDERRUN: return "underrun";
+    default: return "unknown";
+    }
+}
+
+static const char *taskmgr_video_event_name(uint32_t event_type) {
+    switch (event_type) {
+    case MK_VIDEO_EVENT_PRESENT: return "present";
+    case MK_VIDEO_EVENT_MODE_SET: return "mode";
+    case MK_VIDEO_EVENT_LEAVE: return "leave";
+    default: return "unknown";
+    }
+}
+
+static const char *taskmgr_network_event_name(uint32_t event_type) {
+    switch (event_type) {
+    case MK_NETWORK_EVENT_STATUS: return "status";
+    case MK_NETWORK_EVENT_SOCKET_RECV: return "recv";
+    case MK_NETWORK_EVENT_SOCKET_ACCEPT: return "accept";
+    case MK_NETWORK_EVENT_SOCKET_SEND: return "send";
+    case MK_NETWORK_EVENT_SOCKET_CLOSED: return "closed";
+    default: return "unknown";
+    }
+}
+
 static const char *taskmgr_service_health_label(const struct task_snapshot_entry *entry) {
     if (entry == 0 || entry->service_type == 0u) {
         return "n/a";
@@ -398,6 +452,124 @@ static void taskmgr_refresh(struct taskmgr_state *tm, uint32_t ticks) {
     tm->last_refresh_ticks = ticks;
 }
 
+static void taskmgr_note_service_event(struct taskmgr_state *tm, const struct mk_service_event *event) {
+    uint32_t slot;
+
+    if (tm == 0 || event == 0 || event->event_type == MK_SERVICE_EVENT_NONE) {
+        return;
+    }
+
+    slot = (tm->service_event_head + tm->service_event_count) % TASKMGR_SERVICE_EVENT_HISTORY;
+    if (tm->service_event_count == TASKMGR_SERVICE_EVENT_HISTORY) {
+        slot = tm->service_event_head;
+        tm->service_event_head = (tm->service_event_head + 1u) % TASKMGR_SERVICE_EVENT_HISTORY;
+    } else {
+        tm->service_event_count += 1u;
+    }
+    tm->service_events[slot].event = *event;
+
+    if (event->service_type == MK_SERVICE_AUDIO) {
+        tm->last_audio_refresh_ticks = 0u;
+    } else if (event->service_type == MK_SERVICE_NETWORK) {
+        tm->last_network_refresh_ticks = 0u;
+        tm->last_netmgrd_refresh_ticks = 0u;
+    } else if (event->service_type == MK_SERVICE_VIDEO) {
+        tm->last_video_refresh_ticks = 0u;
+    }
+}
+
+static void taskmgr_refresh_service_events(struct taskmgr_state *tm) {
+    uint32_t service_type;
+
+    if (tm == 0) {
+        return;
+    }
+
+    for (service_type = 2u; service_type <= 8u; ++service_type) {
+        struct mk_service_event event;
+        uint32_t mask = 1u << service_type;
+
+        if ((tm->service_event_subscriptions & mask) == 0u) {
+            if (sys_service_subscribe(service_type) == 0) {
+                tm->service_event_subscriptions |= mask;
+            }
+        }
+        if ((tm->service_event_subscriptions & mask) == 0u) {
+            continue;
+        }
+
+        while (sys_service_event_receive(service_type, &event, 0u) == 0) {
+            taskmgr_note_service_event(tm, &event);
+        }
+    }
+}
+
+static void taskmgr_refresh_audio_events(struct taskmgr_state *tm) {
+    struct mk_audio_event event;
+
+    if (tm == 0) {
+        return;
+    }
+    if (!tm->audio_event_subscription) {
+        if (sys_audio_event_subscribe() == 0) {
+            tm->audio_event_subscription = 1;
+        }
+    }
+    if (!tm->audio_event_subscription) {
+        return;
+    }
+
+    while (sys_audio_event_receive(&event, 0u) == 0) {
+        tm->audio_event = event;
+        tm->audio_event_valid = 1;
+        tm->last_audio_refresh_ticks = 0u;
+    }
+}
+
+static void taskmgr_refresh_video_events(struct taskmgr_state *tm) {
+    struct mk_video_event event;
+
+    if (tm == 0) {
+        return;
+    }
+    if (!tm->video_event_subscription) {
+        if (sys_video_event_subscribe() == 0) {
+            tm->video_event_subscription = 1;
+        }
+    }
+    if (!tm->video_event_subscription) {
+        return;
+    }
+
+    while (sys_video_event_receive(&event, 0u) == 0) {
+        tm->video_event = event;
+        tm->video_event_valid = 1;
+        tm->last_video_refresh_ticks = 0u;
+    }
+}
+
+static void taskmgr_refresh_network_events(struct taskmgr_state *tm) {
+    struct mk_network_event event;
+
+    if (tm == 0) {
+        return;
+    }
+    if (!tm->network_event_subscription) {
+        if (sys_network_event_subscribe() == 0) {
+            tm->network_event_subscription = 1;
+        }
+    }
+    if (!tm->network_event_subscription) {
+        return;
+    }
+
+    while (sys_network_event_receive(&event, 0u) == 0) {
+        tm->network_event = event;
+        tm->network_event_valid = 1;
+        tm->last_network_refresh_ticks = 0u;
+    }
+}
+
 static void taskmgr_refresh_video_bench(struct taskmgr_state *tm, uint32_t ticks) {
     if (tm == 0) {
         return;
@@ -554,7 +726,20 @@ void taskmgr_init_state(struct taskmgr_state *tm) {
     tm->audio_status_valid = 0;
     tm->network_info_valid = 0;
     tm->network_status_valid = 0;
+    tm->audio_event_subscription = 0;
+    tm->video_event_subscription = 0;
+    tm->network_event_subscription = 0;
+    tm->audio_event_valid = 0;
+    tm->video_event_valid = 0;
+    tm->network_event_valid = 0;
+    tm->service_event_subscriptions = 0u;
+    tm->service_event_head = 0u;
+    tm->service_event_count = 0u;
     memset(&tm->netmgrd_status, 0, sizeof(tm->netmgrd_status));
+    memset(&tm->audio_event, 0, sizeof(tm->audio_event));
+    memset(&tm->video_event, 0, sizeof(tm->video_event));
+    memset(&tm->network_event, 0, sizeof(tm->network_event));
+    memset(tm->service_events, 0, sizeof(tm->service_events));
 }
 
 static struct rect taskmgr_sidebar_rect(const struct taskmgr_state *tm) {
@@ -762,6 +947,12 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         append_uint(detail, tm->video_bench.wc_enabled, (int)sizeof(detail));
         str_append(detail, "  PAT ", (int)sizeof(detail));
         append_uint(detail, tm->video_bench.cpu_has_pat, (int)sizeof(detail));
+        if (tm->video_event_valid) {
+            str_append(detail, "  evt ", (int)sizeof(detail));
+            str_append(detail, taskmgr_video_event_name(tm->video_event.event_type), (int)sizeof(detail));
+            str_append(detail, " #", (int)sizeof(detail));
+            append_uint(detail, tm->video_event.sequence, (int)sizeof(detail));
+        }
         taskmgr_draw_performance_card(&cards[5], "Present / Scanout", value, detail);
     } else {
         str_copy_limited(value, "indisponivel", (int)sizeof(value));
@@ -882,6 +1073,14 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
                 str_append(detail, " cap-xrun", (int)sizeof(detail));
             }
         }
+        if (tm->audio_event_valid) {
+            str_append(detail, "  evt ", (int)sizeof(detail));
+            str_append(detail, taskmgr_audio_event_name(tm->audio_event.event_type), (int)sizeof(detail));
+            str_append(detail, " q ", (int)sizeof(detail));
+            append_uint(detail, tm->audio_event.queued_bytes, (int)sizeof(detail));
+            str_append(detail, " u ", (int)sizeof(detail));
+            append_uint(detail, tm->audio_event.underruns, (int)sizeof(detail));
+        }
         taskmgr_draw_performance_card(&cards[6], "Driver de Audio", value, detail);
     } else {
         str_copy_limited(value, "indisponivel", (int)sizeof(value));
@@ -953,6 +1152,22 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         if ((tm->network_info.supported_families & MK_NETWORK_FAMILY_INET6) != 0u) {
             str_append(detail, "  inet6", (int)sizeof(detail));
         }
+        if (tm->network_event_valid) {
+            str_append(detail, "  evt ", (int)sizeof(detail));
+            str_append(detail, taskmgr_network_event_name(tm->network_event.event_type), (int)sizeof(detail));
+            if (tm->network_event.handle > 0) {
+                str_append(detail, " h ", (int)sizeof(detail));
+                append_int(detail, tm->network_event.handle, (int)sizeof(detail));
+            }
+            if (tm->network_event.peer_handle > 0) {
+                str_append(detail, " p ", (int)sizeof(detail));
+                append_int(detail, tm->network_event.peer_handle, (int)sizeof(detail));
+            }
+            if (tm->network_event.byte_count > 0u) {
+                str_append(detail, " b ", (int)sizeof(detail));
+                append_uint(detail, tm->network_event.byte_count, (int)sizeof(detail));
+            }
+        }
         taskmgr_draw_performance_card(&cards[7], "Driver de Rede", value, detail);
     } else {
         str_copy_limited(value, "indisponivel", (int)sizeof(value));
@@ -986,6 +1201,18 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         append_uint(detail, tm->video_bench.frame_ticks, (int)sizeof(detail));
         str_append(detail, "t", (int)sizeof(detail));
     }
+    if (tm->video_event_valid) {
+        str_append(detail, "  vid ", (int)sizeof(detail));
+        str_append(detail, taskmgr_video_event_name(tm->video_event.event_type), (int)sizeof(detail));
+        str_append(detail, " #", (int)sizeof(detail));
+        append_uint(detail, tm->video_event.sequence, (int)sizeof(detail));
+    }
+    if (tm->network_event_valid) {
+        str_append(detail, "  net ", (int)sizeof(detail));
+        str_append(detail, taskmgr_network_event_name(tm->network_event.event_type), (int)sizeof(detail));
+        str_append(detail, " #", (int)sizeof(detail));
+        append_uint(detail, tm->network_event.sequence, (int)sizeof(detail));
+    }
     if (tm->netmgrd_status.valid) {
         if (tm->netmgrd_status.state[0] != '\0') {
             str_append(detail, "  netmgrd ", (int)sizeof(detail));
@@ -1009,6 +1236,29 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         }
     }
     sys_text(content.x + 12, content.y + 280, ui_color_muted(), detail);
+
+    if (tm->service_event_count != 0u) {
+        uint32_t lines = tm->service_event_count < 3u ? tm->service_event_count : 3u;
+
+        sys_text(content.x + 12, content.y + 294, theme->text, "Eventos recentes de servico");
+        for (uint32_t i = 0; i < lines; ++i) {
+            uint32_t index = (tm->service_event_head + tm->service_event_count - 1u - i) %
+                             TASKMGR_SERVICE_EVENT_HISTORY;
+            const struct mk_service_event *event = &tm->service_events[index].event;
+            char line[128] = "";
+
+            str_append(line, taskmgr_service_name(event->service_type), (int)sizeof(line));
+            str_append(line, " ", (int)sizeof(line));
+            str_append(line, taskmgr_service_event_name(event->event_type), (int)sizeof(line));
+            str_append(line, " pid ", (int)sizeof(line));
+            append_uint(line, event->pid, (int)sizeof(line));
+            str_append(line, " rst ", (int)sizeof(line));
+            append_uint(line, event->restart_count, (int)sizeof(line));
+            str_append(line, " t", (int)sizeof(line));
+            append_uint(line, event->tick, (int)sizeof(line));
+            sys_text(content.x + 12, content.y + 306 + ((int)i * 12), ui_color_muted(), line);
+        }
+    }
 }
 
 static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
@@ -1112,6 +1362,10 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
     struct rect title = {tm->window.x + 10, tm->window.y + 24, tm->window.w - 20, 30};
 
     taskmgr_refresh(tm, ticks);
+    taskmgr_refresh_service_events(tm);
+    taskmgr_refresh_audio_events(tm);
+    taskmgr_refresh_video_events(tm);
+    taskmgr_refresh_network_events(tm);
     draw_window_frame(&tm->window, "GERENCIADOR DE TAREFAS", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
     ui_draw_surface(&title, ui_color_panel());

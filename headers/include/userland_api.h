@@ -84,7 +84,14 @@ enum syscall_id {
     SYSCALL_LAUNCH_BUILTIN_USER = 77,
     SYSCALL_INPUT_EVENT = 78,
     SYSCALL_SERVICE_SUBSCRIBE = 79,
-    SYSCALL_SERVICE_EVENT_RECV = 80
+    SYSCALL_SERVICE_EVENT_RECV = 80,
+    SYSCALL_AUDIO_EVENT_SUBSCRIBE = 81,
+    SYSCALL_AUDIO_EVENT_RECV = 82,
+    SYSCALL_VIDEO_EVENT_SUBSCRIBE = 83,
+    SYSCALL_VIDEO_EVENT_RECV = 84,
+    SYSCALL_VIDEO_PRESENT_SUBMIT = 85,
+    SYSCALL_NETWORK_EVENT_SUBSCRIBE = 86,
+    SYSCALL_NETWORK_EVENT_RECV = 87
 };
 
 enum userland_builtin_target {
@@ -188,6 +195,23 @@ enum video_present_copy_override_kind {
     VIDEO_PRESENT_COPY_OVERRIDE_MOVNTDQ = 3
 };
 
+enum mk_video_event_type {
+    MK_VIDEO_EVENT_NONE = 0,
+    MK_VIDEO_EVENT_PRESENT = 1,
+    MK_VIDEO_EVENT_MODE_SET = 2,
+    MK_VIDEO_EVENT_LEAVE = 3
+};
+
+struct mk_video_event {
+    uint32_t abi_version;
+    uint32_t event_type;
+    uint32_t present_mode;
+    uint32_t sequence;
+    uint32_t active_width;
+    uint32_t active_height;
+    uint32_t tick;
+};
+
 struct video_capabilities {
     uint32_t flags;
     uint32_t supported_modes;
@@ -266,6 +290,42 @@ struct mk_service_event {
     uint32_t pid;
     uint32_t restart_count;
     uint32_t transport_degraded;
+    uint32_t tick;
+};
+
+enum mk_audio_event_type {
+    MK_AUDIO_EVENT_NONE = 0,
+    MK_AUDIO_EVENT_QUEUED = 1,
+    MK_AUDIO_EVENT_IDLE = 2,
+    MK_AUDIO_EVENT_UNDERRUN = 3
+};
+
+struct mk_audio_event {
+    uint32_t abi_version;
+    uint32_t event_type;
+    uint32_t backend_kind;
+    uint32_t queued_bytes;
+    uint32_t underruns;
+    uint32_t tick;
+};
+
+enum mk_network_event_type {
+    MK_NETWORK_EVENT_NONE = 0,
+    MK_NETWORK_EVENT_STATUS = 1,
+    MK_NETWORK_EVENT_SOCKET_RECV = 2,
+    MK_NETWORK_EVENT_SOCKET_ACCEPT = 3,
+    MK_NETWORK_EVENT_SOCKET_SEND = 4,
+    MK_NETWORK_EVENT_SOCKET_CLOSED = 5
+};
+
+struct mk_network_event {
+    uint32_t abi_version;
+    uint32_t event_type;
+    int32_t handle;
+    int32_t peer_handle;
+    uint32_t sequence;
+    uint32_t link_state;
+    uint32_t byte_count;
     uint32_t tick;
 };
 

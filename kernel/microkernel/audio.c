@@ -16,6 +16,8 @@
 #define MK_AUDIO_SOFT_BUFFER_SIZE 16384u
 #define MK_AUDIO_ASYNC_WRITE_BUFFER_SIZE 65536u
 #define MK_AUDIO_ASYNC_WRITE_CHUNK 4096u
+#define MK_AUDIO_EVENT_SUBSCRIBERS 8u
+#define MK_AUDIO_EVENT_QUEUE_SIZE 16u
 #define PCI_CLASS_MULTIMEDIA 0x04u
 #define PCI_SUBCLASS_MULTIMEDIA_AUDIO 0x01u
 #define PCI_SUBCLASS_MULTIMEDIA_HDA 0x03u
@@ -422,6 +424,17 @@ struct mk_audio_hda_bdl_entry {
     uint32_t flags;
 };
 
+struct mk_audio_event_subscription {
+    int pid;
+    process_t *process;
+    kernel_waitable_t waitable;
+    struct mk_audio_event events[MK_AUDIO_EVENT_QUEUE_SIZE];
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
+    uint32_t dropped_events;
+};
+
 struct mk_audio_service_state {
     struct mk_audio_info info;
     enum mk_audio_backend_kind backend_kind;
@@ -563,6 +576,9 @@ struct mk_audio_service_state {
     uint32_t azalia_output_deadline_tick;
     uint32_t azalia_output_poll_tick;
     uint32_t status_snapshot_tick;
+    uint32_t audio_event_last_queued_bytes;
+    uint32_t audio_event_last_underruns;
+    uint8_t audio_event_last_active;
     uint32_t *azalia_corb;
     struct mk_audio_hda_rirb_entry *azalia_rirb;
     struct mk_audio_hda_bdl_entry *azalia_bdl;
@@ -580,6 +596,7 @@ struct mk_audio_service_state {
     uint32_t capture_bytes_read;
     uint32_t capture_xruns;
     uint8_t usb_audio_staging_buffer[MK_AUDIO_SOFT_BUFFER_SIZE];
+    struct mk_audio_event_subscription event_subscribers[MK_AUDIO_EVENT_SUBSCRIBERS];
 };
 
 static const struct mk_audio_control_info g_audio_controls[] = {
@@ -594,6 +611,9 @@ static const struct mk_audio_control_info g_audio_controls[] = {
 static struct mk_message g_last_audio_request;
 static struct mk_message g_last_audio_reply;
 static struct mk_audio_service_state g_audio_state;
+static void mk_audio_event_init_subscribers(void);
+static void mk_audio_publish_event(uint32_t event_type, uint32_t queued_bytes, uint32_t underruns);
+static int mk_audio_current_underruns(void);
 static int mk_audio_backend_soft_start(void);
 static int mk_audio_backend_soft_stop(void);
 static int mk_audio_backend_soft_write(const uint8_t *data, uint32_t size);
@@ -796,6 +816,9 @@ static void mk_audio_capture_ring_write(const uint8_t *data, uint32_t size);
 static int mk_audio_capture_ring_read(uint8_t *data, uint32_t size);
 static int mk_audio_compat_capture_block(uint32_t requested_bytes);
 static uint32_t mk_audio_estimated_playback_ticks(const struct audio_swpar *params, uint32_t data_size);
+static void mk_audio_event_init_subscribers(void);
+static void mk_audio_publish_event(uint32_t event_type, uint32_t queued_bytes, uint32_t underruns);
+static int mk_audio_current_underruns(void);
 static const struct mk_audio_backend_ops g_audio_backend_soft = {
     mk_audio_backend_soft_start,
     mk_audio_backend_soft_stop,
@@ -821,6 +844,124 @@ static const struct mk_audio_backend_ops g_audio_backend_azalia = {
     mk_audio_backend_azalia_stop,
     mk_audio_backend_azalia_write
 };
+
+static void mk_audio_event_init_subscribers(void) {
+    uint32_t index;
+
+    g_audio_state.audio_event_last_queued_bytes = 0u;
+    g_audio_state.audio_event_last_underruns = 0u;
+    g_audio_state.audio_event_last_active = 0u;
+    for (index = 0; index < MK_AUDIO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_audio_event_subscription *subscription = &g_audio_state.event_subscribers[index];
+
+        memset(subscription, 0, sizeof(*subscription));
+        kernel_waitable_init_ex(&subscription->waitable,
+                                TASK_WAIT_EVENT_QUEUE,
+                                TASK_WAIT_CLASS_AUDIO,
+                                MK_SERVICE_AUDIO);
+    }
+}
+
+static struct mk_audio_event_subscription *mk_audio_find_subscription(const process_t *subscriber) {
+    uint32_t index;
+
+    if (subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0; index < MK_AUDIO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_audio_event_subscription *subscription = &g_audio_state.event_subscribers[index];
+
+        if (subscription->pid == subscriber->pid && subscription->process == subscriber) {
+            return subscription;
+        }
+    }
+
+    return 0;
+}
+
+static struct mk_audio_event_subscription *mk_audio_alloc_subscription(process_t *subscriber) {
+    uint32_t index;
+
+    if (subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0; index < MK_AUDIO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_audio_event_subscription *subscription = &g_audio_state.event_subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0 ||
+            scheduler_find_task_by_pid(subscription->pid) == 0) {
+            memset(subscription, 0, sizeof(*subscription));
+            subscription->pid = subscriber->pid;
+            subscription->process = subscriber;
+            kernel_waitable_init_ex(&subscription->waitable,
+                                    TASK_WAIT_EVENT_QUEUE,
+                                    TASK_WAIT_CLASS_AUDIO,
+                                    MK_SERVICE_AUDIO);
+            return subscription;
+        }
+    }
+
+    return 0;
+}
+
+static void mk_audio_enqueue_event(struct mk_audio_event_subscription *subscription,
+                                   uint32_t event_type,
+                                   uint32_t queued_bytes,
+                                   uint32_t underruns) {
+    struct mk_audio_event event;
+
+    if (subscription == 0 || event_type == MK_AUDIO_EVENT_NONE) {
+        return;
+    }
+    if (subscription->count >= MK_AUDIO_EVENT_QUEUE_SIZE) {
+        subscription->dropped_events += 1u;
+        return;
+    }
+
+    memset(&event, 0, sizeof(event));
+    event.abi_version = 1u;
+    event.event_type = event_type;
+    event.backend_kind = g_audio_state.backend_kind;
+    event.queued_bytes = queued_bytes;
+    event.underruns = underruns;
+    event.tick = kernel_timer_get_ticks();
+    subscription->events[subscription->tail] = event;
+    subscription->tail = (subscription->tail + 1u) % MK_AUDIO_EVENT_QUEUE_SIZE;
+    subscription->count += 1u;
+    kernel_waitable_signal(&subscription->waitable, 1u);
+}
+
+static void mk_audio_publish_event(uint32_t event_type, uint32_t queued_bytes, uint32_t underruns) {
+    uint32_t index;
+
+    if (event_type == MK_AUDIO_EVENT_NONE) {
+        return;
+    }
+
+    for (index = 0; index < MK_AUDIO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_audio_event_subscription *subscription = &g_audio_state.event_subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0) {
+            continue;
+        }
+        if (scheduler_find_task_by_pid(subscription->pid) == 0) {
+            memset(subscription, 0, sizeof(*subscription));
+            continue;
+        }
+        mk_audio_enqueue_event(subscription, event_type, queued_bytes, underruns);
+    }
+}
+
+static int mk_audio_current_underruns(void) {
+    int underruns = (int)g_audio_state.playback_underruns;
+
+    if ((int)g_audio_state.playback_xruns > underruns) {
+        underruns = (int)g_audio_state.playback_xruns;
+    }
+    return underruns;
+}
 static const struct mk_audio_backend_ops *g_audio_backend = &g_audio_backend_soft;
 static struct mk_audio_auich_dmalist g_audio_auich_pcmo_dmalist[AUICH_DMALIST_MAX]
     __attribute__((aligned(8)));
@@ -8333,6 +8474,10 @@ static void mk_audio_refresh_status_snapshot(void) {
     uint32_t runtime_flags = (uint32_t)g_audio_state.backend_kind & MK_AUDIO_STATUS_BACKEND_MASK;
     uint32_t queued_bytes = 0u;
     uint32_t now_ticks = kernel_timer_get_ticks();
+    uint32_t previous_queued_bytes = g_audio_state.audio_event_last_queued_bytes;
+    uint8_t previous_active = g_audio_state.audio_event_last_active;
+    uint32_t current_queued_bytes;
+    uint32_t current_underruns;
 
     if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_AUICH) {
         mk_audio_compat_update_output_progress();
@@ -8401,6 +8546,21 @@ static void mk_audio_refresh_status_snapshot(void) {
     g_audio_state.info.status._spare[3] = (int)g_audio_state.playback_bytes_consumed;
     g_audio_state.info.status._spare[4] = (int)g_audio_state.playback_xruns;
     g_audio_state.status_snapshot_tick = now_ticks;
+    current_queued_bytes = (uint32_t)(g_audio_state.info.status._spare[1] >= 0 ?
+                                      g_audio_state.info.status._spare[1] : 0);
+    current_underruns = (uint32_t)mk_audio_current_underruns();
+    if (previous_queued_bytes == 0u && current_queued_bytes != 0u) {
+        mk_audio_publish_event(MK_AUDIO_EVENT_QUEUED, current_queued_bytes, current_underruns);
+    }
+    if (previous_active != 0u && g_audio_state.info.status.active == 0 && current_queued_bytes == 0u) {
+        mk_audio_publish_event(MK_AUDIO_EVENT_IDLE, current_queued_bytes, current_underruns);
+    }
+    if (current_underruns > g_audio_state.audio_event_last_underruns) {
+        mk_audio_publish_event(MK_AUDIO_EVENT_UNDERRUN, current_queued_bytes, current_underruns);
+    }
+    g_audio_state.audio_event_last_queued_bytes = current_queued_bytes;
+    g_audio_state.audio_event_last_underruns = current_underruns;
+    g_audio_state.audio_event_last_active = (uint8_t)g_audio_state.info.status.active;
     mk_audio_refresh_topology_snapshot();
 }
 
@@ -9403,6 +9563,7 @@ void mk_audio_service_init(void) {
     mk_audio_state_reset_playback();
     mk_audio_state_reset_async_write();
     mk_audio_state_reset_capture();
+    mk_audio_event_init_subscribers();
     (void)kernel_timer_register_tick_hook(mk_audio_service_tick);
     mk_audio_select_soft_backend();
     mk_audio_refresh_usb_attach_snapshot();
@@ -9742,10 +9903,14 @@ int mk_audio_service_write_direct(const void *data, uint32_t size) {
 }
 
 int mk_audio_service_write_async(const void *data, uint32_t size) {
+    uint32_t written;
+
     if (data == 0 || size == 0u) {
         return -1;
     }
-    return (int)mk_audio_async_ring_write((const uint8_t *)data, size);
+    written = mk_audio_async_ring_write((const uint8_t *)data, size);
+    mk_audio_refresh_status_snapshot();
+    return (int)written;
 }
 
 static void mk_audio_service_tick(uint32_t tick) {
@@ -9776,9 +9941,74 @@ void mk_audio_service_pump_async(void) {
         }
         written = g_audio_backend->write(chunk, chunk_size);
         if (written <= 0) {
+            mk_audio_refresh_status_snapshot();
             return;
         }
         mk_audio_async_ring_consume((uint32_t)written);
+    }
+    mk_audio_refresh_status_snapshot();
+}
+
+int mk_audio_service_subscribe(process_t *subscriber) {
+    struct mk_audio_event_subscription *subscription;
+
+    if (subscriber == 0) {
+        return -1;
+    }
+
+    subscription = mk_audio_find_subscription(subscriber);
+    if (subscription != 0) {
+        return 0;
+    }
+
+    subscription = mk_audio_alloc_subscription(subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    mk_audio_refresh_status_snapshot();
+    if (g_audio_state.audio_event_last_active != 0u ||
+        g_audio_state.audio_event_last_queued_bytes != 0u) {
+        mk_audio_enqueue_event(subscription,
+                               MK_AUDIO_EVENT_QUEUED,
+                               g_audio_state.audio_event_last_queued_bytes,
+                               g_audio_state.audio_event_last_underruns);
+    } else {
+        mk_audio_enqueue_event(subscription,
+                               MK_AUDIO_EVENT_IDLE,
+                               0u,
+                               g_audio_state.audio_event_last_underruns);
+    }
+    return 0;
+}
+
+int mk_audio_service_event_receive(process_t *subscriber,
+                                   struct mk_audio_event *event,
+                                   uint32_t timeout_ticks) {
+    struct mk_audio_event_subscription *subscription;
+
+    if (subscriber == 0 || event == 0) {
+        return -1;
+    }
+
+    subscription = mk_audio_find_subscription(subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    for (;;) {
+        if (subscription->count != 0u) {
+            *event = subscription->events[subscription->head];
+            subscription->head = (subscription->head + 1u) % MK_AUDIO_EVENT_QUEUE_SIZE;
+            subscription->count -= 1u;
+            return 0;
+        }
+        if (timeout_ticks == 0u) {
+            return -1;
+        }
+        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+            return -1;
+        }
     }
 }
 

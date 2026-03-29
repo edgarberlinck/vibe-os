@@ -30,6 +30,8 @@ struct audio_async_playback {
     int node;
     int waiting_for_idle;
     int finalizing;
+    int audio_event_subscription;
+    int audio_event_valid;
     uint32_t data_offset;
     uint32_t data_size;
     uint32_t streamed;
@@ -37,6 +39,7 @@ struct audio_async_playback {
     uint32_t idle_timeout;
     uint32_t last_chunk_ticks;
     uint32_t params_storage[16];
+    struct mk_audio_event last_audio_event;
     int use_kernel_async;
     char tag[32];
 };

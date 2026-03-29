@@ -1,6 +1,8 @@
 #include <kernel/kernel_string.h>
 #include <kernel/drivers/pci/pci.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/timer/timer.h>
+#include <kernel/event.h>
 #include <kernel/hal/io.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/network.h>
@@ -47,6 +49,8 @@
 #define MK_NETWORK_VIRTIO_RX_SLOT_COUNT 8u
 #define MK_NETWORK_VIRTIO_RX_BUFFER_BYTES 2048u
 #define MK_NETWORK_VIRTIO_TX_FRAME_BYTES 64u
+#define MK_NETWORK_EVENT_SUBSCRIBERS 8u
+#define MK_NETWORK_EVENT_QUEUE_SIZE 16u
 
 struct mk_network_scan_entry_state {
     char ssid[MK_NETWORK_SSID_MAX + 1];
@@ -73,6 +77,17 @@ struct mk_network_socket_state {
     struct sockaddr_storage address;
     uint32_t rx_size;
     uint8_t rx_buffer[MK_NETWORK_SOCKET_RX_CAPACITY];
+};
+
+struct mk_network_event_subscription {
+    int pid;
+    process_t *process;
+    kernel_waitable_t waitable;
+    struct mk_network_event events[MK_NETWORK_EVENT_QUEUE_SIZE];
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
+    uint32_t dropped_events;
 };
 
 struct mk_network_pci_probe_state {
@@ -185,6 +200,155 @@ struct mk_network_service_state {
 static struct mk_message g_last_network_request;
 static struct mk_message g_last_network_reply;
 static struct mk_network_service_state g_network_state;
+static struct mk_network_event_subscription g_network_event_subscribers[MK_NETWORK_EVENT_SUBSCRIBERS];
+static uint32_t g_network_event_sequence = 0u;
+
+static void mk_network_event_init_subscribers(void);
+static struct mk_network_event_subscription *mk_network_find_subscription(const process_t *subscriber);
+static struct mk_network_event_subscription *mk_network_alloc_subscription(process_t *subscriber);
+static void mk_network_enqueue_event(struct mk_network_event_subscription *subscription,
+                                     uint32_t event_type,
+                                     int32_t handle,
+                                     int32_t peer_handle,
+                                     uint32_t link_state,
+                                     uint32_t byte_count,
+                                     uint32_t sequence);
+static uint32_t mk_network_publish_event(uint32_t event_type,
+                                         int32_t handle,
+                                         int32_t peer_handle,
+                                         uint32_t link_state,
+                                         uint32_t byte_count);
+static void mk_network_publish_status_event(void);
+
+static void mk_network_event_init_subscribers(void) {
+    uint32_t index;
+
+    g_network_event_sequence = 0u;
+    for (index = 0u; index < MK_NETWORK_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_network_event_subscription *subscription = &g_network_event_subscribers[index];
+
+        memset(subscription, 0, sizeof(*subscription));
+        kernel_waitable_init_ex(&subscription->waitable,
+                                TASK_WAIT_EVENT_QUEUE,
+                                TASK_WAIT_CLASS_NETWORK,
+                                MK_SERVICE_NETWORK);
+    }
+}
+
+static struct mk_network_event_subscription *mk_network_find_subscription(const process_t *subscriber) {
+    uint32_t index;
+
+    if (subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0u; index < MK_NETWORK_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_network_event_subscription *subscription = &g_network_event_subscribers[index];
+
+        if (subscription->pid == subscriber->pid && subscription->process == subscriber) {
+            return subscription;
+        }
+    }
+    return 0;
+}
+
+static struct mk_network_event_subscription *mk_network_alloc_subscription(process_t *subscriber) {
+    uint32_t index;
+
+    if (subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0u; index < MK_NETWORK_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_network_event_subscription *subscription = &g_network_event_subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0) {
+            memset(subscription, 0, sizeof(*subscription));
+            subscription->pid = subscriber->pid;
+            subscription->process = subscriber;
+            kernel_waitable_init_ex(&subscription->waitable,
+                                    TASK_WAIT_EVENT_QUEUE,
+                                    TASK_WAIT_CLASS_NETWORK,
+                                    MK_SERVICE_NETWORK);
+            return subscription;
+        }
+    }
+    return 0;
+}
+
+static void mk_network_enqueue_event(struct mk_network_event_subscription *subscription,
+                                     uint32_t event_type,
+                                     int32_t handle,
+                                     int32_t peer_handle,
+                                     uint32_t link_state,
+                                     uint32_t byte_count,
+                                     uint32_t sequence) {
+    struct mk_network_event event;
+
+    if (subscription == 0 || event_type == MK_NETWORK_EVENT_NONE) {
+        return;
+    }
+    if (subscription->count >= MK_NETWORK_EVENT_QUEUE_SIZE) {
+        subscription->dropped_events += 1u;
+        return;
+    }
+
+    memset(&event, 0, sizeof(event));
+    event.abi_version = 1u;
+    event.event_type = event_type;
+    event.handle = handle;
+    event.peer_handle = peer_handle;
+    event.sequence = sequence;
+    event.link_state = link_state;
+    event.byte_count = byte_count;
+    event.tick = kernel_timer_get_ticks();
+    subscription->events[subscription->tail] = event;
+    subscription->tail = (subscription->tail + 1u) % MK_NETWORK_EVENT_QUEUE_SIZE;
+    subscription->count += 1u;
+    kernel_waitable_signal(&subscription->waitable, 1u);
+}
+
+static uint32_t mk_network_publish_event(uint32_t event_type,
+                                         int32_t handle,
+                                         int32_t peer_handle,
+                                         uint32_t link_state,
+                                         uint32_t byte_count) {
+    uint32_t index;
+    uint32_t sequence;
+
+    if (event_type == MK_NETWORK_EVENT_NONE) {
+        return 0u;
+    }
+
+    sequence = ++g_network_event_sequence;
+    for (index = 0u; index < MK_NETWORK_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_network_event_subscription *subscription = &g_network_event_subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0) {
+            continue;
+        }
+        if (scheduler_find_task_by_pid(subscription->pid) == 0) {
+            memset(subscription, 0, sizeof(*subscription));
+            continue;
+        }
+        mk_network_enqueue_event(subscription,
+                                 event_type,
+                                 handle,
+                                 peer_handle,
+                                 link_state,
+                                 byte_count,
+                                 sequence);
+    }
+    return sequence;
+}
+
+static void mk_network_publish_status_event(void) {
+    (void)mk_network_publish_event(MK_NETWORK_EVENT_STATUS,
+                                   0,
+                                   0,
+                                   g_network_state.status.link_state,
+                                   0u);
+}
 
 static uint32_t mk_network_current_pid(void) {
     return scheduler_current_pid();
@@ -648,6 +812,7 @@ static void mk_network_reset_link_state(void) {
         g_network_state.status.active_if,
         sizeof(g_network_state.status.active_if),
         g_network_state.pci_probe.present ? g_network_state.pci_probe.if_name : "lo0");
+    mk_network_publish_status_event();
 }
 
 static void mk_network_probe_virtio_legacy_config(struct mk_network_pci_probe_state *probe) {
@@ -898,6 +1063,7 @@ static void mk_network_apply_ethernet_profile(void) {
         g_network_state.status.gateway[0] = '\0';
         g_network_state.status.dns_server[0] = '\0';
     }
+    mk_network_publish_status_event();
 }
 
 static int mk_network_apply_ethernet_config(const struct mk_network_ethernet_config *config) {
@@ -926,6 +1092,7 @@ static int mk_network_apply_ethernet_config(const struct mk_network_ethernet_con
     (void)mk_network_copy_string(g_network_state.status.dns_server,
                                  sizeof(g_network_state.status.dns_server),
                                  config->dns_server);
+    mk_network_publish_status_event();
     return 0;
 }
 
@@ -948,6 +1115,7 @@ static void mk_network_begin_ethernet_connect(void) {
     g_network_state.status.ip_address[0] = '\0';
     g_network_state.status.gateway[0] = '\0';
     g_network_state.status.dns_server[0] = '\0';
+    mk_network_publish_status_event();
 }
 
 static void mk_network_progress_state(void) {
@@ -1019,6 +1187,7 @@ static int mk_network_state_connect_wifi(const struct mk_network_connect_request
         (void)mk_network_copy_string(g_network_state.status.dns_server,
                                      sizeof(g_network_state.status.dns_server),
                                      "1.1.1.1");
+        mk_network_publish_status_event();
         return 0;
     }
 
@@ -1203,6 +1372,7 @@ void mk_network_service_init(void) {
     memset(&g_last_network_request, 0, sizeof(g_last_network_request));
     memset(&g_last_network_reply, 0, sizeof(g_last_network_reply));
     memset(&g_network_state, 0, sizeof(g_network_state));
+    mk_network_event_init_subscribers();
 
     mk_network_probe_pci_devices();
 
@@ -1537,6 +1707,11 @@ int mk_network_service_socket_connect(int handle, const struct sockaddr *address
             socket_state->connected = 1;
             socket_state->peer_handle = accepted_handle;
             peer->pending_accept_handle = accepted_handle;
+            (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_ACCEPT,
+                                           (int32_t)((peer - g_network_state.sockets) + 1),
+                                           accepted_handle,
+                                           g_network_state.status.link_state,
+                                           0u);
             return 0;
         }
         if (peer->connected) {
@@ -1575,6 +1750,16 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
 
     memcpy(peer->rx_buffer + peer->rx_size, data, size);
     peer->rx_size += size;
+    (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_SEND,
+                                   handle,
+                                   socket_state->peer_handle,
+                                   g_network_state.status.link_state,
+                                   size);
+    (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_RECV,
+                                   socket_state->peer_handle,
+                                   handle,
+                                   g_network_state.status.link_state,
+                                   peer->rx_size);
     return (int)size;
 }
 
@@ -1609,10 +1794,13 @@ int mk_network_service_recv(int handle, void *buffer, uint32_t size) {
 int mk_network_service_close(int handle) {
     struct mk_network_socket_state *socket_state = mk_network_socket_by_handle_for_current_pid(handle);
     struct mk_network_socket_state *pending;
+    int peer_handle;
 
     if (socket_state == 0) {
         return -1;
     }
+
+    peer_handle = socket_state->peer_handle;
 
     if (socket_state->pending_accept_handle > 0) {
         pending = mk_network_socket_by_handle(socket_state->pending_accept_handle);
@@ -1622,6 +1810,11 @@ int mk_network_service_close(int handle) {
         }
     }
     mk_network_socket_disconnect_peer(socket_state);
+    (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_CLOSED,
+                                   handle,
+                                   peer_handle,
+                                   g_network_state.status.link_state,
+                                   0u);
     memset(socket_state, 0, sizeof(*socket_state));
     return 0;
 }
@@ -1660,4 +1853,61 @@ int mk_network_service_last_request(struct mk_message *message) {
 
     *message = g_last_network_request;
     return 0;
+}
+
+int mk_network_service_subscribe(struct process *subscriber) {
+    struct mk_network_event_subscription *subscription;
+
+    if (subscriber == 0) {
+        return -1;
+    }
+
+    subscription = mk_network_find_subscription(subscriber);
+    if (subscription == 0) {
+        subscription = mk_network_alloc_subscription(subscriber);
+    }
+    if (subscription == 0) {
+        return -1;
+    }
+
+    if (subscription->count == 0u) {
+        mk_network_enqueue_event(subscription,
+                                 MK_NETWORK_EVENT_STATUS,
+                                 0,
+                                 0,
+                                 g_network_state.status.link_state,
+                                 0u,
+                                 ++g_network_event_sequence);
+    }
+    return 0;
+}
+
+int mk_network_service_event_receive(struct process *subscriber,
+                                     struct mk_network_event *event,
+                                     uint32_t timeout_ticks) {
+    struct mk_network_event_subscription *subscription;
+
+    if (subscriber == 0 || event == 0) {
+        return -1;
+    }
+
+    subscription = mk_network_find_subscription(subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    for (;;) {
+        if (subscription->count != 0u) {
+            *event = subscription->events[subscription->head];
+            subscription->head = (subscription->head + 1u) % MK_NETWORK_EVENT_QUEUE_SIZE;
+            subscription->count -= 1u;
+            return 0;
+        }
+        if (timeout_ticks == 0u) {
+            return -1;
+        }
+        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+            return -1;
+        }
+    }
 }

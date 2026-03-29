@@ -267,6 +267,32 @@ static int audio_playback_is_idle(void) {
     return status.active == 0 && status._spare[1] == 0;
 }
 
+static void audio_async_drain_events(struct audio_async_playback *playback) {
+    struct mk_audio_event event;
+
+    if (playback == 0 || !playback->audio_event_subscription) {
+        return;
+    }
+
+    while (sys_audio_event_receive(&event, 0u) == 0) {
+        playback->last_audio_event = event;
+        playback->audio_event_valid = 1;
+    }
+}
+
+static int audio_async_wait_event_idle(struct audio_async_playback *playback) {
+    if (playback == 0 || !playback->use_kernel_async || !playback->audio_event_subscription) {
+        return 0;
+    }
+
+    audio_async_drain_events(playback);
+    if (!playback->audio_event_valid) {
+        return 0;
+    }
+
+    return playback->last_audio_event.event_type == MK_AUDIO_EVENT_IDLE;
+}
+
 static uint32_t audio_idle_timeout_ticks(uint32_t expected_ticks) {
     uint32_t timeout = expected_ticks + 40u;
 
@@ -542,6 +568,11 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
     playback->use_kernel_async = audio_should_use_kernel_async(tag);
     str_copy_limited(playback->tag, tag ? tag : "audio", (int)sizeof(playback->tag));
 
+    if (playback->use_kernel_async && sys_audio_event_subscribe() == 0) {
+        playback->audio_event_subscription = 1;
+        audio_async_drain_events(playback);
+    }
+
     if (playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
         tag != 0 &&
         (str_eq(tag, "desktop-session") || str_eq(tag, "desktop"))) {
@@ -578,7 +609,7 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
     params = (struct audio_swpar *)playback->params_storage;
 
     if (playback->waiting_for_idle) {
-        if (audio_playback_is_idle()) {
+        if (audio_async_wait_event_idle(playback) || audio_playback_is_idle()) {
             playback->waiting_for_idle = 0;
             if (!playback->finalizing) {
                 if (audio_debug_progress_enabled(playback->tag)) {
@@ -596,6 +627,8 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
             return 1;
         }
     }
+
+    audio_async_drain_events(playback);
 
     if (playback->finalizing || playback->streamed >= playback->data_size) {
         audio_debug_line("audio: stopping ", playback->tag, "\n");

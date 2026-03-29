@@ -1,10 +1,12 @@
 #ifndef KERNEL_MICROKERNEL_AUDIO_H
 #define KERNEL_MICROKERNEL_AUDIO_H
 
+#include <include/userland_api.h>
 #include <stdint.h>
 #include <sys/audioio.h>
 
 struct mk_message;
+struct process;
 
 #define MK_AUDIO_INLINE_WRITE_MAX 240u
 #define MK_AUDIO_INLINE_READ_MAX 252u
@@ -81,6 +83,10 @@ int mk_audio_service_stop(void);
 int mk_audio_service_write(const void *data, uint32_t size);
 int mk_audio_service_write_direct(const void *data, uint32_t size);
 int mk_audio_service_write_async(const void *data, uint32_t size);
+int mk_audio_service_subscribe(struct process *subscriber);
+int mk_audio_service_event_receive(struct process *subscriber,
+                                   struct mk_audio_event *event,
+                                   uint32_t timeout_ticks);
 void mk_audio_service_pump_async(void);
 int mk_audio_service_read(void *data, uint32_t size);
 int mk_audio_service_get_control_info(uint32_t index, struct mk_audio_control_info *info);

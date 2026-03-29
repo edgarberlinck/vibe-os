@@ -24,7 +24,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 81
+#define MAX_SYSCALLS 88
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
@@ -789,6 +789,38 @@ static uint32_t sys_service_event_receive(uint32_t service_type, uint32_t event_
                                               timeout_ticks);
 }
 
+static uint32_t sys_audio_event_subscribe(uint32_t a, uint32_t b, uint32_t c,
+                                          uint32_t d, uint32_t e) {
+    process_t *current;
+
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)mk_audio_service_subscribe(current);
+}
+
+static uint32_t sys_audio_event_receive(uint32_t event_ptr, uint32_t timeout_ticks,
+                                        uint32_t c, uint32_t d, uint32_t e) {
+    process_t *current;
+
+    (void)c; (void)d; (void)e;
+    if (event_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)mk_audio_service_event_receive(current,
+                                                    (struct mk_audio_event *)(uintptr_t)event_ptr,
+                                                    timeout_ticks);
+}
+
 static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, uint32_t max_entries,
                                   uint32_t d, uint32_t e) {
     struct task_snapshot_summary *summary;
@@ -887,6 +919,90 @@ static uint32_t sys_task_terminate(uint32_t pid, uint32_t b, uint32_t c,
     return 0u;
 }
 
+static uint32_t sys_video_event_subscribe(uint32_t a, uint32_t b, uint32_t c,
+                                          uint32_t d, uint32_t e) {
+    process_t *current = scheduler_current();
+    (void)a;
+    (void)b;
+    (void)c;
+    (void)d;
+    (void)e;
+
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+    return mk_video_service_subscribe(current) == 0 ? 0u : (uint32_t)-1;
+}
+
+static uint32_t sys_video_event_receive(uint32_t event_ptr, uint32_t timeout_ticks,
+                                        uint32_t c, uint32_t d, uint32_t e) {
+    process_t *current = scheduler_current();
+    struct mk_video_event event;
+
+    (void)c;
+    (void)d;
+    (void)e;
+    if (current == 0 || event_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    if (mk_video_service_event_receive(current,
+                                       &event,
+                                       timeout_ticks) != 0) {
+        return (uint32_t)-1;
+    }
+    memcpy((void *)(uintptr_t)event_ptr, &event, sizeof(event));
+    return 0u;
+}
+
+static uint32_t sys_video_present_submit(uint32_t mode, uint32_t sequence_ptr,
+                                         uint32_t c, uint32_t d, uint32_t e) {
+    uint32_t sequence = 0u;
+
+    (void)c;
+    (void)d;
+    (void)e;
+    if (mk_video_service_present_submit(mode, &sequence) != 0) {
+        return (uint32_t)-1;
+    }
+    if (sequence_ptr != 0u) {
+        *(uint32_t *)(uintptr_t)sequence_ptr = sequence;
+    }
+    return 0u;
+}
+
+static uint32_t sys_network_event_subscribe(uint32_t a, uint32_t b, uint32_t c,
+                                            uint32_t d, uint32_t e) {
+    process_t *current = scheduler_current();
+
+    (void)a;
+    (void)b;
+    (void)c;
+    (void)d;
+    (void)e;
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+    return mk_network_service_subscribe(current) == 0 ? 0u : (uint32_t)-1;
+}
+
+static uint32_t sys_network_event_receive(uint32_t event_ptr, uint32_t timeout_ticks,
+                                          uint32_t c, uint32_t d, uint32_t e) {
+    process_t *current = scheduler_current();
+    struct mk_network_event event;
+
+    (void)c;
+    (void)d;
+    (void)e;
+    if (current == 0 || event_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    if (mk_network_service_event_receive(current, &event, timeout_ticks) != 0) {
+        return (uint32_t)-1;
+    }
+    memcpy((void *)(uintptr_t)event_ptr, &event, sizeof(event));
+    return 0u;
+}
+
 void syscall_init(void) {
     /* register new kernel syscalls; numbers are defined in
        include/userland_api.h */
@@ -967,6 +1083,13 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
     syscall_table[SYSCALL_SERVICE_SUBSCRIBE] = sys_service_subscribe;
     syscall_table[SYSCALL_SERVICE_EVENT_RECV] = sys_service_event_receive;
+    syscall_table[SYSCALL_AUDIO_EVENT_SUBSCRIBE] = sys_audio_event_subscribe;
+    syscall_table[SYSCALL_AUDIO_EVENT_RECV] = sys_audio_event_receive;
+    syscall_table[SYSCALL_VIDEO_EVENT_SUBSCRIBE] = sys_video_event_subscribe;
+    syscall_table[SYSCALL_VIDEO_EVENT_RECV] = sys_video_event_receive;
+    syscall_table[SYSCALL_VIDEO_PRESENT_SUBMIT] = sys_video_present_submit;
+    syscall_table[SYSCALL_NETWORK_EVENT_SUBSCRIBE] = sys_network_event_subscribe;
+    syscall_table[SYSCALL_NETWORK_EVENT_RECV] = sys_network_event_receive;
     syscall_table[SYSCALL_TASK_SNAPSHOT] = sys_task_snapshot;
     syscall_table[SYSCALL_LAUNCH_BUILTIN_USER] = sys_launch_builtin_user;
     syscall_table[SYSCALL_TASK_TERMINATE] = sys_task_terminate;

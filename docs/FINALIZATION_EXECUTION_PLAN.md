@@ -143,12 +143,15 @@ Falta fechar:
 Checklist minimo para dizer "agora esta na arquitetura certa":
 - [X] existe primeira ABI async para audio (`AUDIO_WRITE_ASYNC`)
 - [~] existem primitivas de evento/waitable/cancelamento no kernel
-: agora com `waitable`, `signal`, `completion`, timeout/cancelamento, metadata de espera visivel no scheduler e stream de eventos de estado por servico; ainda falta a camada de completion de alto nivel para audio/video/storage/network
-- [ ] audio publica conclusao/progresso por evento, nao por poll oportunista
+: agora com `waitable`, `signal`, `completion`, timeout/cancelamento, metadata de espera visivel no scheduler, stream de eventos de estado por servico, supervisor consumindo esses eventos no boot e polling nao bloqueante em userland; ainda falta a camada de completion de alto nivel para audio/video/storage/network
+- [~] audio publica conclusao/progresso por evento, nao por poll oportunista
+: agora existe stream de eventos `queued/idle/underrun` saindo do servico de audio para userland, o task manager observa isso e o helper async de WAV usa o evento `idle` no caminho kernel-async; ainda resta mover ownership/completion steady-state para fora da ponte de compatibilidade do kernel
 - [~] input vira publicacao de eventos, nao fallback permanente em leitura direta
-- [ ] video ganha fila de present/fence
+- [~] video ganha fila de present/fence
+: agora existe stream de eventos de video (`present`/`mode-set`/`leave`) saindo de `videosvc` para userland, o task manager observa esse progresso, e o desktop ja usa um `present submit` com `sequence` de retorno no caminho principal; a fila real com worker dedicado ainda esta pendente
 - [ ] filesystem/storage ganham fila de I/O e writeback
-- [ ] network ganha readiness/eventos de socket reais
+- [~] network ganha readiness/eventos de socket reais
+: agora existe ABI de eventos de rede com `subscribe/receive`, o servico publica transicoes de link e notificacoes `recv` / `accept` / `send` / `closed`, e o task manager observa esse stream; o datapath de NIC extraido ainda continua pendente
 - [ ] queda/restart de um servico nao congela desktop
 - [ ] `backend-shim` sai do caminho principal e fica no maximo como rescue/boot bridge
 
@@ -249,7 +252,7 @@ O projeto pode ser considerado fechado quando, ao mesmo tempo:
 - [ ] input chega por publicacao de eventos e fila por dispositivo
 - [ ] video apresenta frames por fila/fence e nao por trabalho pesado no loop do desktop
 - [ ] storage/filesystem usam workers de I/O/writeback
-- [ ] network tem readiness/eventos reais para sockets
+- [~] network tem readiness/eventos reais para sockets
 - [ ] apps comuns nao passam na frente de `network`; shell/desktop ficam em classe superior separada
 - [~] `init` ja comeca a lancar `shell-host` / `desktop-host` separados; falta estender isso para apps modulares AppFS
 - [ ] `backend-shim` saiu do steady state

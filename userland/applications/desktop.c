@@ -4500,6 +4500,7 @@ void desktop_main(void) {
     int resize_anchor_y = 0;
     int running = 1;
     uint32_t desktop_sound_armed_ticks = 0u;
+    uint32_t desktop_last_present_sequence = 0u;
     int desktop_sound_pending = 1;
     struct audio_async_playback desktop_sound_playback = {0};
 
@@ -6507,7 +6508,9 @@ void desktop_main(void) {
                   g_craft[g_windows[focused].instance].started)) {
                 cursor_draw(mouse.x, mouse.y);
             }
-            sys_present_full();
+            if (sys_video_present_submit(VIDEO_PRESENT_FULL, &desktop_last_present_sequence) != 0) {
+                sys_present_full();
+            }
             dirty = 0;
         }
 

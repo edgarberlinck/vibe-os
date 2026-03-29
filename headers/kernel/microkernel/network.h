@@ -1,10 +1,12 @@
 #ifndef KERNEL_MICROKERNEL_NETWORK_H
 #define KERNEL_MICROKERNEL_NETWORK_H
 
+#include <include/userland_api.h>
 #include <stdint.h>
 #include <sys/socket.h>
 
 struct mk_message;
+struct process;
 
 enum mk_network_capability_flags {
     MK_NETWORK_CAPS_QUERY_ONLY = 1u << 0,
@@ -153,6 +155,10 @@ int mk_network_service_recv(int handle, void *buffer, uint32_t size);
 int mk_network_service_close(int handle);
 int mk_network_service_listen(int handle, int backlog);
 int mk_network_service_accept(int handle);
+int mk_network_service_subscribe(struct process *subscriber);
+int mk_network_service_event_receive(struct process *subscriber,
+                                     struct mk_network_event *event,
+                                     uint32_t timeout_ticks);
 int mk_network_service_last_request(struct mk_message *message);
 
 #endif

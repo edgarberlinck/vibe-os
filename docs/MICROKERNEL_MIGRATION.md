@@ -148,6 +148,12 @@ Important audit note: in the current tree, a checked item means the migration bo
 - The `input` service boundary now also carries that event stream: `MK_MSG_INPUT_EVENT` is implemented in the current local handler, `SYSCALL_INPUT_EVENT` routes through `mk_input_service_next_event()`, and the desktop consumes queued key/mouse events through the new dequeue ABI while the direct in-kernel queue remains as the compatibility fallback.
 - The waitable substrate is now richer than a bare wakeup bit: kernel waitables carry event class/kind metadata, per-service ownership tags, signal/completion wrappers, timeout/cancel paths, and scheduler snapshots can now report timed-out/canceled waits plus pending signal state without regressing the current headless boot smoke.
 - Service supervision now also emits explicit async state events: each service record owns a subscriber-aware event ring for `online/offline/degraded/recovered/restarted` notifications, so restart/degradation is no longer only observable through the synchronous request path.
+- The `init` supervisor now consumes that service-event stream in userland through explicit subscribe/receive syscalls, logging the initial `online` snapshot for storage/filesystem/video/input/console/network/audio during boot instead of idling as a pure `yield()` loop.
+- Service-event receive now also supports non-blocking userland polling, and the task manager uses that path to keep a recent in-UI history of service state changes without stalling its redraw loop.
+- The audio service now also exposes a first subsystem-level datapath event stream to userland: `queued`, `idle`, and `underrun` notifications flow through dedicated subscribe/receive syscalls, the task manager can observe them directly, and the async WAV helper now uses that channel to detect playback completion on the kernel-async path instead of polling status alone.
+- The video service now also emits a first presentation event stream to userland: `present`, `mode-set`, and `leave-graphics` notifications flow through dedicated subscribe/receive syscalls, and the task manager can observe recent present activity without depending only on bench snapshots.
+- Video presentation now also has an explicit submit boundary: userland can submit a `present` request and receive a concrete `sequence` fence token back, and the desktop now uses that path instead of treating framebuffer presentation as an anonymous trap.
+- The network service now also exposes a first async readiness stream to userland: subscribe/receive syscalls publish link-status transitions plus socket `recv`, `accept`, `send`, and `closed` notifications from the current service state machine, and the task manager now consumes that stream for live diagnostics.
 
 ## Audited Remaining Gaps
 
@@ -230,9 +236,10 @@ Rules:
 - [x] add timeout/cancel primitives for pending work items
 - [x] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
 - [~] add subscription model for async completion and state-change notifications
+: state-change subscription now exists for service supervision, but subsystem-level async completions are still missing
 - [x] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
 - [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
-- [ ] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
+- [~] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
 
 ### Phase B: Input / Desktop Decoupling
 
@@ -254,7 +261,8 @@ Rules:
 - [x] async enqueue syscall exists for startup playback (`SYSCALL_AUDIO_WRITE_ASYNC`)
 - [x] startup sound no longer needs to run as a synchronous desktop-owned playback loop
 - [ ] move audio queue ownership entirely into `audiosvc`
-- [ ] add evented playback completions / underrun notifications back to userland
+- [~] add evented playback completions / underrun notifications back to userland
+: `audiosvc` now publishes `queued` / `idle` / `underrun` events through a dedicated ABI, and both diagnostics plus the async WAV helper consume that stream on the kernel-async path; queue ownership and steady-state completion semantics still need to move fully out of the preserved kernel bridge
 - [ ] add async capture queue and delivery path
 - [ ] stop using the desktop process as a cooperative pump participant for audio progress
 - [ ] make `compat-auich`, `compat-azalia`, and future `compat-uaudio` complete playback/capture without UI-coupled progress
@@ -263,9 +271,11 @@ Rules:
 ### Phase D: Video / Presentation Split
 
 - [ ] separate window/compositor logic from framebuffer/present backend logic
-- [ ] introduce explicit present queue / frame fence model
+- [~] introduce explicit present queue / frame fence model
+: `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated ABI, and `present submit` now returns a concrete `sequence` fence token that the desktop uses on its main path; a true queued presenter worker still remains open
 - [ ] stop doing heavyweight backend work directly from desktop paint cadence
-- [ ] add evented mode-change / hotplug / backend-failure notifications
+- [~] add evented mode-change / hotplug / backend-failure notifications
+: mode-change and leave-graphics notifications now exist on the new video-event stream; hotplug/backend-failure paths are still pending
 - [ ] move video service off backend-shim steady-state execution
 - [ ] define what remains privileged for GPU/MMIO ownership versus what moves into service processes
 
@@ -304,7 +314,7 @@ The system should only be called a real microkernel in the strict sense when all
 - [ ] storage/filesystem/video/input/console/network/audio no longer rely on backend-shim steady-state execution
 - [ ] service restarts are normal and recoverable, not a path that requires direct kernel fallback to preserve usability
 - [ ] audio has real async playback and capture with completion/wakeup events
-- [ ] network has real async packet IO and socket readiness semantics
+- [~] network has first socket readiness/event semantics (`status`, `recv`, `accept`, `send`, `closed`) even though the full extracted NIC datapath is still pending
 - [ ] video has explicit present queues/fences and no desktop-owned hot path into device progress
 - [ ] input is event-published by a service boundary, not preserved through permanent direct-driver syscall escape hatches
 - [ ] there is a wait/signal primitive richer than "poll + yield + sleep"

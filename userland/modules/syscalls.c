@@ -53,6 +53,23 @@ int sys_gfx_set_present_copy_override(uint32_t kind) {
     return syscall5(SYSCALL_GFX_SET_PRESENT_COPY_OVERRIDE, (int)kind, 0, 0, 0, 0);
 }
 
+int sys_video_present_submit(uint32_t mode, uint32_t *sequence_out) {
+    return syscall5(SYSCALL_VIDEO_PRESENT_SUBMIT,
+                    (int)mode,
+                    (int)(uintptr_t)sequence_out,
+                    0,
+                    0,
+                    0);
+}
+
+int sys_video_event_subscribe(void) {
+    return syscall5(SYSCALL_VIDEO_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+}
+
+int sys_video_event_receive(struct mk_video_event *event, uint32_t timeout_ticks) {
+    return syscall5(SYSCALL_VIDEO_EVENT_RECV, (int)(uintptr_t)event, (int)timeout_ticks, 0, 0, 0);
+}
+
 void sys_leave_graphics(void) {
     (void)syscall5(SYSCALL_GFX_LEAVE, 0, 0, 0, 0, 0);
 }
@@ -241,6 +258,19 @@ int sys_audio_write_async(const void *data, uint32_t size) {
     return syscall5(SYSCALL_AUDIO_WRITE_ASYNC, (int)(uintptr_t)data, (int)size, 0, 0, 0);
 }
 
+int sys_audio_event_subscribe(void) {
+    return syscall5(SYSCALL_AUDIO_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+}
+
+int sys_audio_event_receive(struct mk_audio_event *event, uint32_t timeout_ticks) {
+    return syscall5(SYSCALL_AUDIO_EVENT_RECV,
+                    (int)(uintptr_t)event,
+                    (int)timeout_ticks,
+                    0,
+                    0,
+                    0);
+}
+
 int sys_audio_read(void *data, uint32_t size) {
     return syscall5(SYSCALL_AUDIO_READ, (int)(uintptr_t)data, (int)size, 0, 0, 0);
 }
@@ -335,6 +365,19 @@ int sys_network_listen(int handle, int backlog) {
 
 int sys_network_accept(int handle) {
     return syscall5(SYSCALL_NETWORK_ACCEPT, handle, 0, 0, 0, 0);
+}
+
+int sys_network_event_subscribe(void) {
+    return syscall5(SYSCALL_NETWORK_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+}
+
+int sys_network_event_receive(struct mk_network_event *event, uint32_t timeout_ticks) {
+    return syscall5(SYSCALL_NETWORK_EVENT_RECV,
+                    (int)(uintptr_t)event,
+                    (int)timeout_ticks,
+                    0,
+                    0,
+                    0);
 }
 
 int sys_getpid(void) {

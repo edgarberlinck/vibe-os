@@ -43,6 +43,12 @@ struct taskmgr_netmgrd_status {
     char autoconnect[MK_NETWORK_SSID_MAX + 1];
 };
 
+#define TASKMGR_SERVICE_EVENT_HISTORY 12u
+
+struct taskmgr_service_event_entry {
+    struct mk_service_event event;
+};
+
 struct taskmgr_state {
     struct rect window;
     int selected_tab;
@@ -58,11 +64,24 @@ struct taskmgr_state {
     int audio_status_valid;
     int network_info_valid;
     int network_status_valid;
+    int audio_event_subscription;
+    int video_event_subscription;
+    int network_event_subscription;
+    int audio_event_valid;
+    int video_event_valid;
+    int network_event_valid;
+    uint32_t service_event_subscriptions;
+    uint32_t service_event_head;
+    uint32_t service_event_count;
     struct task_snapshot_summary summary;
     struct task_snapshot_entry tasks[TASK_SNAPSHOT_MAX];
+    struct taskmgr_service_event_entry service_events[TASKMGR_SERVICE_EVENT_HISTORY];
     struct video_bench_info video_bench;
     struct mk_audio_info audio_info;
     struct audio_status audio_status;
+    struct mk_audio_event audio_event;
+    struct mk_video_event video_event;
+    struct mk_network_event network_event;
     struct mk_network_info network_info;
     struct mk_network_status network_status;
     struct taskmgr_netmgrd_status netmgrd_status;

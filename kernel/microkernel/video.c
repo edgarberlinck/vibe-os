@@ -1,5 +1,6 @@
 #include <include/userland_api.h>
 #include <kernel/drivers/video/video.h>
+#include <kernel/drivers/timer/timer.h>
 #include <kernel/kernel_string.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/service.h>
@@ -11,6 +12,8 @@
 #define MK_VIDEO_PALETTE_BYTES 768u
 #define MK_VIDEO_UPLOAD_CACHE_SLOTS 4u
 #define MK_VIDEO_PALETTE_CACHE_SLOTS 4u
+#define MK_VIDEO_EVENT_SUBSCRIBERS 8u
+#define MK_VIDEO_EVENT_QUEUE_SIZE 16u
 
 struct mk_video_upload_cache {
     uint32_t owner_pid;
@@ -23,8 +26,142 @@ struct mk_video_palette_cache {
     uint32_t transfer_id;
 };
 
+struct mk_video_event_subscription {
+    int pid;
+    process_t *process;
+    kernel_waitable_t waitable;
+    struct mk_video_event events[MK_VIDEO_EVENT_QUEUE_SIZE];
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
+    uint32_t dropped_events;
+};
+
 static struct mk_video_upload_cache g_video_upload_cache[MK_VIDEO_UPLOAD_CACHE_SLOTS];
 static struct mk_video_palette_cache g_video_palette_cache[MK_VIDEO_PALETTE_CACHE_SLOTS];
+static struct mk_video_event_subscription g_video_event_subscribers[MK_VIDEO_EVENT_SUBSCRIBERS];
+static uint32_t g_video_event_sequence = 0u;
+
+static void mk_video_event_init_subscribers(void);
+static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode);
+static struct mk_video_event_subscription *mk_video_find_subscription(const process_t *subscriber);
+static struct mk_video_event_subscription *mk_video_alloc_subscription(process_t *subscriber);
+static void mk_video_enqueue_event(struct mk_video_event_subscription *subscription,
+                                   uint32_t event_type,
+                                   uint32_t present_mode,
+                                   uint32_t sequence);
+
+static void mk_video_event_init_subscribers(void) {
+    uint32_t index;
+
+    g_video_event_sequence = 0u;
+    for (index = 0; index < MK_VIDEO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
+
+        memset(subscription, 0, sizeof(*subscription));
+        kernel_waitable_init_ex(&subscription->waitable,
+                                TASK_WAIT_EVENT_QUEUE,
+                                TASK_WAIT_CLASS_VIDEO,
+                                MK_SERVICE_VIDEO);
+    }
+}
+
+static struct mk_video_event_subscription *mk_video_find_subscription(const process_t *subscriber) {
+    uint32_t index;
+
+    if (subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0; index < MK_VIDEO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
+
+        if (subscription->pid == subscriber->pid && subscription->process == subscriber) {
+            return subscription;
+        }
+    }
+    return 0;
+}
+
+static struct mk_video_event_subscription *mk_video_alloc_subscription(process_t *subscriber) {
+    uint32_t index;
+
+    if (subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0; index < MK_VIDEO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0) {
+            memset(subscription, 0, sizeof(*subscription));
+            subscription->pid = subscriber->pid;
+            subscription->process = subscriber;
+            kernel_waitable_init_ex(&subscription->waitable,
+                                    TASK_WAIT_EVENT_QUEUE,
+                                    TASK_WAIT_CLASS_VIDEO,
+                                    MK_SERVICE_VIDEO);
+            return subscription;
+        }
+    }
+    return 0;
+}
+
+static void mk_video_enqueue_event(struct mk_video_event_subscription *subscription,
+                                   uint32_t event_type,
+                                   uint32_t present_mode,
+                                   uint32_t sequence) {
+    struct mk_video_event event;
+    struct video_mode *mode;
+
+    if (subscription == 0 || event_type == MK_VIDEO_EVENT_NONE) {
+        return;
+    }
+    if (subscription->count >= MK_VIDEO_EVENT_QUEUE_SIZE) {
+        subscription->dropped_events += 1u;
+        return;
+    }
+
+    memset(&event, 0, sizeof(event));
+    mode = kernel_video_get_mode();
+    event.abi_version = 1u;
+    event.event_type = event_type;
+    event.present_mode = present_mode;
+    event.sequence = sequence;
+    if (mode != 0) {
+        event.active_width = mode->width;
+        event.active_height = mode->height;
+    }
+    event.tick = kernel_timer_get_ticks();
+    subscription->events[subscription->tail] = event;
+    subscription->tail = (subscription->tail + 1u) % MK_VIDEO_EVENT_QUEUE_SIZE;
+    subscription->count += 1u;
+    kernel_waitable_signal(&subscription->waitable, 1u);
+}
+
+static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode) {
+    uint32_t index;
+    uint32_t sequence;
+
+    if (event_type == MK_VIDEO_EVENT_NONE) {
+        return 0u;
+    }
+    sequence = ++g_video_event_sequence;
+
+    for (index = 0; index < MK_VIDEO_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0) {
+            continue;
+        }
+        if (scheduler_find_task_by_pid(subscription->pid) == 0) {
+            memset(subscription, 0, sizeof(*subscription));
+            continue;
+        }
+        mk_video_enqueue_event(subscription, event_type, present_mode, sequence);
+    }
+    return sequence;
+}
 
 static uint32_t mk_video_current_pid(void) {
     return scheduler_current_pid();
@@ -178,6 +315,14 @@ static int mk_video_reply_result(struct mk_message *reply, int value) {
     return mk_message_set_payload(reply, &result, sizeof(result));
 }
 
+static int mk_video_reply_present(struct mk_message *reply, int value, uint32_t sequence) {
+    struct mk_video_present_reply payload;
+
+    payload.value = value;
+    payload.sequence = sequence;
+    return mk_message_set_payload(reply, &payload, sizeof(payload));
+}
+
 static int mk_video_decode_result(const struct mk_message *reply) {
     struct mk_video_result result;
 
@@ -187,6 +332,19 @@ static int mk_video_decode_result(const struct mk_message *reply) {
 
     memcpy(&result, reply->payload, sizeof(result));
     return result.value;
+}
+
+static int mk_video_decode_present(const struct mk_message *reply, uint32_t *sequence_out) {
+    struct mk_video_present_reply payload;
+
+    if (reply == 0 || reply->payload_size != sizeof(payload)) {
+        return -1;
+    }
+    memcpy(&payload, reply->payload, sizeof(payload));
+    if (sequence_out != 0) {
+        *sequence_out = payload.sequence;
+    }
+    return payload.value;
 }
 
 static int mk_video_validate_text_transfer(uint32_t transfer_id,
@@ -327,20 +485,35 @@ static int mk_video_local_handler(const struct mk_message *request,
     case MK_MSG_VIDEO_FLIP:
         if (request->payload_size == 0u) {
             kernel_video_flip();
+            mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, VIDEO_PRESENT_AUTO);
             return mk_video_reply_result(reply, 0);
         }
         if (request->payload_size == sizeof(struct mk_video_present_request)) {
             const struct mk_video_present_request *payload =
                 (const struct mk_video_present_request *)request->payload;
             kernel_video_flip_mode(payload->mode);
+            mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, payload->mode);
             return mk_video_reply_result(reply, 0);
         }
         return -1;
+    case MK_MSG_VIDEO_PRESENT_SUBMIT: {
+        const struct mk_video_present_request *payload;
+        uint32_t sequence;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_video_present_request *)request->payload;
+        kernel_video_flip_mode(payload->mode);
+        sequence = mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, payload->mode);
+        return mk_video_reply_present(reply, 0, sequence);
+    }
     case MK_MSG_VIDEO_LEAVE:
         if (request->payload_size != 0u) {
             return -1;
         }
         kernel_video_leave_graphics();
+        mk_video_publish_event(MK_VIDEO_EVENT_LEAVE, VIDEO_PRESENT_AUTO);
         return mk_video_reply_result(reply, 0);
     case MK_MSG_VIDEO_BLIT8: {
         const struct mk_video_blit8_request *payload;
@@ -380,6 +553,7 @@ static int mk_video_local_handler(const struct mk_message *request,
                                  payload->dst_x,
                                  payload->dst_y,
                                  payload->scale);
+        mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, VIDEO_PRESENT_FULL);
         return mk_video_reply_result(reply, 0);
     }
     case MK_MSG_VIDEO_BLIT8_INLINE: {
@@ -426,6 +600,7 @@ static int mk_video_local_handler(const struct mk_message *request,
                                  payload->dst_x,
                                  payload->dst_y,
                                  payload->scale);
+        mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, VIDEO_PRESENT_FULL);
         return mk_video_reply_result(reply, 0);
     }
     case MK_MSG_VIDEO_BLIT8_STRETCH_PRESENT: {
@@ -447,6 +622,7 @@ static int mk_video_local_handler(const struct mk_message *request,
                                          payload->dst_y,
                                          payload->dst_width,
                                          payload->dst_height);
+        mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, VIDEO_PRESENT_FULL);
         return mk_video_reply_result(reply, 0);
     }
     case MK_MSG_VIDEO_BLIT8_STRETCH: {
@@ -518,6 +694,7 @@ static int mk_video_local_handler(const struct mk_message *request,
                                          payload->dst_y,
                                          payload->dst_width,
                                          payload->dst_height);
+        mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, VIDEO_PRESENT_FULL);
         return mk_video_reply_result(reply, 0);
     }
     case MK_MSG_VIDEO_MODE_SET: {
@@ -527,7 +704,14 @@ static int mk_video_local_handler(const struct mk_message *request,
             return -1;
         }
         payload = (const struct mk_video_mode_request *)request->payload;
-        return mk_video_reply_result(reply, kernel_video_set_mode(payload->width, payload->height));
+        {
+            int rc = kernel_video_set_mode(payload->width, payload->height);
+
+            if (rc == 0) {
+                mk_video_publish_event(MK_VIDEO_EVENT_MODE_SET, VIDEO_PRESENT_AUTO);
+            }
+            return mk_video_reply_result(reply, rc);
+        }
     }
     case MK_MSG_VIDEO_SET_PALETTE: {
         const struct mk_video_palette_request *payload;
@@ -586,6 +770,7 @@ static int mk_video_local_handler(const struct mk_message *request,
 }
 
 void mk_video_service_init(void) {
+    mk_video_event_init_subscribers();
     (void)mk_service_launch_task(MK_SERVICE_VIDEO,
                                  "video",
                                  mk_video_local_handler,
@@ -703,6 +888,21 @@ int mk_video_service_flip_mode(uint32_t mode) {
         return -1;
     }
     return mk_video_decode_result(&reply);
+}
+
+int mk_video_service_present_submit(uint32_t mode, uint32_t *sequence_out) {
+    struct mk_message request;
+    struct mk_message reply;
+    struct mk_video_present_request payload;
+
+    payload.mode = mode;
+    if (mk_video_prepare_request(&request, MK_MSG_VIDEO_PRESENT_SUBMIT, &payload, sizeof(payload)) != 0) {
+        return -1;
+    }
+    if (mk_service_request(MK_SERVICE_VIDEO, &request, &reply) != 0) {
+        return -1;
+    }
+    return mk_video_decode_present(&reply, sequence_out);
 }
 
 int mk_video_service_leave_graphics(void) {
@@ -1123,4 +1323,63 @@ int mk_video_service_get_caps(struct video_capabilities *caps) {
         return -1;
     }
     return mk_video_decode_caps(&reply, caps);
+}
+
+int mk_video_service_subscribe(struct process *subscriber) {
+    struct mk_video_event_subscription *subscription;
+    struct video_mode *mode;
+
+    if (subscriber == 0) {
+        return -1;
+    }
+
+    subscription = mk_video_find_subscription(subscriber);
+    if (subscription != 0) {
+        return 0;
+    }
+
+    subscription = mk_video_alloc_subscription(subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    mode = kernel_video_get_mode();
+    if (mode != 0 && mode->width != 0u && mode->height != 0u) {
+        mk_video_enqueue_event(subscription,
+                               MK_VIDEO_EVENT_MODE_SET,
+                               VIDEO_PRESENT_AUTO,
+                               ++g_video_event_sequence);
+    }
+    return 0;
+}
+
+int mk_video_service_event_receive(struct process *subscriber,
+                                   struct mk_video_event *event,
+                                   uint32_t timeout_ticks) {
+    struct mk_video_event_subscription *subscription;
+
+    if (subscriber == 0 || event == 0) {
+        return -1;
+    }
+
+    subscription = mk_video_find_subscription(subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    for (;;) {
+        if (subscription->count != 0u) {
+            *event = subscription->events[subscription->head];
+            subscription->head = (subscription->head + 1u) % MK_VIDEO_EVENT_QUEUE_SIZE;
+            subscription->count -= 1u;
+            return 0;
+        }
+
+        if (timeout_ticks == 0u) {
+            return -1;
+        }
+        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+            return -1;
+        }
+    }
 }

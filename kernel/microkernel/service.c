@@ -775,6 +775,9 @@ int mk_service_event_receive(uint32_t type,
             subscription->count -= 1u;
             return 0;
         }
+        if (timeout_ticks == 0u) {
+            return -1;
+        }
         if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
             return -1;
         }
