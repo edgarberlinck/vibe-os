@@ -1,7 +1,14 @@
 #ifndef KERNEL_INPUT_H
 #define KERNEL_INPUT_H
 
+#include <include/userland_api.h>
 #include <stdint.h>
+
+void kernel_input_event_init(void);
+int kernel_input_event_dequeue(struct input_event *event);
+int kernel_input_event_wait(struct input_event *event);
+void kernel_input_event_enqueue_key(int key);
+void kernel_input_event_enqueue_mouse(const struct mouse_state *state);
 
 /* Keyboard driver initialization */
 void kernel_keyboard_init(void);

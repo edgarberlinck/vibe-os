@@ -142,9 +142,10 @@ Falta fechar:
 
 Checklist minimo para dizer "agora esta na arquitetura certa":
 - [X] existe primeira ABI async para audio (`AUDIO_WRITE_ASYNC`)
-- [ ] existem primitivas de evento/waitable/cancelamento no kernel
+- [~] existem primitivas de evento/waitable/cancelamento no kernel
+: agora com `waitable`, `signal`, `completion`, timeout/cancelamento, metadata de espera visivel no scheduler e stream de eventos de estado por servico; ainda falta a camada de completion de alto nivel para audio/video/storage/network
 - [ ] audio publica conclusao/progresso por evento, nao por poll oportunista
-- [ ] input vira publicacao de eventos, nao fallback permanente em leitura direta
+- [~] input vira publicacao de eventos, nao fallback permanente em leitura direta
 - [ ] video ganha fila de present/fence
 - [ ] filesystem/storage ganham fila de I/O e writeback
 - [ ] network ganha readiness/eventos de socket reais

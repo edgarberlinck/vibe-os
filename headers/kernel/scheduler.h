@@ -32,6 +32,14 @@ uint32_t scheduler_current_pid(void);
 uint32_t scheduler_current_pid_for_cpu(uint32_t cpu_index);
 process_t *scheduler_find_task_by_pid(int pid);
 void scheduler_terminate_task(process_t *task);
+int scheduler_block_current(const void *wait_channel);
+int scheduler_block_current_ex(const void *wait_channel,
+                               uint32_t wait_deadline,
+                               uint32_t wait_event_kind,
+                               uint32_t wait_event_class,
+                               uint32_t wait_owner_service);
+int scheduler_wake_task(process_t *task);
+int scheduler_complete_wait(process_t *task, uint32_t wait_result);
 uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
                             uint32_t max_entries,
                             struct task_snapshot_summary *summary);

@@ -139,6 +139,32 @@ static int mk_input_decode_mouse(const struct mk_message *reply,
     return payload.value;
 }
 
+static int mk_input_reply_event(struct mk_message *reply,
+                                int value,
+                                const struct input_event *event) {
+    struct mk_input_event_reply payload;
+
+    payload.value = value;
+    memset(&payload.event, 0, sizeof(payload.event));
+    if (event != 0) {
+        payload.event = *event;
+    }
+    return mk_message_set_payload(reply, &payload, sizeof(payload));
+}
+
+static int mk_input_decode_event(const struct mk_message *reply,
+                                 struct input_event *event) {
+    struct mk_input_event_reply payload;
+
+    if (reply == 0 || event == 0 || reply->payload_size != sizeof(payload)) {
+        return -1;
+    }
+
+    memcpy(&payload, reply->payload, sizeof(payload));
+    *event = payload.event;
+    return payload.value;
+}
+
 static int mk_input_local_handler(const struct mk_message *request,
                                   struct mk_message *reply,
                                   void *context) {
@@ -152,6 +178,17 @@ static int mk_input_local_handler(const struct mk_message *request,
     reply->target_pid = request->source_pid;
 
     switch (request->type) {
+    case MK_MSG_INPUT_EVENT: {
+        struct input_event event;
+
+        if (request->payload_size != 0u) {
+            return -1;
+        }
+        if (!kernel_input_event_dequeue(&event)) {
+            return mk_input_reply_event(reply, 0, 0);
+        }
+        return mk_input_reply_event(reply, 1, &event);
+    }
     case MK_MSG_INPUT_MOUSE_POLL: {
         struct mouse_state state;
         int x;
@@ -245,6 +282,25 @@ void mk_input_service_init(void) {
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |
                                  MK_LAUNCH_FLAG_CRITICAL);
+}
+
+int mk_input_service_next_event(struct input_event *event) {
+    struct mk_message request;
+    struct mk_message reply;
+
+    if (event == 0) {
+        return 0;
+    }
+    if (mk_input_should_use_local_fallback() ||
+        mk_input_prepare_request(&request, MK_MSG_INPUT_EVENT, 0, 0u) != 0) {
+        return kernel_input_event_dequeue(event);
+    }
+    if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
+        g_input_service_transport_degraded = 1;
+        return kernel_input_event_dequeue(event);
+    }
+    g_input_service_transport_degraded = 0;
+    return mk_input_decode_event(&reply, event);
 }
 
 int mk_input_service_poll_mouse(struct mouse_state *state) {

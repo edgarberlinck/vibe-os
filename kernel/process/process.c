@@ -108,6 +108,13 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->runtime_ticks = 0u;
     p->last_start_tick = 0u;
     p->context_switches = 0u;
+    p->wait_channel = 0;
+    p->wait_deadline = 0u;
+    p->wait_result = TASK_WAIT_RESULT_NONE;
+    p->wait_event_kind = TASK_WAIT_EVENT_NONE;
+    p->wait_event_class = TASK_WAIT_CLASS_NONE;
+    p->wait_owner_service = 0u;
+    p->wait_next = 0;
     p->next = NULL;
 
     /* allocate stack memory and set initial register state */

@@ -81,7 +81,10 @@ enum syscall_id {
     SYSCALL_NETWORK_CONFIGURE_ETHERNET = 74,
     SYSCALL_AUDIO_READ = 75,
     SYSCALL_AUDIO_WRITE_ASYNC = 76,
-    SYSCALL_LAUNCH_BUILTIN_USER = 77
+    SYSCALL_LAUNCH_BUILTIN_USER = 77,
+    SYSCALL_INPUT_EVENT = 78,
+    SYSCALL_SERVICE_SUBSCRIBE = 79,
+    SYSCALL_SERVICE_EVENT_RECV = 80
 };
 
 enum userland_builtin_target {
@@ -105,6 +108,18 @@ struct mouse_state {
     int dy;
     int wheel;
     uint8_t buttons;
+};
+
+enum input_event_type {
+    INPUT_EVENT_NONE = 0,
+    INPUT_EVENT_KEY = 1,
+    INPUT_EVENT_MOUSE = 2
+};
+
+struct input_event {
+    uint32_t type;
+    int32_t value;
+    struct mouse_state mouse;
 };
 
 struct video_mode {
@@ -235,7 +250,26 @@ struct userland_launch_info {
     char name[16];
 };
 
-#define TASK_SNAPSHOT_ABI_VERSION 2u
+enum mk_service_event_type {
+    MK_SERVICE_EVENT_NONE = 0,
+    MK_SERVICE_EVENT_ONLINE = 1,
+    MK_SERVICE_EVENT_OFFLINE = 2,
+    MK_SERVICE_EVENT_DEGRADED = 3,
+    MK_SERVICE_EVENT_RECOVERED = 4,
+    MK_SERVICE_EVENT_RESTARTED = 5
+};
+
+struct mk_service_event {
+    uint32_t abi_version;
+    uint32_t service_type;
+    uint32_t event_type;
+    uint32_t pid;
+    uint32_t restart_count;
+    uint32_t transport_degraded;
+    uint32_t tick;
+};
+
+#define TASK_SNAPSHOT_ABI_VERSION 3u
 #define TASK_SNAPSHOT_NAME_MAX 16u
 #define TASK_SNAPSHOT_MAX 32u
 
@@ -245,6 +279,34 @@ struct userland_launch_info {
 #define TASK_SNAPSHOT_FLAG_SERVICE_ONLINE (1u << 16)
 #define TASK_SNAPSHOT_FLAG_SERVICE_DEGRADED (1u << 17)
 #define TASK_SNAPSHOT_FLAG_SERVICE_RESTARTABLE (1u << 18)
+
+enum task_wait_result {
+    TASK_WAIT_RESULT_NONE = 0,
+    TASK_WAIT_RESULT_SIGNALED = 1,
+    TASK_WAIT_RESULT_TIMED_OUT = 2,
+    TASK_WAIT_RESULT_CANCELED = 3
+};
+
+enum task_wait_event_kind {
+    TASK_WAIT_EVENT_NONE = 0,
+    TASK_WAIT_EVENT_WAITABLE = 1,
+    TASK_WAIT_EVENT_QUEUE = 2,
+    TASK_WAIT_EVENT_SIGNAL = 3,
+    TASK_WAIT_EVENT_COMPLETION = 4
+};
+
+enum task_wait_event_class {
+    TASK_WAIT_CLASS_NONE = 0,
+    TASK_WAIT_CLASS_GENERIC = 1,
+    TASK_WAIT_CLASS_IPC = 2,
+    TASK_WAIT_CLASS_INPUT = 3,
+    TASK_WAIT_CLASS_STORAGE = 4,
+    TASK_WAIT_CLASS_FILESYSTEM = 5,
+    TASK_WAIT_CLASS_VIDEO = 6,
+    TASK_WAIT_CLASS_AUDIO = 7,
+    TASK_WAIT_CLASS_NETWORK = 8,
+    TASK_WAIT_CLASS_SUPERVISION = 9
+};
 
 struct task_snapshot_entry {
     uint32_t pid;
@@ -260,6 +322,12 @@ struct task_snapshot_entry {
     uint32_t priority_tier;
     uint32_t service_restart_count;
     uint32_t flags;
+    uint32_t wait_result;
+    uint32_t wait_event_kind;
+    uint32_t wait_event_class;
+    uint32_t wait_owner_service;
+    uint32_t wait_deadline;
+    uint32_t wait_pending_signals;
     char name[TASK_SNAPSHOT_NAME_MAX];
 };
 
@@ -277,6 +345,9 @@ struct task_snapshot_summary {
     uint32_t kernel_heap_free;
     uint32_t physmem_total_kb;
     uint32_t physmem_free_kb;
+    uint32_t timed_out_waits;
+    uint32_t canceled_waits;
+    uint32_t pending_event_signals;
 };
 
 typedef void (*userland_entry_t)(void);

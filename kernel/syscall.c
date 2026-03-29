@@ -24,7 +24,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 78
+#define MAX_SYSCALLS 81
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
@@ -292,6 +292,19 @@ static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
     state->wheel = wheel;
     state->buttons = buttons;
     return 1u;
+}
+
+static uint32_t sys_input_event(uint32_t event_ptr, uint32_t b, uint32_t c,
+                                uint32_t d, uint32_t e) {
+    struct input_event *event;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (event_ptr == 0u) {
+        return 0u;
+    }
+
+    event = (struct input_event *)(uintptr_t)event_ptr;
+    return (uint32_t)mk_input_service_next_event(event);
 }
 
 static uint32_t sys_network_listen(uint32_t handle, uint32_t backlog, uint32_t c,
@@ -703,9 +716,9 @@ static uint32_t sys_service_receive(uint32_t message_ptr, uint32_t b, uint32_t c
         return (uint32_t)-1;
     }
 
-    return (uint32_t)ipc_receive(current,
-                                 (void *)(uintptr_t)message_ptr,
-                                 sizeof(struct mk_message));
+    return (uint32_t)ipc_receive_wait(current,
+                                      (void *)(uintptr_t)message_ptr,
+                                      sizeof(struct mk_message));
 }
 
 static uint32_t sys_service_send(uint32_t message_ptr, uint32_t b, uint32_t c,
@@ -741,6 +754,39 @@ static uint32_t sys_service_backend(uint32_t request_ptr, uint32_t reply_ptr, ui
     return (uint32_t)mk_service_backend_handle_current(
         (const struct mk_message *)(uintptr_t)request_ptr,
         (struct mk_message *)(uintptr_t)reply_ptr);
+}
+
+static uint32_t sys_service_subscribe(uint32_t service_type, uint32_t b, uint32_t c,
+                                      uint32_t d, uint32_t e) {
+    process_t *current;
+
+    (void)b; (void)c; (void)d; (void)e;
+    current = scheduler_current();
+    if (current == 0 || service_type == MK_SERVICE_NONE) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)mk_service_subscribe(service_type, current);
+}
+
+static uint32_t sys_service_event_receive(uint32_t service_type, uint32_t event_ptr,
+                                          uint32_t timeout_ticks, uint32_t d, uint32_t e) {
+    process_t *current;
+
+    (void)d; (void)e;
+    if (service_type == MK_SERVICE_NONE || event_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)mk_service_event_receive(service_type,
+                                              current,
+                                              (struct mk_service_event *)(uintptr_t)event_ptr,
+                                              timeout_ticks);
 }
 
 static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, uint32_t max_entries,
@@ -872,6 +918,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_FSTAT] = sys_fs_fstat;
     syscall_table[SYSCALL_INPUT_MOUSE] = sys_input_mouse;
     syscall_table[SYSCALL_INPUT_KEY] = sys_input_key;
+    syscall_table[SYSCALL_INPUT_EVENT] = sys_input_event;
     syscall_table[12] = sys_text_putc;     /* legacy text mode */
     syscall_table[13] = sys_text_clear;    /* legacy text mode */
     syscall_table[SYSCALL_TEXT_MOVE_CURSOR] = sys_text_move_cursor;
@@ -918,6 +965,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SERVICE_RECV] = sys_service_receive;
     syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
     syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
+    syscall_table[SYSCALL_SERVICE_SUBSCRIBE] = sys_service_subscribe;
+    syscall_table[SYSCALL_SERVICE_EVENT_RECV] = sys_service_event_receive;
     syscall_table[SYSCALL_TASK_SNAPSHOT] = sys_task_snapshot;
     syscall_table[SYSCALL_LAUNCH_BUILTIN_USER] = sys_launch_builtin_user;
     syscall_table[SYSCALL_TASK_TERMINATE] = sys_task_terminate;

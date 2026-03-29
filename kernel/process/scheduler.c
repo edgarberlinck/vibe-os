@@ -10,6 +10,7 @@
 #include <kernel/smp.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/event.h>
 
 /* simple singly‑linked list of processes */
 static process_t *g_head = NULL;
@@ -22,6 +23,8 @@ static int g_scheduler_switch_trace_budget = 24;
 static volatile int g_scheduler_preemption_ready = 0;
 
 #define SCHEDULER_TIMESLICE_TICKS 4u
+
+static void scheduler_timeout_tick_hook(uint32_t tick);
 
 static void scheduler_account_runtime(process_t *task, uint32_t now_ticks) {
     if (task == NULL || task->state != PROCESS_RUNNING || task->last_start_tick == 0u) {
@@ -138,6 +141,7 @@ void scheduler_init(void) {
     }
     spinlock_init(&g_scheduler_lock);
     g_scheduler_preemption_ready = 0;
+    (void)kernel_timer_register_tick_hook(scheduler_timeout_tick_hook);
 }
 
 void scheduler_add_task(process_t *proc) {
@@ -246,6 +250,12 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         current->state = PROCESS_READY;
         current->current_cpu = -1;
         current->last_cpu = (int)cpu_index;
+    } else if (current && current->state == PROCESS_BLOCKED &&
+               current->current_cpu == (int)cpu_index) {
+        current->context = frame;
+        scheduler_account_runtime(current, now_ticks);
+        current->current_cpu = -1;
+        current->last_cpu = (int)cpu_index;
     }
     next = find_next(cpu_index, current);
     if (next == NULL) {
@@ -257,12 +267,24 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
             g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
             g_current[cpu_index] = current;
             resume_frame = current->context != NULL ? current->context : frame;
-        } else {
-            g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
-            resume_frame = frame;
+            spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+            return resume_frame;
         }
+
+        g_current[cpu_index] = 0;
+        g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
-        return resume_frame;
+
+        for (;;) {
+            __asm__ volatile("sti; hlt; cli" : : : "memory");
+            now_ticks = kernel_timer_get_ticks();
+            flags = spinlock_lock_irqsave(&g_scheduler_lock);
+            next = find_next(cpu_index, 0);
+            if (next != NULL) {
+                break;
+            }
+            spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        }
     }
 
     g_cursor[cpu_index] = next->next != NULL ? next->next : g_head;
@@ -380,6 +402,13 @@ void scheduler_terminate_task(process_t *task) {
     task->current_cpu = -1;
     task->preferred_cpu = -1;
     task->last_cpu = -1;
+    task->wait_channel = 0;
+    task->wait_deadline = 0u;
+    task->wait_result = TASK_WAIT_RESULT_NONE;
+    task->wait_event_kind = TASK_WAIT_EVENT_NONE;
+    task->wait_event_class = TASK_WAIT_CLASS_NONE;
+    task->wait_owner_service = 0u;
+    task->wait_next = 0;
 
     for (cpu = 0u; cpu < 32u; ++cpu) {
         if (g_current[cpu] == task) {
@@ -393,6 +422,94 @@ void scheduler_terminate_task(process_t *task) {
         }
     }
 
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+}
+
+int scheduler_block_current_ex(const void *wait_channel,
+                               uint32_t wait_deadline,
+                               uint32_t wait_event_kind,
+                               uint32_t wait_event_class,
+                               uint32_t wait_owner_service) {
+    process_t *current;
+    uint32_t cpu_index = kernel_cpu_index();
+    uint32_t flags;
+
+    if (cpu_index >= 32u) {
+        cpu_index = 0u;
+    }
+
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    current = g_current[cpu_index];
+    if (current == NULL || current->state != PROCESS_RUNNING) {
+        spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        return -1;
+    }
+
+    current->state = PROCESS_BLOCKED;
+    current->wait_channel = wait_channel;
+    current->wait_deadline = wait_deadline;
+    current->wait_result = TASK_WAIT_RESULT_NONE;
+    current->wait_event_kind = wait_event_kind;
+    current->wait_event_class = wait_event_class;
+    current->wait_owner_service = wait_owner_service;
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+    return 0;
+}
+
+int scheduler_block_current(const void *wait_channel) {
+    return scheduler_block_current_ex(wait_channel,
+                                      0u,
+                                      TASK_WAIT_EVENT_WAITABLE,
+                                      TASK_WAIT_CLASS_GENERIC,
+                                      0u);
+}
+
+int scheduler_wake_task(process_t *task) {
+    return scheduler_complete_wait(task, TASK_WAIT_RESULT_SIGNALED);
+}
+
+int scheduler_complete_wait(process_t *task, uint32_t wait_result) {
+    uint32_t flags;
+
+    if (task == NULL) {
+        return -1;
+    }
+
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    if (task->state == PROCESS_BLOCKED) {
+        task->state = PROCESS_READY;
+        task->current_cpu = -1;
+        task->wait_deadline = 0u;
+        task->wait_result = wait_result;
+        task->wait_next = 0;
+        spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        return 0;
+    }
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+    return -1;
+}
+
+static void scheduler_timeout_tick_hook(uint32_t tick) {
+    process_t *task;
+    uint32_t flags;
+
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    for (task = g_head; task != NULL; task = task->next) {
+        if (task->state != PROCESS_BLOCKED || task->wait_channel == 0 || task->wait_deadline == 0u) {
+            continue;
+        }
+        if (tick < task->wait_deadline) {
+            continue;
+        }
+
+        kernel_waitable_detach_task((kernel_waitable_t *)task->wait_channel, task);
+        task->state = PROCESS_READY;
+        task->current_cpu = -1;
+        task->wait_channel = 0;
+        task->wait_deadline = 0u;
+        task->wait_result = TASK_WAIT_RESULT_TIMED_OUT;
+        task->wait_next = 0;
+    }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
 }
 
@@ -442,6 +559,16 @@ uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
             } else if (task->state == PROCESS_BLOCKED) {
                 summary->blocked_tasks += 1u;
             }
+            if (task->wait_result == TASK_WAIT_RESULT_TIMED_OUT) {
+                summary->timed_out_waits += 1u;
+            } else if (task->wait_result == TASK_WAIT_RESULT_CANCELED) {
+                summary->canceled_waits += 1u;
+            }
+            if (task->wait_channel != 0) {
+                const kernel_waitable_t *waitable = (const kernel_waitable_t *)task->wait_channel;
+
+                summary->pending_event_signals += waitable->pending_signals;
+            }
         }
 
         if (entries != NULL && count < max_entries) {
@@ -459,6 +586,13 @@ uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
             entry->context_switches = task->context_switches;
             entry->service_type = task->service_type;
             entry->priority_tier = task->priority_tier;
+            entry->wait_result = task->wait_result;
+            entry->wait_event_kind = task->wait_event_kind;
+            entry->wait_event_class = task->wait_event_class;
+            entry->wait_owner_service = task->wait_owner_service;
+            entry->wait_deadline = task->wait_deadline;
+            entry->wait_pending_signals =
+                task->wait_channel != 0 ? ((const kernel_waitable_t *)task->wait_channel)->pending_signals : 0u;
             count += 1u;
         }
     }

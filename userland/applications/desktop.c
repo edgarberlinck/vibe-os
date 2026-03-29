@@ -4551,6 +4551,8 @@ void desktop_main(void) {
 
     while (running) {
         int key;
+        struct input_event queued_events[128];
+        int queued_event_count = 0;
         fs_tick();
         dirty |= desktop_process_pending_launches(&focused);
         uint32_t ticks = sys_ticks();
@@ -4573,7 +4575,7 @@ void desktop_main(void) {
         int right_press_x = mouse.x;
         int right_press_y = mouse.y;
         int wheel_delta = 0;
-        struct mouse_state polled_mouse;
+        struct input_event input_event;
 
         start_button = ui_taskbar_start_button_rect();
         menu_rect = ui_start_menu_rect();
@@ -4596,14 +4598,24 @@ void desktop_main(void) {
             menu_hover[i] = 0;
         }
 
-        while (sys_poll_mouse(&polled_mouse)) {
+        while (queued_event_count < (int)(sizeof(queued_events) / sizeof(queued_events[0])) &&
+               sys_next_input_event(&input_event)) {
+            queued_events[queued_event_count++] = input_event;
+        }
+
+        for (int event_index = 0; event_index < queued_event_count; ++event_index) {
             int new_left;
             int new_right;
+            struct input_event *queued = &queued_events[event_index];
 
-            mouse = polled_mouse;
+            if (queued->type != INPUT_EVENT_MOUSE) {
+                continue;
+            }
+
+            mouse = queued->mouse;
             clamp_mouse_state(&mouse);
             mouse_event = 1;
-            wheel_delta += polled_mouse.wheel;
+            wheel_delta += queued->mouse.wheel;
             new_left = (mouse.buttons & 0x01u) != 0;
             new_right = (mouse.buttons & 0x02u) != 0;
             if (new_left && !left_pressed) {
@@ -5874,7 +5886,13 @@ void desktop_main(void) {
             }
         }
 
-        while ((key = sys_poll_key()) != 0) {
+        for (int event_index = 0; event_index < queued_event_count; ++event_index) {
+            struct input_event *queued = &queued_events[event_index];
+
+            if (queued->type != INPUT_EVENT_KEY) {
+                continue;
+            }
+            key = queued->value;
             if (g_network_applet.popup_open && g_network_applet.password_focus) {
                 if (key == '\b' || key == 127) {
                     if (g_network_applet.password_len > 0) {

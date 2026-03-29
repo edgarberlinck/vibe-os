@@ -1,5 +1,6 @@
 #include <kernel/microkernel/service.h>
 #include <kernel/kernel_string.h>
+#include <kernel/drivers/timer/timer.h>
 #include <kernel/ipc.h>
 #include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
@@ -21,6 +22,10 @@ static int g_storage_worker_trace_budget = 8;
 static int g_storage_reply_trace_budget = 8;
 
 static void mk_service_worker_entry(void);
+static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type);
+static void mk_service_enqueue_event(struct mk_service_record *service,
+                                     struct mk_service_event_subscription *subscription,
+                                     uint32_t event_type);
 
 void mk_service_init(void) {
     memset(g_services, 0, sizeof(g_services));
@@ -47,6 +52,25 @@ static struct mk_service_record *mk_service_find_mutable_by_type(uint32_t type) 
     }
 
     return 0;
+}
+
+static void mk_service_init_subscriptions(struct mk_service_record *service) {
+    uint32_t index;
+
+    if (service == 0) {
+        return;
+    }
+
+    for (index = 0; index < MK_SERVICE_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_service_event_subscription *subscription = &service->subscribers[index];
+
+        memset(subscription, 0, sizeof(*subscription));
+        subscription->pid = 0;
+        kernel_waitable_init_ex(&subscription->waitable,
+                                TASK_WAIT_EVENT_QUEUE,
+                                TASK_WAIT_CLASS_SUPERVISION,
+                                service->type);
+    }
 }
 
 static int mk_service_register_impl(uint32_t type,
@@ -87,6 +111,7 @@ static int mk_service_register_impl(uint32_t type,
             g_services[slot].local_handler = local_handler;
             g_services[slot].context = context;
             g_services[slot].transport_degraded = 0u;
+            mk_service_init_subscriptions(&g_services[slot]);
             strncpy(g_services[slot].name, name, MK_SERVICE_NAME_MAX - 1u);
             g_services[slot].name[MK_SERVICE_NAME_MAX - 1u] = '\0';
             return 0;
@@ -130,6 +155,10 @@ static int mk_service_process_online(const struct mk_service_record *service) {
 static void mk_service_discard_worker_record(struct mk_service_record *service) {
     if (service == 0) {
         return;
+    }
+
+    if (service->pid > 0 || service->process != 0) {
+        mk_service_publish_event(service, MK_SERVICE_EVENT_OFFLINE);
     }
 
     if (service->process != 0) {
@@ -190,6 +219,112 @@ static int mk_service_restart_worker_record(struct mk_service_record *service) {
 
     service->transport_degraded = 0u;
     service->restart_count += 1u;
+    mk_service_publish_event(service, force_restart ? MK_SERVICE_EVENT_RESTARTED : MK_SERVICE_EVENT_ONLINE);
+    return 0;
+}
+
+static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type) {
+    uint32_t index;
+
+    if (service == 0 || service->type == MK_SERVICE_NONE || event_type == MK_SERVICE_EVENT_NONE) {
+        return;
+    }
+
+    for (index = 0; index < MK_SERVICE_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_service_event_subscription *subscription = &service->subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0) {
+            continue;
+        }
+        if (scheduler_find_task_by_pid(subscription->pid) == 0) {
+            subscription->pid = 0;
+            subscription->process = 0;
+            subscription->head = 0u;
+            subscription->tail = 0u;
+            subscription->count = 0u;
+            continue;
+        }
+        if (subscription->count >= MK_SERVICE_EVENT_QUEUE_SIZE) {
+            subscription->dropped_events += 1u;
+            continue;
+        }
+        mk_service_enqueue_event(service, subscription, event_type);
+    }
+}
+
+static void mk_service_enqueue_event(struct mk_service_record *service,
+                                     struct mk_service_event_subscription *subscription,
+                                     uint32_t event_type) {
+    struct mk_service_event event;
+
+    if (service == 0 || subscription == 0 || event_type == MK_SERVICE_EVENT_NONE) {
+        return;
+    }
+    if (subscription->count >= MK_SERVICE_EVENT_QUEUE_SIZE) {
+        subscription->dropped_events += 1u;
+        return;
+    }
+
+    memset(&event, 0, sizeof(event));
+    event.abi_version = 1u;
+    event.service_type = service->type;
+    event.event_type = event_type;
+    event.pid = service->pid > 0 ? (uint32_t)service->pid : 0u;
+    event.restart_count = service->restart_count;
+    event.transport_degraded = service->transport_degraded;
+    event.tick = kernel_timer_get_ticks();
+
+    subscription->events[subscription->tail] = event;
+    subscription->tail = (subscription->tail + 1u) % MK_SERVICE_EVENT_QUEUE_SIZE;
+    subscription->count += 1u;
+    kernel_waitable_signal(&subscription->waitable, 1u);
+}
+
+static struct mk_service_event_subscription *mk_service_find_subscription(
+    struct mk_service_record *service,
+    const struct process *subscriber) {
+    uint32_t index;
+
+    if (service == 0 || subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0; index < MK_SERVICE_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_service_event_subscription *subscription = &service->subscribers[index];
+
+        if (subscription->pid == subscriber->pid && subscription->process == subscriber) {
+            return subscription;
+        }
+    }
+
+    return 0;
+}
+
+static struct mk_service_event_subscription *mk_service_alloc_subscription(
+    struct mk_service_record *service,
+    struct process *subscriber) {
+    uint32_t index;
+
+    if (service == 0 || subscriber == 0 || subscriber->pid <= 0) {
+        return 0;
+    }
+
+    for (index = 0; index < MK_SERVICE_EVENT_SUBSCRIBERS; ++index) {
+        struct mk_service_event_subscription *subscription = &service->subscribers[index];
+
+        if (subscription->pid <= 0 || subscription->process == 0 ||
+            scheduler_find_task_by_pid(subscription->pid) == 0) {
+            memset(subscription, 0, sizeof(*subscription));
+            subscription->pid = subscriber->pid;
+            subscription->process = subscriber;
+            kernel_waitable_init_ex(&subscription->waitable,
+                                    TASK_WAIT_EVENT_QUEUE,
+                                    TASK_WAIT_CLASS_SUPERVISION,
+                                    service->type);
+            return subscription;
+        }
+    }
+
     return 0;
 }
 
@@ -247,8 +382,7 @@ static void mk_service_worker_step(const struct mk_service_record *service) {
         return;
     }
 
-    if (ipc_receive(current, &request, sizeof(request)) != (int)sizeof(request)) {
-        yield();
+    if (ipc_receive_wait(current, &request, sizeof(request)) != (int)sizeof(request)) {
         return;
     }
 
@@ -431,7 +565,10 @@ static int mk_service_request_process(const struct mk_service_record *service,
             struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
 
             if (mutable_service != 0) {
-                mutable_service->transport_degraded = 1u;
+                if (mutable_service->transport_degraded == 0u) {
+                    mutable_service->transport_degraded = 1u;
+                    mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_DEGRADED);
+                }
             }
             if (g_transport_fallback_budget > 0) {
                 g_transport_fallback_budget -= 1;
@@ -454,7 +591,7 @@ static int mk_service_request_process(const struct mk_service_record *service,
     }
 
     for (;;) {
-        int received = ipc_receive(current, &response, sizeof(response));
+        int received = ipc_receive_wait(current, &response, sizeof(response));
 
         if (received == (int)sizeof(response)) {
             if (response.source_pid == (uint32_t)service->pid &&
@@ -470,7 +607,10 @@ static int mk_service_request_process(const struct mk_service_record *service,
                     struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
 
                     if (mutable_service != 0) {
-                        mutable_service->transport_degraded = 0u;
+                        if (mutable_service->transport_degraded != 0u) {
+                            mutable_service->transport_degraded = 0u;
+                            mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_RECOVERED);
+                        }
                     }
                 }
                 *reply = response;
@@ -486,7 +626,6 @@ static int mk_service_request_process(const struct mk_service_record *service,
             }
             (void)mk_service_requeue_message(current, &response);
         }
-        yield();
     }
 }
 
@@ -552,6 +691,94 @@ int mk_service_backend_handle_current(const struct mk_message *request, struct m
     }
 
     return service->local_handler(request, reply, service->context);
+}
+
+int mk_service_subscribe(uint32_t type, struct process *subscriber) {
+    struct mk_service_record *service;
+    struct mk_service_event_subscription *subscription;
+
+    if (subscriber == 0) {
+        return -1;
+    }
+
+    service = mk_service_find_mutable_by_type(type);
+    if (service == 0) {
+        return -1;
+    }
+    subscription = mk_service_find_subscription(service, subscriber);
+    if (subscription != 0) {
+        return 0;
+    }
+
+    subscription = mk_service_alloc_subscription(service, subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    if (service->transport_degraded != 0u) {
+        mk_service_enqueue_event(service, subscription, MK_SERVICE_EVENT_DEGRADED);
+    } else if (mk_service_process_online(service)) {
+        mk_service_enqueue_event(service, subscription, MK_SERVICE_EVENT_ONLINE);
+    } else {
+        mk_service_enqueue_event(service, subscription, MK_SERVICE_EVENT_OFFLINE);
+    }
+    return 0;
+}
+
+int mk_service_unsubscribe(uint32_t type, struct process *subscriber) {
+    struct mk_service_record *service;
+    struct mk_service_event_subscription *subscription;
+
+    if (subscriber == 0) {
+        return -1;
+    }
+
+    service = mk_service_find_mutable_by_type(type);
+    if (service == 0) {
+        return -1;
+    }
+
+    subscription = mk_service_find_subscription(service, subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    memset(subscription, 0, sizeof(*subscription));
+    return 0;
+}
+
+int mk_service_event_receive(uint32_t type,
+                             struct process *subscriber,
+                             struct mk_service_event *event,
+                             uint32_t timeout_ticks) {
+    struct mk_service_record *service;
+    struct mk_service_event_subscription *subscription;
+
+    if (subscriber == 0 || event == 0) {
+        return -1;
+    }
+
+    service = mk_service_find_mutable_by_type(type);
+    if (service == 0) {
+        return -1;
+    }
+
+    subscription = mk_service_find_subscription(service, subscriber);
+    if (subscription == 0) {
+        return -1;
+    }
+
+    for (;;) {
+        if (subscription->count != 0u) {
+            *event = subscription->events[subscription->head];
+            subscription->head = (subscription->head + 1u) % MK_SERVICE_EVENT_QUEUE_SIZE;
+            subscription->count -= 1u;
+            return 0;
+        }
+        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+            return -1;
+        }
+    }
 }
 
 void mk_service_fill_task_snapshot(struct task_snapshot_entry *entry) {

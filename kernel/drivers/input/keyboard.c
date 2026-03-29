@@ -118,6 +118,7 @@ static void kbd_push_key(uint16_t key) {
     }
     g_kernel_kbd_queue[g_kernel_kbd_head] = key;
     g_kernel_kbd_head = next;
+    kernel_input_event_enqueue_key((int)key);
 }
 
 int kernel_keyboard_read(void) {
@@ -234,6 +235,7 @@ void kernel_keyboard_init(void) {
     g_kernel_kbd_ctrl = 0u;
     g_kernel_kbd_extended = 0u;
     g_kernel_kbd_ready = 0u;
+    kernel_input_event_init();
     kernel_keyboard_set_layout("us");
 
     ps2_drain_output();

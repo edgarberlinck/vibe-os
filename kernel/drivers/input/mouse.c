@@ -25,6 +25,7 @@ static volatile uint8_t g_mouse_event_tail = 0u;
 static volatile uint32_t g_mouse_trace_budget = 16u;
 
 static void kernel_mouse_queue_event_unlocked(void) {
+    struct mouse_state event_state;
     uint8_t next = (uint8_t)((g_mouse_event_tail + 1u) % MOUSE_EVENT_QUEUE_CAPACITY);
 
     if (next == g_mouse_event_head) {
@@ -38,6 +39,14 @@ static void kernel_mouse_queue_event_unlocked(void) {
     g_mouse_event_queue[g_mouse_event_tail].wheel = g_kernel_mouse.wheel;
     g_mouse_event_queue[g_mouse_event_tail].buttons = g_kernel_mouse.buttons;
     g_mouse_event_tail = next;
+
+    event_state.x = g_kernel_mouse.x;
+    event_state.y = g_kernel_mouse.y;
+    event_state.dx = g_kernel_mouse.dx;
+    event_state.dy = g_kernel_mouse.dy;
+    event_state.wheel = g_kernel_mouse.wheel;
+    event_state.buttons = g_kernel_mouse.buttons;
+    kernel_input_event_enqueue_mouse(&event_state);
 }
 
 static void kernel_mouse_clamp_to_mode(const struct video_mode *mode) {

@@ -17,6 +17,10 @@ int sys_poll_key(void) {
     return syscall5(SYSCALL_INPUT_KEY, 0, 0, 0, 0, 0);
 }
 
+int sys_next_input_event(struct input_event *event) {
+    return syscall5(SYSCALL_INPUT_EVENT, (int)(uintptr_t)event, 0, 0, 0, 0);
+}
+
 void sys_clear(uint8_t color) {
     (void)syscall5(SYSCALL_GFX_CLEAR, color, 0, 0, 0, 0);
 }
@@ -374,6 +378,21 @@ int sys_service_backend(const struct mk_message *request, struct mk_message *rep
                     (int)(uintptr_t)request,
                     (int)(uintptr_t)reply,
                     0,
+                    0,
+                    0);
+}
+
+int sys_service_subscribe(uint32_t service_type) {
+    return syscall5(SYSCALL_SERVICE_SUBSCRIBE, (int)service_type, 0, 0, 0, 0);
+}
+
+int sys_service_event_receive(uint32_t service_type,
+                              struct mk_service_event *event,
+                              uint32_t timeout_ticks) {
+    return syscall5(SYSCALL_SERVICE_EVENT_RECV,
+                    (int)service_type,
+                    (int)(uintptr_t)event,
+                    (int)timeout_ticks,
                     0,
                     0);
 }

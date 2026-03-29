@@ -1,6 +1,7 @@
 #ifndef KERNEL_MICROKERNEL_SERVICE_H
 #define KERNEL_MICROKERNEL_SERVICE_H
 
+#include <kernel/event.h>
 #include <kernel/microkernel/launch.h>
 #include <stdint.h>
 
@@ -10,6 +11,8 @@ struct task_snapshot_entry;
 
 #define MK_SERVICE_NAME_MAX 16u
 #define MK_SERVICE_SLOTS 32u
+#define MK_SERVICE_EVENT_SUBSCRIBERS 8u
+#define MK_SERVICE_EVENT_QUEUE_SIZE 16u
 
 typedef int (*mk_service_local_handler_fn)(const struct mk_message *request,
                                            struct mk_message *reply,
@@ -28,6 +31,17 @@ enum mk_service_type {
     MK_SERVICE_AUDIO = 8
 };
 
+struct mk_service_event_subscription {
+    int pid;
+    struct process *process;
+    kernel_waitable_t waitable;
+    struct mk_service_event events[MK_SERVICE_EVENT_QUEUE_SIZE];
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
+    uint32_t dropped_events;
+};
+
 struct mk_service_record {
     uint32_t type;
     int pid;
@@ -40,6 +54,7 @@ struct mk_service_record {
     uint32_t stack_size;
     uint32_t restart_count;
     uint32_t transport_degraded;
+    struct mk_service_event_subscription subscribers[MK_SERVICE_EVENT_SUBSCRIBERS];
 };
 
 void mk_service_init(void);
@@ -65,6 +80,12 @@ int mk_service_is_online(uint32_t type);
 int mk_service_ensure(uint32_t type);
 int mk_service_request(uint32_t type, const struct mk_message *request, struct mk_message *reply);
 int mk_service_backend_handle_current(const struct mk_message *request, struct mk_message *reply);
+int mk_service_subscribe(uint32_t type, struct process *subscriber);
+int mk_service_unsubscribe(uint32_t type, struct process *subscriber);
+int mk_service_event_receive(uint32_t type,
+                             struct process *subscriber,
+                             struct mk_service_event *event,
+                             uint32_t timeout_ticks);
 void mk_service_fill_task_snapshot(struct task_snapshot_entry *entry);
 const struct mk_service_record *mk_service_find_by_type(uint32_t type);
 const struct mk_service_record *mk_service_find_by_name(const char *name);

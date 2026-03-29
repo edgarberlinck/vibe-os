@@ -21,6 +21,7 @@ typedef struct mixer_ctrl mixer_ctrl_t;
 
 int sys_poll_mouse(struct mouse_state *state);
 int sys_poll_key(void);
+int sys_next_input_event(struct input_event *event);
 void sys_clear(uint8_t color);
 void sys_rect(int x, int y, int w, int h, uint8_t color);
 void sys_text(int x, int y, uint8_t color, const char *text);
@@ -98,6 +99,10 @@ int sys_keyboard_get_available_layouts(char *buffer, int size);
 int sys_service_receive(struct mk_message *message);
 int sys_service_send(const struct mk_message *message);
 int sys_service_backend(const struct mk_message *request, struct mk_message *reply);
+int sys_service_subscribe(uint32_t service_type);
+int sys_service_event_receive(uint32_t service_type,
+                              struct mk_service_event *event,
+                              uint32_t timeout_ticks);
 void sys_shutdown(void);
 
 #endif // SYSCALLS_H

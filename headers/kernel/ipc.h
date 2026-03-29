@@ -6,5 +6,6 @@
 
 int ipc_send(process_t *dest, const void *data, size_t len);
 int ipc_receive(process_t *self, void *buf, size_t bufsize);
+int ipc_receive_wait(process_t *self, void *buf, size_t bufsize);
 
 #endif /* KERNEL_IPC_H */

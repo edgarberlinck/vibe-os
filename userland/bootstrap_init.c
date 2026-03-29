@@ -7,6 +7,107 @@
 
 #define BOOTSTRAP_STORAGE_SMOKE_SECTOR (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT - 1u)
 #define BOOTSTRAP_STORAGE_SMOKE_SIZE 512u
+#define BOOTSTRAP_SERVICE_EVENT_TIMEOUT_TICKS 32u
+
+static const char *bootstrap_service_name(uint32_t service_type) {
+    switch (service_type) {
+    case 1u:
+        return "init";
+    case 2u:
+        return "storage";
+    case 3u:
+        return "filesystem";
+    case 4u:
+        return "video";
+    case 5u:
+        return "input";
+    case 6u:
+        return "console";
+    case 7u:
+        return "network";
+    case 8u:
+        return "audio";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *bootstrap_service_event_name(uint32_t event_type) {
+    switch (event_type) {
+    case MK_SERVICE_EVENT_ONLINE:
+        return "online";
+    case MK_SERVICE_EVENT_OFFLINE:
+        return "offline";
+    case MK_SERVICE_EVENT_DEGRADED:
+        return "degraded";
+    case MK_SERVICE_EVENT_RECOVERED:
+        return "recovered";
+    case MK_SERVICE_EVENT_RESTARTED:
+        return "restarted";
+    default:
+        return "unknown";
+    }
+}
+
+static void bootstrap_append_u32(char *buffer, int size, uint32_t value) {
+    char digits[16];
+    int length = 0;
+
+    if (buffer == 0 || size <= 0) {
+        return;
+    }
+
+    if (value == 0u) {
+        str_append(buffer, "0", size);
+        return;
+    }
+
+    while (value != 0u && length < (int)sizeof(digits)) {
+        digits[length++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (length > 0) {
+        char text[2];
+
+        text[0] = digits[length - 1];
+        text[1] = '\0';
+        str_append(buffer, text, size);
+        length -= 1;
+    }
+}
+
+static void bootstrap_log_service_event(const struct mk_service_event *event) {
+    char buffer[160];
+
+    if (event == 0 || event->event_type == MK_SERVICE_EVENT_NONE) {
+        return;
+    }
+
+    buffer[0] = '\0';
+    str_append(buffer, "init: service-event ", (int)sizeof(buffer));
+    str_append(buffer, bootstrap_service_name(event->service_type), (int)sizeof(buffer));
+    str_append(buffer, " ", (int)sizeof(buffer));
+    str_append(buffer, bootstrap_service_event_name(event->event_type), (int)sizeof(buffer));
+    str_append(buffer, " pid=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->pid);
+    str_append(buffer, " restarts=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->restart_count);
+    str_append(buffer, " tick=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->tick);
+    str_append(buffer, "\n", (int)sizeof(buffer));
+    sys_write_debug(buffer);
+}
+
+static void bootstrap_subscribe_supervision_events(void) {
+    uint32_t service_type;
+
+    for (service_type = 1u; service_type <= 8u; ++service_type) {
+        if (service_type == 1u) {
+            continue;
+        }
+        (void)sys_service_subscribe(service_type);
+    }
+}
 
 static void bootstrap_print_banner(void) {
     struct userland_launch_info info;
@@ -86,6 +187,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     extern void kernel_debug_puts(const char *);
     int rc;
     struct userland_launch_info info;
+    struct mk_service_event event;
 
     kernel_debug_puts("init: entered builtin entry\n");
     if (sys_launch_info(&info) == 0 &&
@@ -135,6 +237,24 @@ __attribute__((section(".entry"))) void userland_entry(void) {
         }
     }
     kernel_debug_puts("init: supervisor idle\n");
-    for (;;)
-        sys_yield();
+    bootstrap_subscribe_supervision_events();
+    for (;;) {
+        uint32_t service_type;
+        int handled = 0;
+
+        for (service_type = 1u; service_type <= 8u; ++service_type) {
+            if (service_type == 1u) {
+                continue;
+            }
+            if (sys_service_event_receive(service_type,
+                                          &event,
+                                          BOOTSTRAP_SERVICE_EVENT_TIMEOUT_TICKS) == 0) {
+                bootstrap_log_service_event(&event);
+                handled = 1;
+            }
+        }
+        if (!handled) {
+            sys_yield();
+        }
+    }
 }

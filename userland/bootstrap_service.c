@@ -52,7 +52,6 @@ __attribute__((section(".entry"))) void userland_service_entry(void) {
 
     for (;;) {
         if (sys_service_receive(&request) != (int)sizeof(request)) {
-            sys_yield();
             continue;
         }
 

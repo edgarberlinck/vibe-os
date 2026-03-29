@@ -143,6 +143,11 @@ Important audit note: in the current tree, a checked item means the migration bo
 - The image validation path now also asserts the active MBR partition bit directly from `boot.img`, so the builder will fail Phase 6 regression if the BIOS-facing `MBR -> active FAT32 partition -> VBR -> stage2` chain drifts back toward a superfloppy layout.
 - The USB validation matrix now records the current migration boundary explicitly: under QEMU `usb-storage`, SeaBIOS boots the image through the same active-partition chain and reaches the built-in bootstrap shell, while runtime block-device access still reports `storage: no block device backend available` until a native USB mass-storage service exists.
 - The ported-userland build path is now stable under the official regression target too: `Build.ported.mk` exposes a single deterministic `ported-all` goal, `make validate-phase6` completes successfully again, and the generated `build/phase6-validation.md` reflects the same boot markers used by the migration plan.
+- Kernel waitables now exist as a first real async substrate: IPC mailboxes can block on a waitable instead of spinning in `yield()` loops, `ipc_send()` signals sleeping receivers, the scheduler can park a blocked task until wakeup, and headless QEMU boot still reaches `init: supervisor idle` with all current service hosts online.
+- Keyboard and mouse IRQ paths now also publish into a shared kernel input-event queue with an explicit dequeue ABI (`SYSCALL_INPUT_EVENT`), so the tree has a first unified event stream for userland input consumers in parallel with the older compatibility polling syscalls.
+- The `input` service boundary now also carries that event stream: `MK_MSG_INPUT_EVENT` is implemented in the current local handler, `SYSCALL_INPUT_EVENT` routes through `mk_input_service_next_event()`, and the desktop consumes queued key/mouse events through the new dequeue ABI while the direct in-kernel queue remains as the compatibility fallback.
+- The waitable substrate is now richer than a bare wakeup bit: kernel waitables carry event class/kind metadata, per-service ownership tags, signal/completion wrappers, timeout/cancel paths, and scheduler snapshots can now report timed-out/canceled waits plus pending signal state without regressing the current headless boot smoke.
+- Service supervision now also emits explicit async state events: each service record owns a subscriber-aware event ring for `online/offline/degraded/recovered/restarted` notifications, so restart/degradation is no longer only observable through the synchronous request path.
 
 ## Audited Remaining Gaps
 
@@ -218,13 +223,14 @@ Rules:
 - [x] process/service bootstrap and request/reply IPC exist
 - [x] service supervision/restart exists in initial form
 - [x] cooperative execution points exist through `yield`/`sleep`
-- [~] timer-driven tick hooks now exist as an initial event substrate, but not yet as the final waitable model
-- [ ] add first-class kernel event objects (`queue`, `waitable`, `signal`, `completion`)
-- [ ] add per-service event mailbox/ring abstraction instead of ad-hoc request transport only
-- [ ] add timeout/cancel primitives for pending work items
-- [ ] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
-- [ ] add subscription model for async completion and state-change notifications
-- [ ] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
+- [x] timer-driven tick hooks now exist as an initial event substrate and now drive waitable timeout wakeups
+- [x] add first-class kernel event objects (`queue`, `waitable`, `signal`, `completion`)
+- [~] add per-service event mailbox/ring abstraction instead of ad-hoc request transport only
+: request/reply IPC still exists, but service state changes now also flow through a subscriber-aware event ring instead of staying implicit inside transport fallback logic
+- [x] add timeout/cancel primitives for pending work items
+- [x] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
+- [~] add subscription model for async completion and state-change notifications
+- [x] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
 - [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
 - [ ] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
 
@@ -233,10 +239,10 @@ Rules:
 - [x] keyboard polling can bypass degraded worker transport
 - [x] mouse polling can bypass degraded worker transport
 - [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; foreground modular apps still need the same treatment
-- [ ] move input service to event publication ownership instead of kernel fallback ownership
+- [~] move input service to event publication ownership instead of kernel fallback ownership
 - [ ] split desktop input ingestion from desktop render/update loop
-- [ ] introduce explicit per-device queues for keyboard, mouse, and future gamepad/touch sources
-- [ ] convert desktop shortcuts, pointer motion, focus changes, and window actions into queued events
+- [~] introduce explicit per-device queues for keyboard, mouse, and future gamepad/touch sources
+- [~] convert desktop shortcuts, pointer motion, focus changes, and window actions into queued events
 - [ ] make `startx` survive input-service restart without direct-driver fallback
 - [ ] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
 - [ ] prove keyboard and mouse remain live while audio/network/video workers restart
