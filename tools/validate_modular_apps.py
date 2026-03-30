@@ -38,6 +38,8 @@ QEMU_VALIDATION_COMMON_OPTS = [
 DESKTOP_CENTER_X = 320
 DESKTOP_CENTER_Y = 240
 FILES_ICON_CENTER = (572, 63)
+TRASH_ICON_CENTER = (572, 255)
+SAFE_WALLPAPER_POINT = (32, 120)
 BASE_WIDTH = 640
 BASE_HEIGHT = 480
 TASKBAR_HEIGHT = 22
@@ -548,6 +550,14 @@ def files_icon_center(session: QemuSession) -> Tuple[int, int]:
     return (width - 68, 63)
 
 
+def trash_icon_center(session: QemuSession) -> Tuple[int, int]:
+    mode = session.boot_mode_size()
+    if not mode:
+        return TRASH_ICON_CENTER
+    width, _ = mode
+    return (width - 68, 255)
+
+
 def start_button_center(session: QemuSession) -> Tuple[int, int]:
     mode = session.boot_mode_size()
     if not mode:
@@ -576,6 +586,26 @@ def start_menu_list_entry_center(session: QemuSession, slot: int) -> Tuple[int, 
 
 def start_menu_input_restart_center(session: QemuSession) -> Tuple[int, int]:
     return start_menu_list_entry_center(session, 5)
+
+
+def start_menu_audio_restart_center(session: QemuSession) -> Tuple[int, int]:
+    return start_menu_list_entry_center(session, 6)
+
+
+def start_menu_video_restart_center(session: QemuSession) -> Tuple[int, int]:
+    return start_menu_list_entry_center(session, 7)
+
+
+def start_menu_network_restart_center(session: QemuSession) -> Tuple[int, int]:
+    return start_menu_list_entry_center(session, 8)
+
+
+def start_menu_spawn_clock_center(session: QemuSession) -> Tuple[int, int]:
+    return start_menu_list_entry_center(session, 9)
+
+
+def safe_wallpaper_point(session: QemuSession) -> Tuple[int, int]:
+    return scaled_point(session, SAFE_WALLPAPER_POINT)
 
 
 def log_contains(session: QemuSession, marker: str) -> bool:
@@ -654,6 +684,53 @@ def send_shortcut_until_log(session: QemuSession,
     raise RuntimeError(f"Timed out waiting for marker: {marker}")
 
 
+def open_start_menu_entry_until_log(session: QemuSession,
+                                    point_fn: Callable[[QemuSession], Tuple[int, int]],
+                                    marker: str,
+                                    attempts: int = 4,
+                                    settle: float = 0.4,
+                                    timeout_per_attempt: float = 4.0) -> None:
+    if log_contains(session, marker):
+        return
+
+    last_error: Optional[Exception] = None
+    for attempt in range(attempts):
+        time.sleep(settle if attempt == 0 else 0.25)
+        try:
+            session.reset_mouse_to_center()
+            x, y = safe_wallpaper_point(session)
+            session.move_mouse_to(x, y, pause=0.03)
+            session.left_click(pause=0.08)
+
+            session.reset_mouse_to_center()
+            x, y = start_button_center(session)
+            session.move_mouse_to(x, y, pause=0.03)
+            session.left_click(pause=0.08)
+
+            session.reset_mouse_to_center()
+            x, y = point_fn(session)
+            session.move_mouse_to(x, y, pause=0.03)
+            session.left_click(pause=0.08)
+        except Exception as exc:
+            last_error = exc
+            if session.proc.poll() is not None:
+                raise
+            time.sleep(0.1)
+            continue
+
+        deadline = time.time() + timeout_per_attempt
+        while time.time() < deadline:
+            if log_contains(session, marker):
+                return
+            if session.proc.poll() is not None:
+                break
+            time.sleep(0.05)
+
+    if last_error is not None and session.proc.poll() is not None:
+        raise last_error
+    raise RuntimeError(f"Timed out waiting for marker: {marker}")
+
+
 def wait_for_terminal_command_done(session: QemuSession, command: str, timeout: float = 12.0) -> None:
     done_marker = f"terminal: command done {command}"
     if log_contains(session, done_marker):
@@ -669,8 +746,18 @@ def wait_for_terminal_command_done(session: QemuSession, command: str, timeout: 
 
 def scenario_startx(session: QemuSession) -> None:
     session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=90.0)
-    send_shortcut_until_log(session, "ctrl-y", "desktop: open-new w=1 t=1 i=0")
-    wait_for_terminal_command_done(session, "vibefetch", timeout=20.0)
+    click_until_log(session,
+                    files_icon_center,
+                    "desktop: open-new w=0 t=3 i=0",
+                    attempts=6,
+                    settle=0.8,
+                    timeout_per_attempt=6.0)
+    open_start_menu_entry_until_log(session,
+                                    start_menu_terminal_center,
+                                    "desktop: open-new w=1 t=1 i=0",
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
 
 
 def run_command(session: QemuSession, command: str, timeout: float = 6.0, pause: float = 0.12,
@@ -728,13 +815,12 @@ def scenario_open_terminal_combo(session: QemuSession, timeout: float = 45.0) ->
 
 def scenario_open_terminal(session: QemuSession, timeout: float = 45.0) -> None:
     session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=timeout)
-    send_shortcut_until_log(session,
-                            "ctrl-t",
-                            "desktop: open-new w=0 t=1 i=0",
-                            attempts=6,
-                            settle=0.8,
-                            timeout_per_attempt=5.0)
-    wait_for_terminal_command_done(session, "vibefetch", timeout=20.0)
+    open_start_menu_entry_until_log(session,
+                                    start_menu_terminal_center,
+                                    "desktop: open-new w=0 t=1 i=0",
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
 
 
 def scenario_doom(session: QemuSession) -> None:
@@ -775,31 +861,86 @@ def scenario_craft(session: QemuSession) -> None:
 def scenario_input_restart(session: QemuSession) -> None:
     scenario_open_terminal_combo(session, timeout=45.0)
     time.sleep(0.8)
-    send_shortcut_until_log(session,
-                            "ctrl-k",
-                            "service: restarting type=5",
-                            attempts=6,
-                            settle=0.8,
-                            timeout_per_attempt=6.0)
+    open_start_menu_entry_until_log(session,
+                                    start_menu_input_restart_center,
+                                    "service: restarting type=5",
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
     session.wait_for_log("desktop: input reset", timeout=12.0)
-    send_shortcut_until_log(session,
-                            "ctrl-l",
-                            "spawn: launched pid=",
-                            attempts=6,
-                            settle=0.8,
-                            timeout_per_attempt=6.0)
+    click_until_log(session,
+                    trash_icon_center,
+                    "desktop: open-new w=2 t=21 i=0",
+                    attempts=6,
+                    settle=0.8,
+                    timeout_per_attempt=6.0)
+    open_start_menu_entry_until_log(session,
+                                    start_menu_spawn_clock_center,
+                                    "spawn: launched pid=",
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
     session.wait_for_log("host: app start", timeout=8.0)
+
+
+def scenario_non_input_service_restart(session: QemuSession,
+                                       restart_point: Callable[[QemuSession], Tuple[int, int]],
+                                       restart_marker: str,
+                                       online_marker: str) -> None:
+    scenario_open_terminal_combo(session, timeout=45.0)
+    time.sleep(0.8)
+    open_start_menu_entry_until_log(session,
+                                    restart_point,
+                                    restart_marker,
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
+    session.wait_for_log(online_marker, timeout=12.0)
+    click_until_log(session,
+                    trash_icon_center,
+                    "desktop: open-new w=2 t=21 i=0",
+                    attempts=6,
+                    settle=0.8,
+                    timeout_per_attempt=6.0)
+    open_start_menu_entry_until_log(session,
+                                    start_menu_spawn_clock_center,
+                                    "spawn: launched pid=",
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
+    session.wait_for_log("host: app start", timeout=8.0)
+
+
+def scenario_audio_restart(session: QemuSession) -> None:
+    scenario_non_input_service_restart(session,
+                                       start_menu_audio_restart_center,
+                                       "service: restarting type=8",
+                                       "service-host: online audio")
+
+
+def scenario_video_restart(session: QemuSession) -> None:
+    scenario_non_input_service_restart(session,
+                                       start_menu_video_restart_center,
+                                       "service: restarting type=4",
+                                       "service-host: online video")
+
+
+def scenario_network_restart(session: QemuSession) -> None:
+    scenario_non_input_service_restart(session,
+                                       start_menu_network_restart_center,
+                                       "service: restarting type=7",
+                                       "service-host: online network")
 
 
 def scenario_spawn_clock_shell(session: QemuSession) -> None:
     scenario_open_terminal_combo(session, timeout=45.0)
     time.sleep(0.8)
-    send_shortcut_until_log(session,
-                            "ctrl-l",
-                            "spawn: launched pid=",
-                            attempts=6,
-                            settle=0.8,
-                            timeout_per_attempt=6.0)
+    open_start_menu_entry_until_log(session,
+                                    start_menu_spawn_clock_center,
+                                    "spawn: launched pid=",
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
     session.wait_for_log("host: app start", timeout=8.0)
 
 
@@ -1022,6 +1163,72 @@ SCENARIOS = [
             *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_input_restart,
+    ),
+    Scenario(
+        name="audio-restart-desktop",
+        description="Desktop autostart opens a terminal, restarts audiosvc, then mouse + keyboard input still open files and launch a detached app",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "kill: terminated pid=",
+            "service: restarting type=8",
+            "service-host: online audio",
+            "desktop: open-new w=2 t=21 i=0",
+            "shell: command spawn",
+            "spawn: launched pid=",
+            "host: app start",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_audio_restart,
+    ),
+    Scenario(
+        name="network-restart-desktop",
+        description="Desktop autostart opens a terminal, restarts network, then mouse + keyboard input still open files and launch a detached app",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "kill: terminated pid=",
+            "service: restarting type=7",
+            "service-host: online network",
+            "desktop: open-new w=2 t=21 i=0",
+            "shell: command spawn",
+            "spawn: launched pid=",
+            "host: app start",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_network_restart,
+    ),
+    Scenario(
+        name="video-restart-desktop",
+        description="Desktop autostart opens a terminal, restarts videosvc, then mouse + keyboard input still open files and launch a detached app",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "kill: terminated pid=",
+            "service: restarting type=4",
+            "service-host: online video",
+            "desktop: open-new w=2 t=21 i=0",
+            "shell: command spawn",
+            "spawn: launched pid=",
+            "host: app start",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_video_restart,
     ),
     Scenario(
         name="spawn-clock-shell",

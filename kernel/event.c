@@ -152,6 +152,27 @@ int kernel_waitable_wait_timeout(kernel_waitable_t *waitable, uint32_t timeout_t
                                        waitable->owner_service) != 0) {
             return -1;
         }
+
+        /*
+         * The wait can complete synchronously before we actually yield. This
+         * happens when a lifecycle/event publication wakes the current task as
+         * part of the block transition itself. If we yield after that wakeup,
+         * the scheduler may resume an older saved context instead of the live
+         * frame we are about to block from.
+         */
+        if (current->wait_result == TASK_WAIT_RESULT_SIGNALED) {
+            waitable->wake_count += 1u;
+            return TASK_WAIT_RESULT_SIGNALED;
+        }
+        if (current->wait_result == TASK_WAIT_RESULT_TIMED_OUT) {
+            waitable->timeout_count += 1u;
+            return TASK_WAIT_RESULT_TIMED_OUT;
+        }
+        if (current->wait_result == TASK_WAIT_RESULT_CANCELED) {
+            waitable->cancel_count += 1u;
+            return TASK_WAIT_RESULT_CANCELED;
+        }
+
         yield();
 
         if (current->wait_result == TASK_WAIT_RESULT_SIGNALED) {

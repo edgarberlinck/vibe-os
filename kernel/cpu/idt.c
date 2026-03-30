@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <kernel/kernel.h>
 #include <kernel/interrupt.h>
+#include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/video/video.h>
 
 #define IDT_ENTRIES 256
@@ -33,6 +34,9 @@ extern void smp_wakeup_stub(void);
 
 extern void divide_error_stub(void);
 extern void invalid_opcode_stub(void);
+extern void invalid_tss_stub(void);
+extern void segment_not_present_stub(void);
+extern void stack_fault_stub(void);
 extern void general_protection_stub(void);
 extern void page_fault_stub(void);
 extern void double_fault_stub(void);
@@ -73,6 +77,9 @@ void kernel_idt_init(void) {
     /* exception handlers */
     idt_set_gate(0,  (uint32_t)divide_error_stub,        0x8E);
     idt_set_gate(6,  (uint32_t)invalid_opcode_stub,       0x8E);
+    idt_set_gate(10, (uint32_t)invalid_tss_stub,          0x8E);
+    idt_set_gate(11, (uint32_t)segment_not_present_stub,  0x8E);
+    idt_set_gate(12, (uint32_t)stack_fault_stub,          0x8E);
     idt_set_gate(13, (uint32_t)general_protection_stub,   0x8E);
     idt_set_gate(14, (uint32_t)page_fault_stub,           0x8E);
     idt_set_gate(8,  (uint32_t)double_fault_stub,         0x8E);
@@ -137,6 +144,44 @@ void invalid_opcode_handler(uint32_t eip) {
 
     #undef FMT32
 }
-void general_protection_handler(void) { kernel_panic("General Protection"); }
-void page_fault_handler(void) { kernel_panic("Page Fault"); }
-void double_fault_handler(void) { kernel_panic("Double Fault"); }
+
+static void exception_log(const char *name, uint32_t error_code, uint32_t eip, uint32_t extra) {
+    kernel_debug_printf("exception: %s err=%x eip=%x extra=%x\n",
+                        name,
+                        (unsigned int)error_code,
+                        (unsigned int)eip,
+                        (unsigned int)extra);
+}
+
+void invalid_tss_handler(uint32_t error_code, uint32_t eip) {
+    exception_log("Invalid TSS", error_code, eip, 0u);
+    kernel_panic("Invalid TSS");
+}
+
+void segment_not_present_handler(uint32_t error_code, uint32_t eip) {
+    exception_log("Segment Not Present", error_code, eip, 0u);
+    kernel_panic("Segment Not Present");
+}
+
+void stack_fault_handler(uint32_t error_code, uint32_t eip) {
+    exception_log("Stack Fault", error_code, eip, 0u);
+    kernel_panic("Stack Fault");
+}
+
+void general_protection_handler(uint32_t error_code, uint32_t eip) {
+    exception_log("General Protection", error_code, eip, 0u);
+    kernel_panic("General Protection");
+}
+
+void page_fault_handler(uint32_t error_code, uint32_t eip) {
+    uint32_t cr2 = 0u;
+
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+    exception_log("Page Fault", error_code, eip, cr2);
+    kernel_panic("Page Fault");
+}
+
+void double_fault_handler(uint32_t error_code, uint32_t eip) {
+    exception_log("Double Fault", error_code, eip, 0u);
+    kernel_panic("Double Fault");
+}

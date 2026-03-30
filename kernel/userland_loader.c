@@ -31,7 +31,6 @@ __attribute__((noreturn)) void userland_run(void) {
 
     kernel_text_puts("UL schedule...\n");
     scheduler_set_preemption_ready(1);
-    smp_scheduler_enable();
     schedule();
     kernel_panic("scheduler returned after init bootstrap");
     for (;;) {

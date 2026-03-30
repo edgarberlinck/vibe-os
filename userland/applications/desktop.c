@@ -489,7 +489,7 @@ enum {
     FMENU_COUNT
 };
 enum {
-    START_MENU_ENTRY_COUNT = 64,
+    START_MENU_ENTRY_COUNT = 68,
     START_MENU_SEARCH_MAX = 24,
     START_MENU_SCROLLBAR_W = 10
 };
@@ -655,6 +655,10 @@ static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT
     {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS, 0},
     {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS, 0},
     {"Input restart", "kill input", APP_TERMINAL, START_MENU_TAB_APPS, "kill input"},
+    {"Audio restart", "kill audio", APP_TERMINAL, START_MENU_TAB_APPS, "kill audio"},
+    {"Video restart", "kill video", APP_TERMINAL, START_MENU_TAB_APPS, "kill video"},
+    {"Network restart", "kill network", APP_TERMINAL, START_MENU_TAB_APPS, "kill network"},
+    {"Spawn clock", "spawn clock", APP_TERMINAL, START_MENU_TAB_APPS, "spawn clock"},
     {"Rede", "netmgrd status", APP_TERMINAL, START_MENU_TAB_APPS, "netmgrd status"},
     {"Som", "soundctl status", APP_TERMINAL, START_MENU_TAB_APPS, "soundctl status"},
     {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS, 0},
@@ -8487,6 +8491,11 @@ void desktop_main(void) {
                 dirty = 1;
                 continue;
             }
+            /*
+             * Keep a few low-control restart shortcuts reserved for async
+             * migration smoke so headless QEMU and real-hardware chaos testing
+             * can exercise service restarts without relying on long typing.
+             */
             if (key == 11) {
                 desktop_request_open_terminal_command("kill input");
                 dirty = 1;
@@ -8494,6 +8503,21 @@ void desktop_main(void) {
             }
             if (key == 12) {
                 desktop_request_open_terminal_command("spawn clock");
+                dirty = 1;
+                continue;
+            }
+            if (key == 21) {
+                desktop_request_open_terminal_command("kill audio");
+                dirty = 1;
+                continue;
+            }
+            if (key == 22) {
+                desktop_request_open_terminal_command("kill video");
+                dirty = 1;
+                continue;
+            }
+            if (key == 23) {
+                desktop_request_open_terminal_command("kill network");
                 dirty = 1;
                 continue;
             }

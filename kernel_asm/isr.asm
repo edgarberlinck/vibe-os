@@ -24,6 +24,9 @@ global smp_wakeup_stub
 
 global divide_error_stub
 global invalid_opcode_stub
+global invalid_tss_stub
+global segment_not_present_stub
+global stack_fault_stub
 global general_protection_stub
 global page_fault_stub
 global double_fault_stub
@@ -38,6 +41,9 @@ extern smp_wakeup_ipi_handler
 
 extern divide_error_handler
 extern invalid_opcode_handler
+extern invalid_tss_handler
+extern segment_not_present_handler
+extern stack_fault_handler
 extern general_protection_handler
 extern page_fault_handler
 extern double_fault_handler
@@ -164,23 +170,24 @@ invalid_opcode_stub:
     popa
     iretd
 
-general_protection_stub:
+%macro EXCEPTION_ERROR_CODE_STUB 2
+%1:
     pusha
     cld
-    call general_protection_handler
+    mov eax, [esp + 32]    ; CPU-pushed error code
+    mov edx, [esp + 36]    ; saved EIP
+    push edx
+    push eax
+    call %2
+    add esp, 8
     popa
+    add esp, 4             ; discard error code before returning
     iretd
+%endmacro
 
-page_fault_stub:
-    pusha
-    cld
-    call page_fault_handler
-    popa
-    iretd
-
-double_fault_stub:
-    pusha
-    cld
-    call double_fault_handler
-    popa
-    iretd
+EXCEPTION_ERROR_CODE_STUB invalid_tss_stub, invalid_tss_handler
+EXCEPTION_ERROR_CODE_STUB segment_not_present_stub, segment_not_present_handler
+EXCEPTION_ERROR_CODE_STUB stack_fault_stub, stack_fault_handler
+EXCEPTION_ERROR_CODE_STUB general_protection_stub, general_protection_handler
+EXCEPTION_ERROR_CODE_STUB page_fault_stub, page_fault_handler
+EXCEPTION_ERROR_CODE_STUB double_fault_stub, double_fault_handler

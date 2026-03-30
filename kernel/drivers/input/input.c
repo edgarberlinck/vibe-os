@@ -96,6 +96,16 @@ void kernel_input_event_init(void) {
     kernel_irq_restore(flags);
 }
 
+int kernel_input_event_has_data(void) {
+    uint32_t flags;
+    int ready;
+
+    flags = kernel_irq_save();
+    ready = g_input_event_tail != g_input_event_head;
+    kernel_irq_restore(flags);
+    return ready;
+}
+
 int kernel_input_event_dequeue(struct input_event *event) {
     uint32_t flags;
 

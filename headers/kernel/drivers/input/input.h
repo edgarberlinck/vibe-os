@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 void kernel_input_event_init(void);
+int kernel_input_event_has_data(void);
 int kernel_input_event_dequeue(struct input_event *event);
 int kernel_input_event_wait(struct input_event *event);
 void kernel_input_event_enqueue_key(int key);

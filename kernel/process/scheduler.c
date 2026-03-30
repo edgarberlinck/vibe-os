@@ -79,6 +79,10 @@ static void scheduler_trace_switch(uint32_t cpu_index,
 }
 
 static uint32_t scheduler_online_cpu_count(void) {
+    if (!smp_scheduler_enabled()) {
+        return 1u;
+    }
+
     uint32_t count = smp_started_cpu_count();
 
     if (count == 0u) {
