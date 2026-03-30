@@ -8,6 +8,7 @@ struct process;
 
 #define MK_VIDEO_INLINE_TEXT_MAX 240u
 #define MK_VIDEO_INLINE_BLIT8_MAX 224u
+#define MK_VIDEO_PALETTE_BYTES 768u
 
 struct mk_video_color_request {
     uint32_t color;

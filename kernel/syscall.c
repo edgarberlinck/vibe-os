@@ -9,6 +9,7 @@
 #include <kernel/microkernel.h>
 #include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/service.h>
+#include <kernel/microkernel/transfer.h>
 #include <kernel/ipc.h>
 #include <kernel/process.h>
 #include <kernel/hal/io.h>
@@ -24,7 +25,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 93
+#define MAX_SYSCALLS 96
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
@@ -55,14 +56,16 @@ static const char *sys_launch_path_basename(const char *path) {
 static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    kernel_video_clear((uint8_t)(color & 0xFFu));
-    return 0u;
+    return (uint32_t)mk_video_service_clear((uint8_t)(color & 0xFFu));
 }
 
 static uint32_t sys_gfx_rect(uint32_t x, uint32_t y, uint32_t w,
                              uint32_t h, uint32_t color) {
-    kernel_gfx_rect((int)x, (int)y, (int)w, (int)h, (uint8_t)(color & 0xFFu));
-    return 0u;
+    return (uint32_t)mk_video_service_rect((int)x,
+                                           (int)y,
+                                           (int)w,
+                                           (int)h,
+                                           (uint8_t)(color & 0xFFu));
 }
 
 static uint32_t sys_gfx_text(uint32_t x, uint32_t y, uint32_t text_ptr,
@@ -71,18 +74,16 @@ static uint32_t sys_gfx_text(uint32_t x, uint32_t y, uint32_t text_ptr,
     if (text_ptr == 0u) {
         return (uint32_t)-1;
     }
-    kernel_gfx_draw_text((int)x,
-                         (int)y,
-                         (const char *)(uintptr_t)text_ptr,
-                         (uint8_t)(color & 0xFFu));
-    return 0u;
+    return (uint32_t)mk_video_service_text((int)x,
+                                           (int)y,
+                                           (uint8_t)(color & 0xFFu),
+                                           (const char *)(uintptr_t)text_ptr);
 }
 
 static uint32_t sys_gfx_flip(uint32_t a, uint32_t b, uint32_t c,
                              uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    kernel_video_flip_mode(a);
-    return 0u;
+    return (uint32_t)mk_video_service_flip_mode(a);
 }
 
 static uint32_t sys_gfx_set_present_policy(uint32_t policy, uint32_t b, uint32_t c,
@@ -107,14 +108,12 @@ static uint32_t sys_gfx_blit8(uint32_t src_ptr, uint32_t packed_wh, uint32_t dst
     if (src_ptr == 0u) {
         return (uint32_t)-1;
     }
-
-    kernel_gfx_blit8((const uint8_t *)(uintptr_t)src_ptr,
-                     src_w,
-                     src_h,
-                     (int)dst_x,
-                     (int)dst_y,
-                     (int)scale);
-    return 0u;
+    return (uint32_t)mk_video_service_blit8((const uint8_t *)(uintptr_t)src_ptr,
+                                            src_w,
+                                            src_h,
+                                            (int)dst_x,
+                                            (int)dst_y,
+                                            (int)scale);
 }
 
 static uint32_t sys_gfx_blit8_present(uint32_t src_ptr, uint32_t packed_wh, uint32_t dst_x,
@@ -125,14 +124,12 @@ static uint32_t sys_gfx_blit8_present(uint32_t src_ptr, uint32_t packed_wh, uint
     if (src_ptr == 0u) {
         return (uint32_t)-1;
     }
-
-    kernel_gfx_blit8_present((const uint8_t *)(uintptr_t)src_ptr,
-                             src_w,
-                             src_h,
-                             (int)dst_x,
-                             (int)dst_y,
-                             (int)scale);
-    return 0u;
+    return (uint32_t)mk_video_service_blit8_present((const uint8_t *)(uintptr_t)src_ptr,
+                                                    src_w,
+                                                    src_h,
+                                                    (int)dst_x,
+                                                    (int)dst_y,
+                                                    (int)scale);
 }
 
 static uint32_t sys_gfx_blit8_stretch(uint32_t src_ptr, uint32_t packed_src_wh,
@@ -146,15 +143,13 @@ static uint32_t sys_gfx_blit8_stretch(uint32_t src_ptr, uint32_t packed_src_wh,
     if (src_ptr == 0u) {
         return (uint32_t)-1;
     }
-
-    kernel_gfx_blit8_stretch((const uint8_t *)(uintptr_t)src_ptr,
-                             src_w,
-                             src_h,
-                             (int)dst_x,
-                             (int)dst_y,
-                             dst_w,
-                             dst_h);
-    return 0u;
+    return (uint32_t)mk_video_service_blit8_stretch((const uint8_t *)(uintptr_t)src_ptr,
+                                                    src_w,
+                                                    src_h,
+                                                    (int)dst_x,
+                                                    (int)dst_y,
+                                                    dst_w,
+                                                    dst_h);
 }
 
 static uint32_t sys_gfx_blit8_stretch_present(uint32_t src_ptr, uint32_t packed_src_wh,
@@ -168,40 +163,43 @@ static uint32_t sys_gfx_blit8_stretch_present(uint32_t src_ptr, uint32_t packed_
     if (src_ptr == 0u) {
         return (uint32_t)-1;
     }
-
-    kernel_gfx_blit8_stretch_present((const uint8_t *)(uintptr_t)src_ptr,
-                                     src_w,
-                                     src_h,
-                                     (int)dst_x,
-                                     (int)dst_y,
-                                     dst_w,
-                                     dst_h);
-    return 0u;
+    return (uint32_t)mk_video_service_blit8_stretch_present((const uint8_t *)(uintptr_t)src_ptr,
+                                                            src_w,
+                                                            src_h,
+                                                            (int)dst_x,
+                                                            (int)dst_y,
+                                                            dst_w,
+                                                            dst_h);
 }
 
 static uint32_t sys_gfx_leave(uint32_t a, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
     (void)a; (void)b; (void)c; (void)d; (void)e;
-    kernel_video_leave_graphics();
-    return 0u;
+    return (uint32_t)mk_video_service_leave_graphics();
 }
 
 static uint32_t sys_gfx_set_mode(uint32_t width, uint32_t height, uint32_t c,
                                  uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
-    return (uint32_t)kernel_video_set_mode(width, height);
+    return (uint32_t)mk_video_service_set_mode(width, height);
 }
 
 static uint32_t sys_gfx_set_palette(uint32_t ptr, uint32_t b, uint32_t c,
                                     uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)kernel_video_set_palette((const uint8_t *)(uintptr_t)ptr);
+    if (ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_video_service_set_palette((const uint8_t *)(uintptr_t)ptr);
 }
 
 static uint32_t sys_gfx_get_palette(uint32_t ptr, uint32_t b, uint32_t c,
                                     uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)kernel_video_get_palette((uint8_t *)(uintptr_t)ptr);
+    if (ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_video_service_get_palette((uint8_t *)(uintptr_t)ptr);
 }
 
 static uint32_t sys_storage_load(uint32_t ptr, uint32_t size, uint32_t c,
@@ -411,29 +409,20 @@ static uint32_t sys_time_ticks(uint32_t a, uint32_t b, uint32_t c,
 
 static uint32_t sys_gfx_info(uint32_t out_ptr, uint32_t b, uint32_t c,
                              uint32_t d, uint32_t e) {
-    struct video_mode *out;
-
     (void)b; (void)c; (void)d; (void)e;
     if (out_ptr == 0) {
         return (uint32_t)-1;
     }
-
-    out = (struct video_mode *)(uintptr_t)out_ptr;
-    *out = *kernel_video_get_mode();
-    return 0u;
+    return (uint32_t)mk_video_service_get_info((struct video_mode *)(uintptr_t)out_ptr);
 }
 
 static uint32_t sys_gfx_caps(uint32_t out_ptr, uint32_t b, uint32_t c,
                              uint32_t d, uint32_t e) {
-    struct video_capabilities *out;
-
     (void)b; (void)c; (void)d; (void)e;
     if (out_ptr == 0) {
         return (uint32_t)-1;
     }
-    out = (struct video_capabilities *)(uintptr_t)out_ptr;
-    kernel_video_get_capabilities(out);
-    return 0u;
+    return (uint32_t)mk_video_service_get_caps((struct video_capabilities *)(uintptr_t)out_ptr);
 }
 
 static uint32_t sys_gfx_bench(uint32_t out_ptr, uint32_t b, uint32_t c,
@@ -494,7 +483,7 @@ static uint32_t sys_audio_write(uint32_t data_ptr, uint32_t size, uint32_t c,
     if (data_ptr == 0u || size == 0u) {
         return (uint32_t)-1;
     }
-    return (uint32_t)mk_audio_service_write_direct((const void *)(uintptr_t)data_ptr, size);
+    return (uint32_t)mk_audio_service_write((const void *)(uintptr_t)data_ptr, size);
 }
 
 static uint32_t sys_audio_write_async(uint32_t data_ptr, uint32_t size, uint32_t c,
@@ -678,6 +667,30 @@ static uint32_t sys_keyboard_get_layout(uint32_t buffer_ptr, uint32_t size, uint
 static uint32_t sys_keyboard_get_available_layouts(uint32_t buffer_ptr, uint32_t size, uint32_t c, uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     return (uint32_t)mk_input_service_get_available_layouts((char*)(uintptr_t)buffer_ptr, (int)size);
+}
+
+static uint32_t sys_transfer_size(uint32_t transfer_id, uint32_t b, uint32_t c,
+                                  uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    return mk_transfer_size(transfer_id);
+}
+
+static uint32_t sys_transfer_read(uint32_t transfer_id, uint32_t dst_ptr, uint32_t size,
+                                  uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (dst_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    return mk_transfer_copy_to(transfer_id, (void *)(uintptr_t)dst_ptr, size) == 0 ? 0u : (uint32_t)-1;
+}
+
+static uint32_t sys_transfer_write(uint32_t transfer_id, uint32_t src_ptr, uint32_t size,
+                                   uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (src_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    return mk_transfer_copy_from(transfer_id, (const void *)(uintptr_t)src_ptr, size) == 0 ? 0u : (uint32_t)-1;
 }
 
 static uint32_t sys_shutdown(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
@@ -1271,6 +1284,9 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SERVICE_PID] = sys_service_pid;
     syscall_table[SYSCALL_SERVICE_RESTART] = sys_service_restart;
     syscall_table[SYSCALL_SERVICE_EVENT_RECV] = sys_service_event_receive;
+    syscall_table[SYSCALL_TRANSFER_SIZE] = sys_transfer_size;
+    syscall_table[SYSCALL_TRANSFER_READ] = sys_transfer_read;
+    syscall_table[SYSCALL_TRANSFER_WRITE] = sys_transfer_write;
     syscall_table[SYSCALL_AUDIO_EVENT_SUBSCRIBE] = sys_audio_event_subscribe;
     syscall_table[SYSCALL_AUDIO_EVENT_RECV] = sys_audio_event_receive;
     syscall_table[SYSCALL_VIDEO_EVENT_SUBSCRIBE] = sys_video_event_subscribe;

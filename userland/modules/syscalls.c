@@ -479,6 +479,28 @@ int sys_service_event_receive(uint32_t service_type,
                     0);
 }
 
+uint32_t sys_transfer_size(uint32_t transfer_id) {
+    return (uint32_t)syscall5(SYSCALL_TRANSFER_SIZE, (int)transfer_id, 0, 0, 0, 0);
+}
+
+int sys_transfer_read(uint32_t transfer_id, void *dst, uint32_t size) {
+    return syscall5(SYSCALL_TRANSFER_READ,
+                    (int)transfer_id,
+                    (int)(uintptr_t)dst,
+                    (int)size,
+                    0,
+                    0);
+}
+
+int sys_transfer_write(uint32_t transfer_id, const void *src, uint32_t size) {
+    return syscall5(SYSCALL_TRANSFER_WRITE,
+                    (int)transfer_id,
+                    (int)(uintptr_t)src,
+                    (int)size,
+                    0,
+                    0);
+}
+
 void sys_shutdown(void) {
     (void)syscall5(SYSCALL_SHUTDOWN, 0, 0, 0, 0, 0);
 }

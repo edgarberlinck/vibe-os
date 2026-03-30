@@ -1219,6 +1219,12 @@ static uint32_t mk_audio_current_pid(void) {
     return scheduler_current_pid();
 }
 
+static int mk_audio_current_process_is_service_worker(void) {
+    process_t *current = scheduler_current();
+
+    return current != 0 && current->service_type == MK_SERVICE_AUDIO;
+}
+
 static int mk_audio_prepare_request(struct mk_message *message,
                                     uint32_t type,
                                     const void *payload,
@@ -9433,6 +9439,26 @@ static int mk_audio_local_handler(const struct mk_message *request,
             g_last_audio_reply = *reply;
             return 0;
         }
+    case MK_MSG_AUDIO_WRITE_ASYNC:
+        if (request->payload_size != sizeof(struct mk_audio_write_request)) {
+            return -1;
+        }
+        {
+            const struct mk_audio_write_request *write_request;
+            int rc;
+
+            write_request = (const struct mk_audio_write_request *)request->payload;
+            if (write_request->size > MK_AUDIO_INLINE_WRITE_MAX) {
+                return -1;
+            }
+            rc = (int)mk_audio_async_ring_write(write_request->data, write_request->size);
+            mk_audio_refresh_status_snapshot();
+            if (mk_audio_reply_result(reply, rc) != 0) {
+                return -1;
+            }
+            g_last_audio_reply = *reply;
+            return 0;
+        }
     case MK_MSG_AUDIO_READ:
         if (request->payload_size != sizeof(struct mk_audio_transfer_request)) {
             return -1;
@@ -9738,7 +9764,7 @@ void mk_audio_service_init(void) {
                                  "audio",
                                  mk_audio_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_audio_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN);
@@ -9754,6 +9780,12 @@ int mk_audio_service_get_info(struct mk_audio_info *info) {
 
     if (info == 0) {
         return -1;
+    }
+    if (mk_audio_current_process_is_service_worker()) {
+        mk_audio_refresh_topology_snapshot();
+        mk_audio_refresh_status_snapshot();
+        *info = g_audio_state.info;
+        return 0;
     }
 
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_GETINFO, 0, 0u) != 0) {
@@ -9775,6 +9807,11 @@ int mk_audio_service_get_status(struct audio_status *status) {
 
     if (status == 0) {
         return -1;
+    }
+    if (mk_audio_current_process_is_service_worker()) {
+        mk_audio_refresh_status_snapshot();
+        *status = g_audio_state.info.status;
+        return 0;
     }
 
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_GET_STATUS, 0, 0u) != 0) {
@@ -9798,6 +9835,18 @@ int mk_audio_service_set_params(const struct audio_swpar *params) {
     if (params == 0) {
         return -1;
     }
+    if (mk_audio_current_process_is_service_worker()) {
+        g_audio_state.info.parameters = *params;
+        if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_UAUDIO) {
+            mk_audio_normalize_uaudio_params(&g_audio_state.info.parameters);
+        } else {
+            mk_audio_normalize_params(&g_audio_state.info.parameters);
+        }
+        if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_AUICH) {
+            mk_audio_compat_apply_params();
+        }
+        return 0;
+    }
 
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_SET_PARAMS, params, sizeof(*params)) != 0) {
         return -1;
@@ -9817,6 +9866,13 @@ int mk_audio_service_start(void) {
     struct mk_message reply;
     struct mk_audio_result result;
 
+    if (mk_audio_current_process_is_service_worker()) {
+        if (g_audio_backend->start == 0 || g_audio_backend->start() != 0) {
+            return -1;
+        }
+        return 0;
+    }
+
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_START, 0, 0u) != 0) {
         return -1;
     }
@@ -9834,6 +9890,13 @@ int mk_audio_service_stop(void) {
     struct mk_message request;
     struct mk_message reply;
     struct mk_audio_result result;
+
+    if (mk_audio_current_process_is_service_worker()) {
+        if (g_audio_backend->stop == 0 || g_audio_backend->stop() != 0) {
+            return -1;
+        }
+        return 0;
+    }
 
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_STOP, 0, 0u) != 0) {
         return -1;
@@ -9858,6 +9921,12 @@ int mk_audio_service_write(const void *data, uint32_t size) {
 
     if (data == 0 || size == 0u) {
         return -1;
+    }
+    if (mk_audio_current_process_is_service_worker()) {
+        if (g_audio_backend == 0 || g_audio_backend->write == 0) {
+            return -1;
+        }
+        return g_audio_backend->write((const uint8_t *)data, size);
     }
 
     src = (const uint8_t *)data;
@@ -9901,14 +9970,54 @@ int mk_audio_service_write_direct(const void *data, uint32_t size) {
 }
 
 int mk_audio_service_write_async(const void *data, uint32_t size) {
-    uint32_t written;
+    struct mk_message request;
+    struct mk_message reply;
+    struct mk_audio_result result;
+    struct mk_audio_write_request chunk;
+    const uint8_t *src;
+    uint32_t total_written;
 
     if (data == 0 || size == 0u) {
         return -1;
     }
-    written = mk_audio_async_ring_write((const uint8_t *)data, size);
-    mk_audio_refresh_status_snapshot();
-    return (int)written;
+    if (mk_audio_current_process_is_service_worker()) {
+        uint32_t written = mk_audio_async_ring_write((const uint8_t *)data, size);
+
+        mk_audio_refresh_status_snapshot();
+        return (int)written;
+    }
+
+    src = (const uint8_t *)data;
+    total_written = 0u;
+    while (total_written < size) {
+        uint32_t chunk_size = size - total_written;
+
+        if (chunk_size > MK_AUDIO_INLINE_WRITE_MAX) {
+            chunk_size = MK_AUDIO_INLINE_WRITE_MAX;
+        }
+        memset(&chunk, 0, sizeof(chunk));
+        chunk.size = chunk_size;
+        memcpy(chunk.data, src + total_written, chunk_size);
+        if (mk_audio_prepare_request(&request,
+                                     MK_MSG_AUDIO_WRITE_ASYNC,
+                                     &chunk,
+                                     sizeof(chunk)) != 0) {
+            return total_written != 0u ? (int)total_written : -1;
+        }
+        if (mk_service_request(MK_SERVICE_AUDIO, &request, &reply) != 0) {
+            return total_written != 0u ? (int)total_written : -1;
+        }
+        if (reply.payload_size != sizeof(result)) {
+            return total_written != 0u ? (int)total_written : -1;
+        }
+        memcpy(&result, reply.payload, sizeof(result));
+        if (result.value <= 0) {
+            return total_written != 0u ? (int)total_written : result.value;
+        }
+        total_written += (uint32_t)result.value;
+    }
+
+    return (int)total_written;
 }
 
 static void mk_audio_service_tick(uint32_t tick) {
@@ -10031,6 +10140,12 @@ int mk_audio_service_read(void *data, uint32_t size) {
     if (data == 0 || size == 0u || size > MK_AUDIO_INLINE_READ_MAX) {
         return -1;
     }
+    if (mk_audio_current_process_is_service_worker()) {
+        if (g_audio_state.backend_kind != MK_AUDIO_BACKEND_COMPAT_AUICH) {
+            return -1;
+        }
+        return mk_audio_backend_compat_read((uint8_t *)data, size);
+    }
 
     transfer.size = size;
     transfer.transfer_id = 0u;
@@ -10068,6 +10183,9 @@ int mk_audio_service_get_control_info(uint32_t index, struct mk_audio_control_in
     if (info == 0) {
         return -1;
     }
+    if (mk_audio_current_process_is_service_worker()) {
+        return mk_audio_state_get_control_info(index, info);
+    }
 
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_CONTROL_INFO, &index, sizeof(index)) != 0) {
         return -1;
@@ -10095,6 +10213,9 @@ int mk_audio_service_mixer_read(mixer_ctrl_t *control) {
     if (control == 0) {
         return -1;
     }
+    if (mk_audio_current_process_is_service_worker()) {
+        return mk_audio_state_read_control(control);
+    }
 
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_MIXER_READ, control, sizeof(*control)) != 0) {
         return -1;
@@ -10116,6 +10237,9 @@ int mk_audio_service_mixer_write(const mixer_ctrl_t *control) {
 
     if (control == 0) {
         return -1;
+    }
+    if (mk_audio_current_process_is_service_worker()) {
+        return mk_audio_state_write_control(control);
     }
 
     if (mk_audio_prepare_request(&request, MK_MSG_AUDIO_MIXER_WRITE, control, sizeof(*control)) != 0) {

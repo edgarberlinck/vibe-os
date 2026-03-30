@@ -9,7 +9,6 @@
 #include <kernel/scheduler.h>
 #include <kernel/userland_service.h>
 
-#define MK_VIDEO_PALETTE_BYTES 768u
 #define MK_VIDEO_UPLOAD_CACHE_SLOTS 4u
 #define MK_VIDEO_PALETTE_CACHE_SLOTS 4u
 #define MK_VIDEO_EVENT_SUBSCRIBERS 8u
@@ -41,6 +40,7 @@ static uint32_t g_video_present_last_submitted_sequence = 0u;
 static uint32_t g_video_present_last_completed_sequence = 0u;
 static uint32_t g_video_present_pending_depth = 0u;
 
+static int mk_video_current_process_is_service_worker(void);
 static void mk_video_event_init_subscribers(void);
 static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode);
 static struct mk_video_event_subscription *mk_video_find_subscription(const process_t *subscriber);
@@ -192,6 +192,12 @@ static uint32_t mk_video_complete_present_submission(uint32_t present_mode) {
 
 static uint32_t mk_video_current_pid(void) {
     return scheduler_current_pid();
+}
+
+static int mk_video_current_process_is_service_worker(void) {
+    process_t *current = scheduler_current();
+
+    return current != 0 && current->service_type == MK_SERVICE_VIDEO;
 }
 
 static int mk_video_share_transfer(uint32_t transfer_id, uint32_t permissions) {
@@ -809,7 +815,7 @@ void mk_video_service_init(void) {
                                  "video",
                                  mk_video_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_video_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |
@@ -820,6 +826,11 @@ int mk_video_service_clear(uint8_t color) {
     struct mk_message request;
     struct mk_message reply;
     struct mk_video_color_request payload;
+
+    if (mk_video_current_process_is_service_worker()) {
+        kernel_video_clear(color);
+        return 0;
+    }
 
     payload.color = color;
     if (mk_video_prepare_request(&request, MK_MSG_VIDEO_CLEAR, &payload, sizeof(payload)) != 0) {
@@ -835,6 +846,11 @@ int mk_video_service_rect(int x, int y, int w, int h, uint8_t color) {
     struct mk_message request;
     struct mk_message reply;
     struct mk_video_rect_request payload;
+
+    if (mk_video_current_process_is_service_worker()) {
+        kernel_gfx_rect(x, y, w, h, color);
+        return 0;
+    }
 
     payload.x = x;
     payload.y = y;
@@ -860,6 +876,10 @@ int mk_video_service_text(int x, int y, uint8_t color, const char *text) {
 
     if (text == 0) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        kernel_gfx_draw_text(x, y, text, color);
+        return 0;
     }
     text_length = (uint32_t)strlen(text);
     if (text_length != 0u && text_length < MK_VIDEO_INLINE_TEXT_MAX) {
@@ -914,6 +934,13 @@ int mk_video_service_flip_mode(uint32_t mode) {
     struct mk_message reply;
     struct mk_video_present_request payload;
 
+    if (mk_video_current_process_is_service_worker()) {
+        (void)mk_video_begin_present_submission(mode);
+        kernel_video_flip_mode(mode);
+        (void)mk_video_complete_present_submission(mode);
+        return 0;
+    }
+
     payload.mode = mode;
     if (mk_video_prepare_request(&request, MK_MSG_VIDEO_FLIP, &payload, sizeof(payload)) != 0) {
         return -1;
@@ -929,6 +956,18 @@ int mk_video_service_present_submit(uint32_t mode, uint32_t *sequence_out) {
     struct mk_message reply;
     struct mk_video_present_request payload;
 
+    if (mk_video_current_process_is_service_worker()) {
+        uint32_t sequence;
+
+        sequence = mk_video_begin_present_submission(mode);
+        kernel_video_flip_mode(mode);
+        sequence = mk_video_complete_present_submission(mode);
+        if (sequence_out != 0) {
+            *sequence_out = sequence;
+        }
+        return 0;
+    }
+
     payload.mode = mode;
     if (mk_video_prepare_request(&request, MK_MSG_VIDEO_PRESENT_SUBMIT, &payload, sizeof(payload)) != 0) {
         return -1;
@@ -943,6 +982,12 @@ int mk_video_service_leave_graphics(void) {
     struct mk_message request;
     struct mk_message reply;
 
+    if (mk_video_current_process_is_service_worker()) {
+        kernel_video_leave_graphics();
+        mk_video_publish_event(MK_VIDEO_EVENT_LEAVE, VIDEO_PRESENT_AUTO);
+        return 0;
+    }
+
     if (mk_video_prepare_request(&request, MK_MSG_VIDEO_LEAVE, 0, 0u) != 0) {
         return -1;
     }
@@ -956,6 +1001,15 @@ int mk_video_service_set_mode(uint32_t width, uint32_t height) {
     struct mk_message request;
     struct mk_message reply;
     struct mk_video_mode_request payload;
+
+    if (mk_video_current_process_is_service_worker()) {
+        int rc = kernel_video_set_mode(width, height);
+
+        if (rc == 0) {
+            mk_video_publish_event(MK_VIDEO_EVENT_MODE_SET, VIDEO_PRESENT_AUTO);
+        }
+        return rc;
+    }
 
     payload.width = width;
     payload.height = height;
@@ -976,6 +1030,15 @@ static int mk_video_palette_request_common(uint32_t type, uint8_t *palette) {
     int rc;
 
     if (palette == 0) {
+        return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        if (type == MK_MSG_VIDEO_SET_PALETTE) {
+            return kernel_video_set_palette(palette);
+        }
+        if (type == MK_MSG_VIDEO_GET_PALETTE) {
+            return kernel_video_get_palette(palette);
+        }
         return -1;
     }
     if (mk_video_get_palette_transfer(&transfer_id) != 0) {
@@ -1023,11 +1086,21 @@ int mk_video_service_blit8_transfer(uint32_t transfer_id, uint32_t byte_count,
     struct mk_message reply;
     struct mk_video_blit8_request payload;
 
+    const uint8_t *src;
+
     if (transfer_id == 0u || src_w <= 0 || src_h <= 0 || scale <= 0) {
         return -1;
     }
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        src = (const uint8_t *)mk_transfer_data_read(transfer_id);
+        if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
+            return -1;
+        }
+        kernel_gfx_blit8(src, src_w, src_h, dst_x, dst_y, scale);
+        return 0;
     }
     if (mk_video_share_transfer(transfer_id, MK_TRANSFER_PERM_READ) != 0) {
         return -1;
@@ -1055,11 +1128,23 @@ int mk_video_service_blit8_present_transfer(uint32_t transfer_id, uint32_t byte_
     struct mk_message reply;
     struct mk_video_blit8_request payload;
 
+    const uint8_t *src;
+
     if (transfer_id == 0u || src_w <= 0 || src_h <= 0 || scale <= 0) {
         return -1;
     }
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        src = (const uint8_t *)mk_transfer_data_read(transfer_id);
+        if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
+            return -1;
+        }
+        kernel_gfx_blit8_present(src, src_w, src_h, dst_x, dst_y, scale);
+        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
+        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
+        return 0;
     }
     if (mk_video_share_transfer(transfer_id, MK_TRANSFER_PERM_READ) != 0) {
         return -1;
@@ -1090,6 +1175,13 @@ int mk_video_service_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, 
 
     if (src == 0 || src_w <= 0 || src_h <= 0) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        if (scale <= 0) {
+            return -1;
+        }
+        kernel_gfx_blit8(src, src_w, src_h, dst_x, dst_y, scale);
+        return 0;
     }
     byte_count = (uint32_t)(src_w * src_h);
     if (byte_count != 0u && byte_count <= MK_VIDEO_INLINE_BLIT8_MAX && scale > 0) {
@@ -1132,6 +1224,15 @@ int mk_video_service_blit8_present(const uint8_t *src, int src_w, int src_h,
 
     if (src == 0 || src_w <= 0 || src_h <= 0) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        if (scale <= 0) {
+            return -1;
+        }
+        kernel_gfx_blit8_present(src, src_w, src_h, dst_x, dst_y, scale);
+        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
+        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
+        return 0;
     }
     byte_count = (uint32_t)(src_w * src_h);
     if (byte_count != 0u && byte_count <= MK_VIDEO_INLINE_BLIT8_MAX && scale > 0) {
@@ -1177,11 +1278,21 @@ int mk_video_service_blit8_stretch_transfer(uint32_t transfer_id, uint32_t byte_
     struct mk_message reply;
     struct mk_video_blit8_stretch_request payload;
 
+    const uint8_t *src;
+
     if (transfer_id == 0u || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
         return -1;
     }
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        src = (const uint8_t *)mk_transfer_data_read(transfer_id);
+        if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
+            return -1;
+        }
+        kernel_gfx_blit8_stretch(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
+        return 0;
     }
     if (mk_video_share_transfer(transfer_id, MK_TRANSFER_PERM_READ) != 0) {
         return -1;
@@ -1214,6 +1325,10 @@ int mk_video_service_blit8_stretch(const uint8_t *src, int src_w, int src_h,
 
     if (src == 0 || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        kernel_gfx_blit8_stretch(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
+        return 0;
     }
     byte_count = (uint32_t)(src_w * src_h);
     if (byte_count != 0u && byte_count <= MK_VIDEO_INLINE_BLIT8_MAX) {
@@ -1255,11 +1370,23 @@ int mk_video_service_blit8_stretch_present_transfer(uint32_t transfer_id, uint32
     struct mk_message reply;
     struct mk_video_blit8_stretch_present_request payload;
 
+    const uint8_t *src;
+
     if (transfer_id == 0u || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
         return -1;
     }
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        src = (const uint8_t *)mk_transfer_data_read(transfer_id);
+        if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
+            return -1;
+        }
+        kernel_gfx_blit8_stretch_present(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
+        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
+        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
+        return 0;
     }
     if (mk_video_share_transfer(transfer_id, MK_TRANSFER_PERM_READ) != 0) {
         return -1;
@@ -1293,6 +1420,12 @@ int mk_video_service_blit8_stretch_present(const uint8_t *src, int src_w, int sr
 
     if (src == 0 || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        kernel_gfx_blit8_stretch_present(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
+        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
+        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
+        return 0;
     }
     byte_count = (uint32_t)(src_w * src_h);
     if (byte_count != 0u && byte_count <= MK_VIDEO_INLINE_BLIT8_MAX) {
@@ -1334,6 +1467,16 @@ int mk_video_service_get_info(struct video_mode *mode) {
     if (mode == 0) {
         return -1;
     }
+    if (mk_video_current_process_is_service_worker()) {
+        struct video_mode *current = kernel_video_get_mode();
+
+        if (current == 0) {
+            memset(mode, 0, sizeof(*mode));
+            return -1;
+        }
+        *mode = *current;
+        return 0;
+    }
     if (mk_video_prepare_request(&request, MK_MSG_VIDEO_GET_INFO, 0, 0u) != 0) {
         return -1;
     }
@@ -1349,6 +1492,10 @@ int mk_video_service_get_caps(struct video_capabilities *caps) {
 
     if (caps == 0) {
         return -1;
+    }
+    if (mk_video_current_process_is_service_worker()) {
+        kernel_video_get_capabilities(caps);
+        return 0;
     }
     if (mk_video_prepare_request(&request, MK_MSG_VIDEO_GET_CAPS, 0, 0u) != 0) {
         return -1;

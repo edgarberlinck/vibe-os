@@ -117,6 +117,9 @@ int sys_service_restart(uint32_t service_type);
 int sys_service_event_receive(uint32_t service_type,
                               struct mk_service_event *event,
                               uint32_t timeout_ticks);
+uint32_t sys_transfer_size(uint32_t transfer_id);
+int sys_transfer_read(uint32_t transfer_id, void *dst, uint32_t size);
+int sys_transfer_write(uint32_t transfer_id, const void *src, uint32_t size);
 void sys_shutdown(void);
 
 #endif // SYSCALLS_H

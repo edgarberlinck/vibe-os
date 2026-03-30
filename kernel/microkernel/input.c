@@ -14,6 +14,12 @@ static uint32_t mk_input_current_pid(void) {
     return scheduler_current_pid();
 }
 
+static int mk_input_current_process_is_service_worker(void) {
+    process_t *current = scheduler_current();
+
+    return current != 0 && current->service_type == MK_SERVICE_INPUT;
+}
+
 static int g_input_service_transport_degraded = 0;
 
 static int mk_input_caller_allows_rescue_fallback(void) {
@@ -29,18 +35,6 @@ static int mk_input_caller_allows_rescue_fallback(void) {
         return 1;
     }
     return 1;
-}
-
-static int mk_input_desktop_prefers_local_queue(void) {
-    const struct mk_launch_context *context = mk_launch_context_current();
-
-    /*
-     * Keep the desktop on the kernel-owned interactive queue until the input
-     * service transport is proven stable under real mouse/keyboard traffic.
-     * The desktop still subscribes to input service lifecycle events, but its
-     * critical pointer/key path should not hang on a lost reply.
-     */
-    return context != 0 && (context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) != 0u;
 }
 
 static int mk_input_should_use_local_fallback(void) {
@@ -299,7 +293,7 @@ void mk_input_service_init(void) {
                                  "input",
                                  mk_input_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_input_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |
@@ -310,42 +304,34 @@ int mk_input_service_next_event(struct input_event *event) {
     struct mk_message request;
     struct mk_message reply;
     int allow_rescue_fallback;
-    int prefer_local_queue;
     int rc;
 
     if (event == 0) {
         return 0;
     }
-    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
-    prefer_local_queue = mk_input_desktop_prefers_local_queue();
-    if (prefer_local_queue) {
+    if (mk_input_current_process_is_service_worker()) {
         return kernel_input_event_dequeue(event);
     }
+    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
     if ((allow_rescue_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_EVENT, 0, 0u) != 0) {
-        if (!allow_rescue_fallback) {
-            memset(event, 0, sizeof(*event));
-            return 0;
+        g_input_service_transport_degraded = 1;
+        if (allow_rescue_fallback) {
+            return kernel_input_event_dequeue(event);
         }
-        return kernel_input_event_dequeue(event);
+        memset(event, 0, sizeof(*event));
+        return 0;
     }
     if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
         g_input_service_transport_degraded = 1;
-        if (!allow_rescue_fallback) {
-            if (kernel_input_event_has_data()) {
-                return kernel_input_event_dequeue(event);
-            }
-            memset(event, 0, sizeof(*event));
-            return 0;
+        if (allow_rescue_fallback) {
+            return kernel_input_event_dequeue(event);
         }
-        return kernel_input_event_dequeue(event);
+        memset(event, 0, sizeof(*event));
+        return 0;
     }
     g_input_service_transport_degraded = 0;
     rc = mk_input_decode_event(&reply, event);
-    if (rc == 0 && !allow_rescue_fallback && kernel_input_event_has_data()) {
-        g_input_service_transport_degraded = 1;
-        return kernel_input_event_dequeue(event);
-    }
     return rc;
 }
 
@@ -353,76 +339,64 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
     struct mk_message request;
     struct mk_message reply;
     int allow_rescue_fallback;
-    int prefer_local_queue;
     int rc;
 
     if (state == 0) {
         return 0;
     }
-    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
-    prefer_local_queue = mk_input_desktop_prefers_local_queue();
-    if (prefer_local_queue) {
+    if (mk_input_current_process_is_service_worker()) {
         return kernel_input_mouse_event_dequeue(state);
     }
+    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
     if ((allow_rescue_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_MOUSE_POLL, 0, 0u) != 0) {
-        if (!allow_rescue_fallback) {
-            memset(state, 0, sizeof(*state));
-            return 0;
+        g_input_service_transport_degraded = 1;
+        if (allow_rescue_fallback) {
+            if (!kernel_input_mouse_event_dequeue(state)) {
+                memset(state, 0, sizeof(*state));
+                return 0;
+            }
+            return 1;
         }
-        if (!kernel_input_mouse_event_dequeue(state)) {
-            memset(state, 0, sizeof(*state));
-            return 0;
-        }
-        return 1;
+        memset(state, 0, sizeof(*state));
+        return 0;
     }
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
-        if (!allow_rescue_fallback) {
-            if (kernel_input_mouse_event_has_data()) {
-                return kernel_input_mouse_event_dequeue(state);
+        if (allow_rescue_fallback) {
+            if (!kernel_input_mouse_event_dequeue(state)) {
+                memset(state, 0, sizeof(*state));
+                return 0;
             }
-            memset(state, 0, sizeof(*state));
-            return 0;
+            return 1;
         }
-        if (!kernel_input_mouse_event_dequeue(state)) {
-            memset(state, 0, sizeof(*state));
-            return 0;
-        }
-        return 1;
+        memset(state, 0, sizeof(*state));
+        return 0;
     }
     g_input_service_transport_degraded = 0;
-    rc = mk_input_decode_mouse(&reply, state);
-    if (rc == 0 && !allow_rescue_fallback && kernel_input_mouse_event_has_data()) {
-        g_input_service_transport_degraded = 1;
-        return kernel_input_mouse_event_dequeue(state);
-    }
-    return rc;
+    return mk_input_decode_mouse(&reply, state);
 }
 
 int mk_input_service_read_key(void) {
     struct mk_message request;
     struct mk_message reply;
     int allow_rescue_fallback;
-    int prefer_local_queue;
     int rc;
     int key = -1;
 
-    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
-    prefer_local_queue = mk_input_desktop_prefers_local_queue();
-    if (prefer_local_queue) {
+    if (mk_input_current_process_is_service_worker()) {
         if (kernel_input_key_event_dequeue(&key) != 0) {
             return key;
         }
         return -1;
     }
+
+    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
     if ((allow_rescue_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_KEY_READ, 0, 0u) != 0) {
-        if (!allow_rescue_fallback) {
-            return -1;
-        }
-        if (kernel_input_key_event_dequeue(&key) != 0) {
+        g_input_service_transport_degraded = 1;
+        if (allow_rescue_fallback && kernel_input_key_event_dequeue(&key) != 0) {
             return key;
         }
         return -1;
@@ -430,26 +404,13 @@ int mk_input_service_read_key(void) {
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
-        if (!allow_rescue_fallback) {
-            if (kernel_input_key_event_has_data() && kernel_input_key_event_dequeue(&key) != 0) {
-                return key;
-            }
-            return -1;
-        }
-        if (kernel_input_key_event_dequeue(&key) != 0) {
+        if (allow_rescue_fallback && kernel_input_key_event_dequeue(&key) != 0) {
             return key;
         }
         return -1;
     }
     g_input_service_transport_degraded = 0;
-    rc = mk_input_decode_result(&reply);
-    if (rc < 0 && !allow_rescue_fallback &&
-        kernel_input_key_event_has_data() &&
-        kernel_input_key_event_dequeue(&key) != 0) {
-        g_input_service_transport_degraded = 1;
-        return key;
-    }
-    return rc;
+    return mk_input_decode_result(&reply);
 }
 
 int mk_input_service_set_layout(const char *name) {
@@ -461,6 +422,9 @@ int mk_input_service_set_layout(const char *name) {
 
     if (name == 0) {
         return -1;
+    }
+    if (mk_input_current_process_is_service_worker()) {
+        return kernel_keyboard_set_layout(name);
     }
     length = (uint32_t)strlen(name);
     if (mk_transfer_create(mk_input_current_pid(), length + 1u, &transfer_id) != 0) {
@@ -502,25 +466,22 @@ static int mk_input_service_fill_buffer_request(uint32_t type, char *buffer, int
     if (buffer == 0 || size <= 0) {
         return -1;
     }
-    /*
-     * Read-only layout queries are latency-sensitive in interactive desktop
-     * flows (for example the terminal's startup vibefetch). Keep them on the
-     * kernel-owned keyboard state until the input service buffer-reply path is
-     * proven reliable for these requests too.
-     */
-    if (type == MK_MSG_INPUT_GET_LAYOUT) {
-        const char *name = kernel_keyboard_get_layout();
-        int length = (int)strlen(name);
+    if (mk_input_current_process_is_service_worker()) {
+        if (type == MK_MSG_INPUT_GET_LAYOUT) {
+            const char *name = kernel_keyboard_get_layout();
+            int length = (int)strlen(name);
 
-        if (size <= length) {
+            if (size <= length) {
+                return 0;
+            }
+            memcpy(buffer, name, (size_t)length + 1u);
+            return length;
+        }
+        if (type == MK_MSG_INPUT_GET_AVAILABLE_LAYOUTS) {
+            kernel_keyboard_get_available_layouts(buffer, size);
             return 0;
         }
-        memcpy(buffer, name, (size_t)length + 1u);
-        return length;
-    }
-    if (type == MK_MSG_INPUT_GET_AVAILABLE_LAYOUTS) {
-        kernel_keyboard_get_available_layouts(buffer, size);
-        return 0;
+        return -1;
     }
     if (mk_transfer_create(mk_input_current_pid(), (uint32_t)size, &transfer_id) != 0) {
         return -1;
