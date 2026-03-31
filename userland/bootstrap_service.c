@@ -1123,6 +1123,28 @@ static int video_service_handle_request(const struct mk_message *request,
         rc = sys_video_present_submit(payload->mode, &sequence);
         return video_service_reply_present(reply, request, source_pid, rc, sequence);
     }
+    case MK_MSG_VIDEO_SET_PRESENT_POLICY: {
+        const struct mk_video_u32_request *payload;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_video_u32_request *)request->payload;
+        rc = sys_gfx_set_present_policy(payload->value);
+        return video_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_VIDEO_SET_PRESENT_COPY_OVERRIDE: {
+        const struct mk_video_u32_request *payload;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_video_u32_request *)request->payload;
+        rc = sys_gfx_set_present_copy_override(payload->value);
+        return video_service_reply_result(reply, request, source_pid, rc);
+    }
     case MK_MSG_VIDEO_LEAVE:
         if (request->payload_size != 0u) {
             return -1;

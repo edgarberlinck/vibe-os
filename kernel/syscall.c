@@ -92,15 +92,13 @@ static uint32_t sys_gfx_flip(uint32_t a, uint32_t b, uint32_t c,
 static uint32_t sys_gfx_set_present_policy(uint32_t policy, uint32_t b, uint32_t c,
                                            uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    kernel_video_set_present_policy(policy);
-    return 0u;
+    return (uint32_t)(mk_video_service_set_present_policy(policy) == 0 ? 0 : -1);
 }
 
 static uint32_t sys_gfx_set_present_copy_override(uint32_t kind, uint32_t b, uint32_t c,
                                                   uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    kernel_video_set_present_copy_override(kind);
-    return 0u;
+    return (uint32_t)(mk_video_service_set_present_copy_override(kind) == 0 ? 0 : -1);
 }
 
 static uint32_t sys_gfx_blit8(uint32_t src_ptr, uint32_t packed_wh, uint32_t dst_x,
@@ -1190,6 +1188,7 @@ static int sys_launch_app_copy_argv(const char *const *argv,
 }
 
 static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
+    process_t *current_process;
     const struct mk_launch_context *current_context;
 
     if (descriptor == 0) {
@@ -1205,9 +1204,13 @@ static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
         }
     }
 
+    current_process = scheduler_current();
     current_context = mk_launch_context_current();
-    if (current_context == 0 ||
-        (current_context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) == 0u) {
+    if ((current_process == 0 ||
+         (current_process->task_class != MK_TASK_CLASS_DESKTOP &&
+          current_process->task_class != MK_TASK_CLASS_SUPERVISION)) &&
+        (current_context == 0 ||
+         (current_context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) == 0u)) {
         return;
     }
 

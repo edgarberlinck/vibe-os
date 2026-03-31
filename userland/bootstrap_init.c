@@ -304,6 +304,31 @@ static void bootstrap_try_play_boot_sound(void) {
     sys_write_debug("init: boot audio host launch failed\n");
 }
 
+static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
+    if ((boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) != 0u) {
+        sys_write_debug("init: runtime service apps skipped by boot flags\n");
+        return;
+    }
+
+    {
+        char *audio_apply_argv[4] = {"audiosvc", "apply-settings", "/config/audio.cfg", 0};
+        if (sys_launch_app_argv(3, audio_apply_argv) > 0) {
+            sys_write_debug("init: launched boot audio state sync\n");
+        } else {
+            sys_write_debug("init: boot audio state sync launch failed\n");
+        }
+    }
+
+    {
+        char *network_reconcile_argv[3] = {"netmgrd", "reconcile", 0};
+        if (sys_launch_app_argv(2, network_reconcile_argv) > 0) {
+            sys_write_debug("init: launched boot network reconcile\n");
+        } else {
+            sys_write_debug("init: boot network reconcile launch failed\n");
+        }
+    }
+}
+
 __attribute__((section(".entry"))) void userland_entry(void) {
     extern void kernel_debug_puts(const char *);
     int rc;
@@ -341,6 +366,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
 
     bootstrap_print_banner();
     kernel_debug_puts("init: banner returned\n");
+    bootstrap_launch_runtime_service_apps(info.boot_flags);
 
     rc = bootstrap_run_startup_apps();
     if (rc != 0) {
@@ -360,7 +386,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     }
     kernel_debug_puts("init: supervisor idle\n");
     bootstrap_subscribe_supervision_events();
-    (void)sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_ALL,
+    (void)sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_LIFECYCLE,
                                         MK_TASK_CLASS_MASK_ALL);
     for (;;) {
         uint32_t service_type;

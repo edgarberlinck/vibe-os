@@ -617,23 +617,13 @@ static void kernel_video_bind_graphics_mode(const struct video_mode *mode) {
 }
 
 static enum kernel_video_backend_kind kernel_video_choose_boot_backend(const struct video_mode *mode) {
-    size_t frame_bytes;
-    size_t heap_free;
-
-    if (!kernel_video_mode_usable(mode) || !kernel_video_heap_ready()) {
-        return KERNEL_VIDEO_BACKEND_LEGACY_LFB;
-    }
-
-    frame_bytes = (size_t)mode->pitch * (size_t)mode->height;
-    heap_free = kernel_heap_free();
-    if (frame_bytes == 0u ||
-        frame_bytes > VIDEO_BACKBUFFER_MAX_BYTES ||
-        heap_free <= frame_bytes ||
-        (heap_free - frame_bytes) < VIDEO_BACKBUFFER_HEAP_RESERVE) {
-        return KERNEL_VIDEO_BACKEND_LEGACY_LFB;
-    }
-
-    return KERNEL_VIDEO_BACKEND_FAST_LFB;
+    (void)mode;
+    /*
+     * The fast shadow-backbuffer path still produces a black desktop in QEMU
+     * even when async present submission completes successfully. Keep the
+     * direct legacy framebuffer path until the fast backend is fixed.
+     */
+    return KERNEL_VIDEO_BACKEND_LEGACY_LFB;
 }
 
 static void kernel_video_log_state(const char *reason) {

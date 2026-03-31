@@ -9,7 +9,7 @@ struct process;
 #define MK_LAUNCH_NAME_MAX 16u
 #define MK_LAUNCH_ARGC_MAX 8u
 #define MK_LAUNCH_ARGV_BYTES 192u
-#define MK_LAUNCH_SLOTS 16u
+#define MK_LAUNCH_SLOTS 32u
 #define MK_LAUNCH_STACK_SIZE_DEFAULT 4096u
 
 enum mk_launch_kind {

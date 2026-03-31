@@ -31,13 +31,14 @@
 
 #define DESKTOP_NETWORK_PROFILE_MAX 4
 #define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
+#define DESKTOP_PRESENT_RETRY_TICKS 4u
 #define DESKTOP_INPUT_BATCH_MAX 128
 #define DESKTOP_UI_EVENT_QUEUE_MAX 4
 #define DESKTOP_KEY_EVENT_QUEUE_MAX DESKTOP_INPUT_BATCH_MAX
 #define DESKTOP_WINDOW_ACTION_QUEUE_MAX 8
 #define DESKTOP_SESSION_ACTION_QUEUE_MAX 8
 #define DESKTOP_APP_ACTION_QUEUE_MAX 8
-#define DESKTOP_INPUT_STREAM_STALL_THRESHOLD 1
+#define DESKTOP_INPUT_STREAM_STALL_THRESHOLD 8
 
 #define DESKTOP_ASYNC_REFRESH_AUDIO   (1u << 0)
 #define DESKTOP_ASYNC_REFRESH_NETWORK (1u << 1)
@@ -304,6 +305,8 @@ static uint32_t g_desktop_video_last_completed_sequence = 0u;
 static uint32_t g_desktop_video_pending_depth = 0u;
 static uint32_t g_desktop_service_event_subscriptions = 0u;
 static uint32_t g_desktop_startup_tasks = 0u;
+static int g_desktop_visual_ready = 0;
+static uint32_t g_desktop_present_retry_tick = 0u;
 static int g_desktop_input_trace_budget = 12;
 static int g_desktop_key_trace_budget = 16;
 static int g_desktop_click_trace_budget = 24;
@@ -317,10 +320,34 @@ static const char *g_sound_outputs_hda[] = {"Alto-falante", "Fones", "Line-out",
 static const char *g_sound_inputs[] = {"Microfone", "Linha"};
 static const char *g_sound_inputs_hda[] = {"Microfone", "Line-in"};
 
+static int desktop_async_runtime_services_allowed(void) {
+    return g_desktop_visual_ready != 0;
+}
+
+static int desktop_present_retry_ready(uint32_t ticks) {
+    return g_desktop_present_retry_tick == 0u ||
+           (int32_t)(ticks - g_desktop_present_retry_tick) >= 0;
+}
+
+static void desktop_note_present_success(void) {
+    g_desktop_present_retry_tick = 0u;
+    if (!g_desktop_visual_ready) {
+        g_desktop_visual_ready = 1;
+        sys_write_debug("desktop: visual ready\n");
+    }
+}
+
+static void desktop_note_present_failure(uint32_t ticks) {
+    g_desktop_present_retry_tick = ticks + DESKTOP_PRESENT_RETRY_TICKS;
+}
+
 static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
                                            int *pending,
                                            uint32_t ticks) {
     if (armed_ticks == 0 || pending == 0) {
+        return;
+    }
+    if (!desktop_async_runtime_services_allowed()) {
         return;
     }
     if (*pending != 0) {
@@ -1429,7 +1456,7 @@ static int desktop_collect_input_batch(struct desktop_input_batch *batch,
         g_desktop_input_stream_seen = 1;
         g_desktop_input_compat_mode = 0;
         g_desktop_input_stream_idle_polls = 0u;
-    } else if (!g_desktop_input_stream_seen || g_desktop_input_compat_mode) {
+    } else {
         /*
          * If the aggregated input stream stalls after an input-service cycle,
          * temporarily fall back to the service-backed per-device requests until
@@ -1437,14 +1464,16 @@ static int desktop_collect_input_batch(struct desktop_input_batch *batch,
          * service boundary without waiting for a full desktop restart.
          */
         g_desktop_input_stream_idle_polls += 1u;
-        if ((g_desktop_input_compat_mode != 0 ||
-             g_desktop_input_stream_idle_polls >= DESKTOP_INPUT_STREAM_STALL_THRESHOLD) &&
-            desktop_collect_compat_input_batch(batch, mouse)) {
+        if (g_desktop_input_compat_mode == 0 &&
+            g_desktop_input_stream_idle_polls >= DESKTOP_INPUT_STREAM_STALL_THRESHOLD) {
             if (g_desktop_input_compat_mode == 0 && g_desktop_input_compat_log_budget > 0) {
                 g_desktop_input_compat_log_budget -= 1;
                 sys_write_debug("desktop: input per-device compat path armed\n");
             }
             g_desktop_input_compat_mode = 1;
+        }
+        if (g_desktop_input_compat_mode != 0 &&
+            desktop_collect_compat_input_batch(batch, mouse)) {
             g_desktop_input_stream_idle_polls = 0u;
         }
     }
@@ -6125,6 +6154,9 @@ static int network_applet_run_reconcile(void) {
 static void network_applet_try_autoconnect(void) {
     uint32_t now = sys_ticks();
 
+    if (!desktop_async_runtime_services_allowed()) {
+        return;
+    }
     if (g_network_auto_ssid[0] == '\0') {
         return;
     }
@@ -6155,46 +6187,13 @@ static void network_applet_try_autoconnect(void) {
 }
 
 static void desktop_queue_startup_background_tasks(void) {
-    g_desktop_startup_tasks = DESKTOP_STARTUP_TASK_UI_ASSETS |
-                              DESKTOP_STARTUP_TASK_SOUND_EXPORT |
-                              DESKTOP_STARTUP_TASK_NETWORK_RECONCILE |
-                              DESKTOP_STARTUP_TASK_NETWORK_EXPORT;
+    g_desktop_startup_tasks = DESKTOP_STARTUP_TASK_UI_ASSETS;
 }
 
 static void desktop_process_startup_background_tasks(void) {
-    char *sound_export_argv[4] = {"audiosvc", "apply-settings", (char *)DESKTOP_AUDIO_SETTINGS_PATH, 0};
-    char *network_reconcile_argv[3] = {"netmgrd", "reconcile", 0};
-    char *network_export_argv[3] = {"netmgrd", "export-state", 0};
-
     if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_UI_ASSETS) != 0u) {
         g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_UI_ASSETS;
         ui_complete_startup();
-        return;
-    }
-
-    if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_SOUND_EXPORT) != 0u) {
-        g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_SOUND_EXPORT;
-        (void)desktop_launch_detached_with_failure_log(3,
-                                                       sound_export_argv,
-                                                       "desktop: startup audio export skipped\n");
-        return;
-    }
-
-    if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_NETWORK_RECONCILE) != 0u) {
-        g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_NETWORK_RECONCILE;
-        if (desktop_launch_detached_with_failure_log(2,
-                                                     network_reconcile_argv,
-                                                     "desktop: startup network reconcile skipped\n") == 0) {
-            network_applet_invalidate_backend_cache();
-        }
-        return;
-    }
-
-    if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_NETWORK_EXPORT) != 0u) {
-        g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_NETWORK_EXPORT;
-        (void)desktop_launch_detached_with_failure_log(2,
-                                                       network_export_argv,
-                                                       "desktop: startup network export skipped\n");
     }
 }
 
@@ -6456,8 +6455,6 @@ static int desktop_video_event_requires_stream_reset(const struct mk_video_event
 }
 
 static uint32_t desktop_record_video_async_event(const struct mk_video_event *event) {
-    uint32_t flags = 0u;
-
     if (event == 0) {
         return 0u;
     }
@@ -6474,40 +6471,39 @@ static uint32_t desktop_record_video_async_event(const struct mk_video_event *ev
         sys_write_debug("desktop: video backend recovered\n");
     }
 
-    if (event->sequence != g_desktop_video_last_event_sequence ||
-        event->completed_sequence != g_desktop_video_last_completed_sequence ||
-        event->pending_depth != g_desktop_video_pending_depth) {
-        flags |= DESKTOP_ASYNC_REFRESH_LAYOUT;
-    }
-
     g_desktop_video_last_event_sequence = event->sequence;
     g_desktop_video_last_completed_sequence = event->completed_sequence;
     g_desktop_video_pending_depth = event->pending_depth;
-    return flags;
+    return 0u;
 }
 
-static int desktop_submit_present_full(void) {
+static int desktop_submit_present_full(uint32_t ticks) {
     uint32_t sequence = 0u;
 
     if (sys_video_present_submit(VIDEO_PRESENT_FULL, &sequence) == 0) {
+        desktop_note_present_success();
         return 0;
     }
 
     sys_write_debug("desktop: present submit failed\n");
     desktop_reset_video_async_path();
+    desktop_note_present_failure(ticks);
     return -1;
 }
 
 static uint32_t desktop_pump_async_service_events(void) {
     uint32_t flags = 0u;
     struct mk_service_event event;
+    int allow_runtime_services = desktop_async_runtime_services_allowed();
 
-    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_AUDIO)) == 0u) {
+    if (allow_runtime_services &&
+        (g_desktop_service_event_subscriptions & (1u << MK_SERVICE_AUDIO)) == 0u) {
         if (sys_service_subscribe(MK_SERVICE_AUDIO) == 0) {
             g_desktop_service_event_subscriptions |= (1u << MK_SERVICE_AUDIO);
         }
     }
-    if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_NETWORK)) == 0u) {
+    if (allow_runtime_services &&
+        (g_desktop_service_event_subscriptions & (1u << MK_SERVICE_NETWORK)) == 0u) {
         if (sys_service_subscribe(MK_SERVICE_NETWORK) == 0) {
             g_desktop_service_event_subscriptions |= (1u << MK_SERVICE_NETWORK);
         }
@@ -6568,14 +6564,14 @@ static uint32_t desktop_pump_async_service_events(void) {
         }
     }
 
-    if ((flags & DESKTOP_ASYNC_REFRESH_AUDIO) != 0u) {
+    if (allow_runtime_services && (flags & DESKTOP_ASYNC_REFRESH_AUDIO) != 0u) {
         sound_applet_invalidate_backend_cache();
         (void)sound_applet_apply_saved_settings();
         if (g_sound_applet.popup_open) {
             sound_applet_sync_backend(1);
         }
     }
-    if ((flags & DESKTOP_ASYNC_REFRESH_NETWORK) != 0u) {
+    if (allow_runtime_services && (flags & DESKTOP_ASYNC_REFRESH_NETWORK) != 0u) {
         network_applet_invalidate_backend_cache();
         network_applet_export_service_state();
         if (g_network_applet.popup_open) {
@@ -6594,13 +6590,14 @@ static uint32_t desktop_pump_async_applet_events(void) {
     struct mk_audio_event audio_event;
     struct mk_network_event network_event;
     struct mk_video_event video_event;
+    int allow_runtime_services = desktop_async_runtime_services_allowed();
 
-    if (!g_desktop_audio_event_subscription) {
+    if (allow_runtime_services && !g_desktop_audio_event_subscription) {
         if (sys_audio_event_subscribe() == 0) {
             g_desktop_audio_event_subscription = 1;
         }
     }
-    if (!g_desktop_network_event_subscription) {
+    if (allow_runtime_services && !g_desktop_network_event_subscription) {
         if (sys_network_event_subscribe() == 0) {
             g_desktop_network_event_subscription = 1;
         }
@@ -6629,21 +6626,20 @@ static uint32_t desktop_pump_async_applet_events(void) {
                 video_event.event_type == MK_VIDEO_EVENT_MODE_SET_DONE ||
                 video_event.event_type == MK_VIDEO_EVENT_BACKEND_FAILED ||
                 video_event.event_type == MK_VIDEO_EVENT_BACKEND_RECOVERED ||
-                video_event.event_type == MK_VIDEO_EVENT_LEAVE ||
-                video_event.event_type == MK_VIDEO_EVENT_PRESENT) {
+                video_event.event_type == MK_VIDEO_EVENT_LEAVE) {
                 flags |= DESKTOP_ASYNC_REFRESH_LAYOUT;
             }
         }
     }
 
-    if ((flags & DESKTOP_ASYNC_REFRESH_AUDIO) != 0u) {
+    if (allow_runtime_services && (flags & DESKTOP_ASYNC_REFRESH_AUDIO) != 0u) {
         sound_applet_invalidate_backend_cache();
         sound_applet_export_service_state();
         if (g_sound_applet.popup_open) {
             sound_applet_sync_backend(1);
         }
     }
-    if ((flags & DESKTOP_ASYNC_REFRESH_NETWORK) != 0u) {
+    if (allow_runtime_services && (flags & DESKTOP_ASYNC_REFRESH_NETWORK) != 0u) {
         network_applet_invalidate_backend_cache();
         network_applet_export_service_state();
         if (g_network_applet.popup_open) {
@@ -8052,6 +8048,15 @@ void desktop_main(void) {
     ui_init();
     (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
     g_desktop_startup_tasks = 0u;
+    g_desktop_audio_event_subscription = 0;
+    g_desktop_network_event_subscription = 0;
+    g_desktop_video_event_subscription = 0;
+    g_desktop_video_last_event_sequence = 0u;
+    g_desktop_video_last_completed_sequence = 0u;
+    g_desktop_video_pending_depth = 0u;
+    g_desktop_service_event_subscriptions = 0u;
+    g_desktop_visual_ready = 0;
+    g_desktop_present_retry_tick = 0u;
     g_desktop_input_stream_seen = 0;
     g_desktop_input_compat_mode = 0;
     g_desktop_input_stream_idle_polls = 0u;
@@ -9045,7 +9050,7 @@ void desktop_main(void) {
                                               &resize_anchor_y);
         dirty |= desktop_process_pending_launches(&focused);
 
-        if (dirty) {
+        if (dirty && desktop_present_retry_ready(ticks)) {
             draw_desktop(&mouse, menu_open, start_hover,
                          menu_hover, g_windows, MAX_WINDOWS, focused);
 
@@ -9237,7 +9242,7 @@ void desktop_main(void) {
                   g_craft[g_windows[focused].instance].started)) {
                 cursor_draw(mouse.x, mouse.y);
             }
-            if (desktop_submit_present_full() == 0) {
+            if (desktop_submit_present_full(ticks) == 0) {
                 dirty = 0;
             }
         }

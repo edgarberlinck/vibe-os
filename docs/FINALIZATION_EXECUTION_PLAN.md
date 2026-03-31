@@ -148,7 +148,7 @@ Checklist minimo para dizer "agora esta na arquitetura certa":
 : agora existe stream de eventos `queued/idle/underrun` saindo do servico de audio para userland, o task manager observa isso e o helper async de WAV usa o evento `idle` no caminho kernel-async; ainda resta mover ownership/completion steady-state para fora da ponte de compatibilidade do kernel
 - [~] input vira publicacao de eventos, nao fallback permanente em leitura direta
 - [~] video ganha fila de present/fence
-: agora existe stream de eventos de video (`present`/`mode-set`/`leave`) saindo de `videosvc` para userland, o task manager observa esse progresso, e o desktop ja usa um `present submit` com `sequence` de retorno no caminho principal; a fila real com worker dedicado ainda esta pendente
+: agora existe stream de eventos de video (`present`/`mode-set`/`leave`) saindo de `videosvc` para userland, o desktop usa `present submit` com `sequence` de retorno no caminho principal, o present ja drena por worker dedicado, e o desktop steady-state nao usa mais fast-path local para `videosvc`; o que segue pendente aqui e endurecer backpressure/telemetria (`desktop: video event overflow`), corrigir o backend `fast_lfb` que ainda gera desktop preto em QEMU, e empurrar mais ownership do backend privilegiado para o boundary minimo futuro
 - [ ] filesystem/storage ganham fila de I/O e writeback
 - [~] network ganha readiness/eventos de socket reais
 : agora existe ABI de eventos de rede com `subscribe/receive`, o servico publica transicoes de link e notificacoes `recv` / `accept` / `send` / `closed`, e o task manager observa esse stream; o datapath de NIC extraido ainda continua pendente
@@ -218,6 +218,7 @@ Regra dura:
 ### Etapa 5: fechar hardware/video/SMP
 
 - promover um backend de video real com escopo curto e validado
+- reabilitar `fast_lfb` so depois de provar framebuffer visivel em QEMU e no hardware-alvo; por enquanto o caminho estavel fica em `legacy_lfb`
 - fechar a matriz de modos reais
 - retomar SMP com deteccao/topologia suficiente para `2+ CPUs` no ambiente de validacao
 

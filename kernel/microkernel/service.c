@@ -75,29 +75,8 @@ int mk_service_backend_bridge_allowed_current(uint32_t service_type) {
 
 static int mk_service_current_prefers_local_handler(const struct mk_service_record *service,
                                                     const struct mk_message *request) {
-    const struct mk_launch_context *context;
-
     if (service == 0 || request == 0) {
         return 0;
-    }
-
-    context = mk_launch_context_current();
-    if (context == 0) {
-        return 0;
-    }
-
-    if ((context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) == 0u) {
-        return 0;
-    }
-
-    if (service->type == MK_SERVICE_VIDEO) {
-        /*
-         * Keep the desktop-class fast path for lightweight video IPC, but let
-         * full mode switches flow through the dedicated service task so the
-         * control worker completes in the same context the runtime handoff was
-         * designed around.
-         */
-        return request->type != MK_MSG_VIDEO_MODE_SET;
     }
 
     return 0;

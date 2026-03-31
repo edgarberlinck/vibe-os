@@ -116,6 +116,10 @@ struct mk_video_present_request {
     uint32_t mode;
 };
 
+struct mk_video_u32_request {
+    uint32_t value;
+};
+
 struct mk_video_result {
     int32_t value;
 };
@@ -142,6 +146,8 @@ int mk_video_service_text(int x, int y, uint8_t color, const char *text);
 int mk_video_service_flip(void);
 int mk_video_service_flip_mode(uint32_t mode);
 int mk_video_service_present_submit(uint32_t mode, uint32_t *sequence_out);
+int mk_video_service_set_present_policy(uint32_t policy);
+int mk_video_service_set_present_copy_override(uint32_t kind);
 int mk_video_service_leave_graphics(void);
 int mk_video_service_set_mode(uint32_t width, uint32_t height);
 int mk_video_service_set_palette(const uint8_t *rgb_triplets);

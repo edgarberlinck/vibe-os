@@ -13,7 +13,7 @@
 #define MK_VIDEO_UPLOAD_CACHE_SLOTS 4u
 #define MK_VIDEO_PALETTE_CACHE_SLOTS 4u
 #define MK_VIDEO_EVENT_SUBSCRIBERS 8u
-#define MK_VIDEO_EVENT_QUEUE_SIZE 16u
+#define MK_VIDEO_EVENT_QUEUE_SIZE 64u
 #define MK_VIDEO_PRESENT_QUEUE_SIZE 16u
 #define MK_VIDEO_CONTROL_QUEUE_SIZE 8u
 
@@ -828,6 +828,26 @@ static int mk_video_local_handler(const struct mk_message *request,
         rc = mk_video_submit_present_job(payload->mode, &sequence);
         return mk_video_reply_present(reply, rc, sequence);
     }
+    case MK_MSG_VIDEO_SET_PRESENT_POLICY: {
+        const struct mk_video_u32_request *payload;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_video_u32_request *)request->payload;
+        kernel_video_set_present_policy(payload->value);
+        return mk_video_reply_result(reply, 0);
+    }
+    case MK_MSG_VIDEO_SET_PRESENT_COPY_OVERRIDE: {
+        const struct mk_video_u32_request *payload;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_video_u32_request *)request->payload;
+        kernel_video_set_present_copy_override(payload->value);
+        return mk_video_reply_result(reply, 0);
+    }
     case MK_MSG_VIDEO_LEAVE:
         if (request->payload_size != 0u) {
             return -1;
@@ -1244,6 +1264,41 @@ int mk_video_service_present_submit(uint32_t mode, uint32_t *sequence_out) {
         return -1;
     }
     return mk_video_decode_present(&reply, sequence_out);
+}
+
+static int mk_video_service_u32_request(uint32_t type, uint32_t value) {
+    struct mk_message request;
+    struct mk_message reply;
+    struct mk_video_u32_request payload;
+
+    if (mk_video_current_process_is_service_worker()) {
+        if (type == MK_MSG_VIDEO_SET_PRESENT_POLICY) {
+            kernel_video_set_present_policy(value);
+            return 0;
+        }
+        if (type == MK_MSG_VIDEO_SET_PRESENT_COPY_OVERRIDE) {
+            kernel_video_set_present_copy_override(value);
+            return 0;
+        }
+        return -1;
+    }
+
+    payload.value = value;
+    if (mk_video_prepare_request(&request, type, &payload, sizeof(payload)) != 0) {
+        return -1;
+    }
+    if (mk_service_request(MK_SERVICE_VIDEO, &request, &reply) != 0) {
+        return -1;
+    }
+    return mk_video_decode_result(&reply);
+}
+
+int mk_video_service_set_present_policy(uint32_t policy) {
+    return mk_video_service_u32_request(MK_MSG_VIDEO_SET_PRESENT_POLICY, policy);
+}
+
+int mk_video_service_set_present_copy_override(uint32_t kind) {
+    return mk_video_service_u32_request(MK_MSG_VIDEO_SET_PRESENT_COPY_OVERRIDE, kind);
 }
 
 int mk_video_service_leave_graphics(void) {
