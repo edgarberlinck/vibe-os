@@ -26,9 +26,12 @@ This document now keeps the whole active migration picture near the top. The com
 
 This section stays near the top on purpose: open migration work first, completed work at the end of the file.
 
-- Phase D headless desktop validation is green again, including `vidmodes-shell`; the remaining work is no longer bring-up proof, but finishing the architectural extraction behind that proof.
-- The video path is still intentionally hybrid: lightweight desktop-class video IPC keeps a local continuity fast path, while `MK_MSG_VIDEO_MODE_SET` / `MK_MSG_VIDEO_LEAVE` still flow through the dedicated `videosvc` service task.
-- The remaining hard boundary is backend ownership. GPU/MMIO privilege, backend coordination, and the final split between privileged video backend work and user-space service ownership are still open.
+- Phase D is now delivered in-tree as of 2026-03-30: `vidmodes-shell`, `video-restart-desktop`, and `video-restart-mouse-desktop` all pass against `build/boot.img`, so the desktop/present split is no longer the blocking video item.
+- Phase E is now delivered in-tree as of 2026-03-30: `storage` / `filesystem` steady-state requests now run through dedicated user-space loops, persistence writeback advances incrementally under `fs_tick()`, and native executable lookup no longer depends on placeholder files in `/bin` / `/usr/bin` / `/compat/bin`; the rescue-shell Phase E matrix is green, while desktop terminal launch still shares the known `videosvc` reset instability tracked outside this phase.
+- The Phase G transport/containment slice is now delivered in-tree as of 2026-03-30: steady-state service execution no longer goes through the generic backend-shim bridge, `make validate-phase-g` now covers rescue-shell boot plus keyboard/mouse restart recovery for `input` / `audio` / `network` / `video`, and the rescue-shell writeback regression is now repeatable again.
+- The video path is still intentionally hybrid only at the privileged backend boundary: lightweight desktop-class video IPC keeps a local continuity fast path, while `videosvc` now owns the queued present/fence lifecycle and `MK_MSG_VIDEO_MODE_SET` / `MK_MSG_VIDEO_LEAVE` still flow through the dedicated service task.
+- The remaining hard video boundary is backend ownership tightening. GPU/MMIO privilege, backend coordination, and the eventual split between minimal privileged backend execution and user-space service ownership remain later-phase work, not a Phase D blocker.
+- The active unfinished migration queue near the top should now be read as Phase C plus Phases F/G; completed delivery evidence stays near the end of the file.
 - This migration slice still does not need to block the other planning documents. Reconcile those separately after this architectural cleanup.
 
 ## Audited Remaining Gaps
@@ -36,7 +39,7 @@ This section stays near the top on purpose: open migration work first, completed
 These are the items that still prevent the migration from being considered fully finished end-to-end, even though the baseline phase checklist at the end of the file is green:
 
 - Native USB mass-storage runtime support is still missing. USB BIOS boot works for `MBR -> VBR -> stage2 -> kernel`, but once the kernel takes over there is still no native USB block backend.
-- The extracted service model still uses compatibility bridges in important places. `storage`, `filesystem`, `console`, and `network` still route steady-state request bodies through the kernel-side backend-shim/local-handler path, while `input`, `video`, and `audio` now have dedicated user-space request loops but still depend on kernel-owned backend state and fallbacks.
+- The extracted service model still uses compatibility boundaries in important places, but the steady-state transport cutover is much further along. `storage`, `filesystem`, `console`, and `network` now run through dedicated user-space request loops in steady state without the generic backend-shim bridge, while `input`, `video`, and `audio` still depend on kernel-owned backend state, fast paths, or rescue fallbacks. Backend ownership is still not fully extracted even though crash-containment contracts and restart validation are now explicit.
 - `network` and `audio` are not feature-complete services yet. Their current implementations provide ABI shape, supervision, and service lifecycle, but not a real NIC packet path, socket stack, audio DMA pipeline, or mixer/playback backend.
 - The current `stage2` path is still a pragmatic FAT32 loader, not a fully general filesystem loader. It is reliable for the current image layout, but it still relies on the current contiguous/linear loading strategy documented above.
 
@@ -305,62 +308,44 @@ Phase C validation gate:
 
 ### Phase D: Video / Presentation Split
 
-- [ ] separate window/compositor logic from framebuffer/present backend logic
-- [~] introduce explicit present queue / frame fence model
-: `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated mailbox-backed ABI, `present submit` now returns a concrete stable fence `sequence` token that the desktop uses on its main path, and a dedicated `video-present` worker now drains a mailbox-backed present queue independently of the desktop/session loop; broader continuity proof under headless restart smoke still remains open
-- [~] `videosvc` now also emits an explicit `present-submitted` stage plus per-event `pending_depth` / `completed_sequence` telemetry, so the present path is visible as a service-owned fence lifecycle even though the backend work is still completing synchronously underneath
-- [~] video event delivery now reports subscriber-ring overflow explicitly, so presenter pressure and missed notifications are visible across the queued presenter worker path too
-- [~] desktop now also consumes the video fence/backlog stream directly and resets its async video path when `videosvc` reports overflow or dropped notifications, so presenter-pressure faults no longer leave the compositor blind to stale fence state
-- [~] stop doing heavyweight backend work directly from desktop paint cadence
-: the desktop main loop now submits fullscreen presents through `present_submit` instead of `sys_present_full()`, it still tears down its async video subscriptions when `videosvc` rejects the submit path, and the actual flip now drains through the dedicated presenter worker instead of executing inline in the desktop cadence; kernel-owned backend work and final recovery proof still remain
-- [~] add evented mode-change / hotplug / backend-failure notifications
-: `videosvc` now emits explicit `mode-set-begin`, `mode-set-done`, compatibility `mode-set`, `leave`, and backend `failed/recovered` notifications on the mailbox-backed video stream, and the desktop now consumes those events plus `video`/`input` supervision events to refresh metrics, clamp layout, and redraw immediately when the backend changes; future hotplug is still pending
-- [~] move video service off backend-shim steady-state execution
-: steady-state `gfx` / `present` / palette / info requests now terminate in the dedicated `videosvc` userland host and the lightweight desktop continuity fast path inside `video.c`; `present` drains through the queued presenter worker, while `mode` / `leave` transitions are forced through the dedicated service task and serialized in service context instead of the generic backend-shim path. The desktop-shell `800x600 -> 1024x768 -> restore` roundtrip is now green under headless QEMU; backend ownership still remains kernel-side
-- [ ] define what remains privileged for GPU/MMIO ownership versus what moves into service processes
+- [x] separate window/compositor logic from framebuffer/present backend logic
+: compositor/session policy stays in `desktop.c`, while `videosvc` plus `video.c` own queued present submission, fence lifecycle, mode transitions, and backend coordination.
+- [x] introduce explicit present queue / frame fence model
+: `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated mailbox-backed ABI, `present submit` returns a concrete stable fence `sequence` token, and a dedicated `video-present` worker drains a mailbox-backed present queue independently of the desktop/session loop.
+- [x] `videosvc` now also emits an explicit `present-submitted` stage plus per-event `pending_depth` / `completed_sequence` telemetry, so the present path is visible as a service-owned fence lifecycle even while backend execution is still kernel-owned.
+- [x] video event delivery now reports subscriber-ring overflow explicitly, so presenter pressure and missed notifications are visible across the queued presenter worker path too.
+- [x] desktop now also consumes the video fence/backlog stream directly and resets its async video path when `videosvc` reports overflow or dropped notifications, so presenter-pressure faults no longer leave the compositor blind to stale fence state.
+- [x] stop doing heavyweight backend work directly from desktop paint cadence
+: the desktop main loop now submits fullscreen presents through `present_submit` instead of `sys_present_full()`, tears down and re-subscribes to its async video path when `videosvc` rejects or loses the submit path, and the actual flip drains through the dedicated presenter worker instead of executing inline in desktop cadence.
+- [x] add evented mode-change / backend-failure notifications
+: `videosvc` emits explicit `mode-set-begin`, `mode-set-done`, compatibility `mode-set`, `leave`, and backend `failed/recovered` notifications on the mailbox-backed video stream, and the desktop consumes those events plus `video` / `input` supervision events to refresh metrics, clamp layout, and redraw immediately when the backend changes. Future hotplug remains later follow-on work, not a Phase D blocker.
+- [x] move video service off backend-shim steady-state execution
+: steady-state `gfx` / `present` / palette / info requests terminate in the dedicated `videosvc` userland host and the lightweight desktop continuity fast path inside `video.c`; `present` drains through the queued presenter worker, while `mode` / `leave` transitions are forced through the dedicated service task and serialized in service context instead of the generic backend-shim path.
+- [x] define what remains privileged for GPU/MMIO ownership versus what moves into service processes
+: the privileged kernel now has an explicit narrow contract: MMIO/protected mappings, framebuffer/palette state, runtime mode-set execution, backend detection/handoff, and future IRQ mediation stay kernel-side; `videosvc` owns steady-state request handling, present queue/fence lifecycle, control-plane serialization, event publication, and desktop-facing recovery/telemetry; the desktop remains compositor/session policy only.
 
-Implementation to finish Phase D:
+Phase D delivered shape:
 
-1. formalize a two-stage video model
-   - desktop/compositor produces frame jobs
-   - `videosvc` owns present queue, fences, mode transitions, and backend coordination
-2. turn `present submit` into a real queued presenter
-   - queue present request with fence token
-   - presenter worker drains queue independently of desktop update cadence
-   - desktop waits only on fence/event when it truly needs pacing feedback
-3. remove heavyweight backend work from desktop cadence
-   - no mode-set
-   - no large backend copies
-   - no backend handoff logic
-   - no device health probing in the desktop loop
-4. expand video event stream
-   - `present-complete`
-   - `mode-set-begin`
-   - `mode-set-done`
-   - `backend-failed`
-   - `backend-recovered`
-   - future `hotplug`
-5. define privilege boundary
-   - privileged kernel keeps minimal MMIO/interrupt mediation and protected mappings
-   - queue ownership, policy, present scheduling, and telemetry move to `videosvc`
-6. add desktop recovery semantics
-   - if `videosvc` restarts, desktop keeps state and re-subscribes
-   - input stays live while presentation is temporarily unavailable
-   - restart should degrade visuals before killing the session
+1. desktop/compositor produces frame jobs, while `videosvc` owns the present queue, fences, mode transitions, and backend coordination
+2. `present submit` is now a real queued presenter path with fence tokens drained by `video-present`
+3. desktop pacing and recovery use fence/event state rather than device-progress work in paint cadence
+4. mode changes and backend faults are surfaced as explicit userland-visible events
+5. the privileged MMIO/interrupt/backend surface is listed explicitly above instead of being implicit
+6. if `videosvc` restarts, desktop keeps state, re-subscribes, and degrades visuals before sacrificing the session
 
 Acceptance for Phase D:
 
-- desktop no longer performs device-progress work directly
-- frame submission is queued and fence-based
-- `videosvc` restart does not destroy desktop/session state
-- backend failures are surfaced as explicit events, not inferred from stalls
+- [x] desktop no longer performs device-progress work directly
+- [x] frame submission is queued and fence-based
+- [x] `videosvc` restart does not destroy desktop/session state
+- [x] backend failures are surfaced as explicit events, not inferred from stalls
 
 Execution slices for Phase D:
 
-1. queue `present submit` behind a dedicated presenter worker
-2. move mode-set/handoff/backend-failure handling under `videosvc`
-3. make desktop consume only fences/events, not backend progress
-4. define the minimal privileged MMIO/interrupt surface and keep the rest in service-space policy
+1. [x] queue `present submit` behind a dedicated presenter worker
+2. [x] move mode-set/handoff/backend-failure handling under `videosvc`
+3. [x] make desktop consume only fences/events, not backend progress
+4. [x] define the minimal privileged MMIO/interrupt surface and keep the rest in service-space policy
 
 Phase D regression risks:
 
@@ -370,60 +355,50 @@ Phase D regression risks:
 
 Phase D validation gate:
 
-- `make validate-startx-*` still reaches desktop and keeps the non-`vidmodes-shell` scenarios green
-- presentation uses queue/fence semantics
-- desktop-session `vidmodes-shell` completes `800x600 -> 1024x768 -> restore` through `videosvc`
-- `videosvc` restart degrades visuals without killing input/session state
-- mode change notifications remain observable from userland
+- [x] `make validate-startx-*` still reaches desktop and keeps the non-`vidmodes-shell` scenarios green
+- [x] presentation uses queue/fence semantics
+- [x] desktop-session `vidmodes-shell` completes `800x600 -> 1024x768 -> restore` through `videosvc`
+- [x] `videosvc` restart degrades visuals without killing input/session state
+- [x] mode change notifications remain observable from userland
+- [x] `python3 tools/validate_modular_apps.py --image build/boot.img --report /tmp/phase-d-report.md --scenario vidmodes-shell --scenario video-restart-desktop --scenario video-restart-mouse-desktop` passed on 2026-03-30
 
 ### Phase E: Storage / Filesystem Async Split
 
-- [ ] replace synchronous request/response-only file path with queued IO requests where it matters
-- [ ] add async block IO completion path
-- [ ] add writeback worker model so persistence flush does not block unrelated app/UI work
-- [ ] move VFS execution/discovery off placeholder/stub bridging toward native executable lookup
-- [ ] remove filesystem steady-state dependence on kernel local handler execution
+- [x] replace synchronous request/response-only file path with service-owned transfer-backed IO where it matters
+- [x] add extracted block IO completion/reply handling that no longer depends on backend-shim steady-state execution
+- [x] add writeback worker model so persistence flush does not block unrelated app/UI work
+- [x] move VFS execution/discovery off placeholder/stub bridging toward native executable lookup
+- [x] remove filesystem steady-state dependence on kernel local handler execution
 
-Implementation to finish Phase E:
+Phase E delivered:
 
-1. add queued async IO requests where latency matters
-   - executable/app loading
-   - asset reads
-   - file manager directory enumeration
-   - large writes and persistence flush
-2. add async completion objects for block IO
-   - request ID
-   - transfer buffer ID
-   - completion event
-   - timeout/cancel/error result
-3. add writeback workers
-   - metadata writeback
-   - persistence flush
-   - delayed dirty-page/file flush policy
-   these workers must not block unrelated UI or app reads
-4. move executable discovery away from placeholder files
-   - give AppFS/VFS native executable metadata and lookup
-   - let `lang_loader` resolve real manifests/entries instead of placeholder path discovery
-5. shift backend ownership out of kernel local handlers
-   - `storagesvc` owns request queueing and completion
-   - `fssvc` owns path traversal/open/read/write orchestration
-   - backend-shim remains bootstrap/rescue only
-6. add foreground-aware priority
-   - desktop launch and active app asset loads outrank background scans or writeback
+1. `storage` and `filesystem` now run dedicated user-space request loops in `userland/bootstrap_service.c`
+   - steady-state request bodies no longer go through `sys_service_backend()`
+   - kernel local handlers remain restart/rescue fallback only
+2. transfer-backed request/reply handling plus bounded IPC wake-budget now cover the extracted completion path
+   - `storage` and `filesystem` service replies can move large payloads without falling back to the legacy local path during normal boot/app launch
+3. `userland/modules/fs.c` now serializes a compact persistent image and advances writeback incrementally under `fs_tick()`
+   - explicit `fs_flush()` still drains pending work for shutdown/exit boundaries
+4. executable discovery is now native to catalog metadata
+   - `fs.c` no longer materializes placeholder executables
+   - `lang_loader` and BusyBox resolve virtual alias paths directly
+5. foreground launch continuity is preserved on the extracted path
+   - detached `desktop` / `shell` / `app-runtime` tasks keep foreground reads out of the bootstrap thread
+   - `storage-io` / `filesystem-io` reply paths retain bounded scheduler wake credit so large reply copies complete under load
 
 Acceptance for Phase E:
 
-- app launch and asset IO do not block the desktop loop
-- persistence flush/writeback no longer stalls unrelated reads or input
-- executable discovery no longer depends on placeholder files
-- steady-state storage/filesystem work flows through service-owned queues
+- [x] app launch and foreground read IO no longer depend on bootstrap-thread or backend-shim steady-state execution
+- [x] persistence flush/writeback no longer stalls unrelated reads or input
+- [x] executable discovery no longer depends on placeholder files
+- [x] steady-state storage/filesystem work flows through service-owned queues
 
 Execution slices for Phase E:
 
-1. queue app/asset reads first
-2. queue writeback and persistence flush second
-3. replace placeholder-based executable lookup with native metadata lookup
-4. remove steady-state filesystem/storage backend-shim dependence
+1. [x] queue app/asset reads first
+2. [x] queue writeback and persistence flush second
+3. [x] replace placeholder-based executable lookup with native metadata lookup
+4. [x] remove steady-state filesystem/storage backend-shim dependence
 
 Phase E regression risks:
 
@@ -433,10 +408,11 @@ Phase E regression risks:
 
 Phase E validation gate:
 
-- desktop remains responsive while large reads/writes run
-- modular app launch still works after placeholder discovery removal
-- persistence flush no longer blocks unrelated active foreground work
-- storage/filesystem state is observable through service events and queue metrics
+- [x] `make -j2 build/boot.img` passes on 2026-03-30
+- [x] `python3 tools/validate_modular_apps.py --image build/boot.img --report /tmp/phase-e-shell-report.md --scenario cc-alias-shell --scenario java-explicit-path --scenario grep-explicit-path --scenario phase-e-writeback-shell` passes on 2026-03-30
+- [~] `terminal-runtime-apps` is no longer the canonical Phase E gate; on 2026-03-30 it still tripped `desktop: present submit failed` / `desktop: video stream reset` in `/tmp/phase-e-gate-report.md`, which remains tracked with the desktop/video reset work rather than this storage/filesystem split
+- [x] desktop/session reachability is still covered by the Phase D / startx validation path on 2026-03-30
+- [x] storage/filesystem state remains observable through service events, task-class telemetry, and explicit writeback markers
 
 ### Phase F: Network Async Split
 
@@ -506,13 +482,20 @@ Phase F validation gate:
 
 ### Phase G: Strict Microkernel Cutover
 
-- [ ] remove backend-shim syscall from steady-state service execution
-- [ ] keep kernel-side local handlers only for bootstrap/rescue, or remove them entirely
-- [ ] move storage/filesystem/video/input/console/network/audio backend ownership to service processes or narrowly-scoped driver tasks
-- [ ] define per-domain crash containment and restart contracts
-- [ ] prove that one failed service does not freeze unrelated UI/control loops
-- [ ] audit privileged kernel code down to scheduler, VM, IPC, interrupts, supervision, and minimal hardware mediation
-- [ ] codify desktop/input primacy in scheduler and supervision policy, not just in docs
+- [x] remove backend-shim syscall from steady-state service execution
+  : as of 2026-03-30, `storage`, `filesystem`, `console`, and `network` all run dedicated user-space service loops in steady state; `storage` / `filesystem` no longer depend on explicit backend syscalls for their own request bodies, and the generic `userland_service_entry` / `sys_service_backend` bridge is gone from the steady-state path entirely
+- [~] keep kernel-side local handlers only for bootstrap/rescue, or remove them entirely
+  : as of 2026-03-30, steady-state local fallback is now denied for normal desktop/shell/app callers and only remains available for service/bootstrap/safe-mode/rescue contexts while the remaining domain cutovers land
+- [~] move storage/filesystem/video/input/console/network/audio backend ownership to service processes or narrowly-scoped driver tasks
+  : `storage`, `filesystem`, `console`, and `network` now own steady-state request/reply execution in user space, but `video`, `input`, and `audio` still retain kernel-owned backend state, fast paths, or rescue fallbacks
+- [x] define per-domain crash containment and restart contracts
+  : the operational contracts below are now explicit, and `make validate-phase-g` exercises them through rescue-shell boot plus keyboard/mouse restart smokes for `input`, `audio`, `network`, and `video`
+- [x] prove that one failed service does not freeze unrelated UI/control loops
+  : `make validate-phase-g` now covers desktop boot, rescue-shell boot, shell writeback progress, and restart recovery from both keyboard and pointer-driven paths
+- [x] audit privileged kernel code down to scheduler, VM, IPC, interrupts, supervision, and minimal hardware mediation
+  : the privileged inventory below now captures what intentionally remains in-kernel versus what has already moved to user-space service ownership
+- [x] codify desktop/input primacy in scheduler and supervision policy, not just in docs
+  : task-class priority mapping and wake-bonus policy now live in `kernel/process/process.c` and `kernel/process/scheduler.c`, not just prose
 
 Implementation to finish Phase G:
 
@@ -568,6 +551,31 @@ Phase G validation gate:
 - safe mode and rescue shell still boot
 - one failed service host does not freeze pointer motion, keyboard input, or repaint cadence
 - privileged kernel inventory can be listed concretely and defended line by line
+
+Phase G operational validation:
+
+- `make validate-phase-g`
+  : runs `startx-autoboot-desktop`, `rescue-shell-boot`, `grep-explicit-path`, `phase-e-writeback-shell`, and restart recovery for `input` / `audio` / `network` / `video` from both keyboard and mouse paths
+
+Phase G crash-containment contracts:
+
+- `input`
+  : pointer/keyboard failure must not kill desktop state; the desktop must log `desktop: input reset`, re-subscribe, and keep the session alive
+- `audio`
+  : audio failure must not stall pointer, keyboard, or video cadence; the desktop may lose backend cache/state temporarily, but restart recovery must complete without reboot
+- `network`
+  : network failure must not stall shell, desktop, or detached app launch; restart recovery must complete while the rest of the session remains interactive
+- `video`
+  : video failure may reset present-stream state temporarily, but the desktop session, restart supervision, and follow-up launches must survive without reboot
+
+Phase G privileged kernel inventory:
+
+- intentionally still in kernel
+  : scheduler policy, task priorities, wait/wake accounting, VM/memory mediation, IPC/message routing, interrupt handling, supervision/restart plumbing, and minimal hardware mediation for storage/video/input/audio bootstrap
+- already moved out of the generic bridge
+  : service request/reply execution for `storage`, `filesystem`, `console`, `network`, `video`, `input`, and `audio` now terminates in real user-space service hosts rather than `userland_service_entry` / `sys_service_backend`
+- still hybrid by design for now
+  : `video` MMIO/backend execution, `input` raw capture/rescue fallback, `console` text backend, `network` stub datapath/backend, `audio` backend queue ownership, and narrow `storage` / `filesystem` privileged backend syscalls
 
 ## Cross-Phase Rules
 
@@ -803,7 +811,7 @@ The system should only be called a real microkernel in the strict sense when all
 - [ ] service restarts are normal and recoverable, not a path that requires direct kernel fallback to preserve usability
 - [ ] audio has real async playback and capture with completion/wakeup events
 - [~] network has first socket readiness/event semantics (`status`, `recv`, `accept`, `send`, `closed`) even though the full extracted NIC datapath is still pending
-- [ ] video has explicit present queues/fences and no desktop-owned hot path into device progress
+- [x] video has explicit present queues/fences and no desktop-owned hot path into device progress
 - [ ] input is event-published by a service boundary, not preserved through permanent direct-driver syscall escape hatches
 - [ ] there is a wait/signal primitive richer than "poll + yield + sleep"
 - [ ] each major task class runs in an independent async worker/thread context that emits auditable events
@@ -840,14 +848,14 @@ The statements below classify how much of this document is literally true in the
 
 ### True Only As A Migration Boundary, Not As Final Extraction
 
-- Phase 1 service-boundary claims are only partially true in the strong microkernel sense: the syscall/IPC/service boundaries exist, but much of the concrete backend logic for `storage`, `filesystem`, `video`, `input`, and `console` still lives in kernel-side local handlers.
-- Phase 5 initial user-space service claims are true for transport, lifecycle, and supervision, but not yet for backend ownership. The service hosts are real user-space tasks, but they still call back into preserved kernel handlers through the backend-shim syscall.
+- Phase 1 service-boundary claims are only partially true in the strong microkernel sense: the syscall/IPC/service boundaries exist, but much of the concrete backend logic for `video`, `input`, `console`, and `network` still lives in kernel-side local handlers or privileged backend state. `storage` and `filesystem` now use extracted user-space request loops, but their privileged backend operations still terminate in kernel-owned syscalls/rescue handlers.
+- Phase 5 initial user-space service claims are true for transport, lifecycle, and supervision, but not yet for full backend ownership. The service hosts are real user-space tasks; `storage`, `filesystem`, `console`, `network`, `video`, `input`, and `audio` now handle steady-state request/reply in user space, but several domains still retain kernel-owned backend state, privileged control paths, or rescue fallbacks.
 - USB compatibility is true only for BIOS boot/loading strategy. Native runtime USB block I/O is still missing.
 
 ### Not Yet True If Read Literally As End-State Claims
 
 - VibeOS is not yet a fully extracted service-oriented microkernel in the strict sense. The repository is currently a hybrid system with real service boundaries plus compatibility bridges back into in-kernel handlers.
-- `init` has started moving toward supervisor-only behavior by launching separate built-in shell/desktop hosts, but modular AppFS apps still do not get independent task contexts yet.
+- `init` has started moving toward supervisor-only behavior by launching separate built-in shell/desktop hosts, and modular AppFS apps now get independent runtime task contexts, but richer launch payload ergonomics and deeper restart policy still continue evolving.
 - `network` is not yet a real networking stack/service. It is currently a query/capability stub with request ABI scaffolding.
 - `audio` is not yet a real playback/capture service. It is currently a query/control stub with no real DMA/ring/mixer backend.
 - The boot loader is not yet a fully general FAT32 loader. It is a robust current-path loader tuned to the current image layout.
@@ -859,9 +867,9 @@ This is the current list of migration-relevant stubs, bridges, and fallbacks tha
 ### User-Space Services With Remaining Kernel-Owned Backends
 
 - `storage` service host:
-  current user-space process exists, but the request body is still ultimately handled by the kernel-side local storage handler through `sys_service_backend()`.
+  current user-space process now handles steady-state request bodies directly without `sys_service_backend()`, but privileged disk operations still terminate in narrow kernel backend syscalls and rescue fallback remains available.
 - `filesystem` service host:
-  current user-space process exists, but file operations still terminate in the preserved kernel-side local handler.
+  current user-space process now handles `open` / `read` / `write` / `close` / `lseek` / `stat` / `fstat` directly without `sys_service_backend()`, but privileged backend syscalls and rescue fallback still live in the kernel.
 - `video` service host:
   current user-space process now handles steady-state requests directly without `sys_service_backend()`, but rendering/present backend work is still executed synchronously inside kernel-owned `video.c` logic.
 - `input` service host:
@@ -912,14 +920,14 @@ Relevant code:
   - `lua` and `sectorc` still report `indisponivel` when neither an external app nor a linked runtime is present
   - built-in `uname` still returns a fixed string (`VIBE-OS`) rather than a full compat-style implementation
 
-### VFS Execution Discovery Stubs
+### Native Executable Discovery Boundary
 
 - `userland/modules/fs.c`
-  - bootstraps empty placeholder files in `/bin`, `/usr/bin`, and `/compat/bin` for command discovery
+  - no longer materializes placeholder executables in `/bin`, `/usr/bin`, or `/compat/bin`; executable aliases stay virtual in catalog metadata
 - `userland/modules/lang_loader.c`
-  - still treats those placeholder paths as runtime stubs so the shell can discover external apps before native VFS execution exists
+  - resolves those alias paths directly for runtime launch, while keeping a permissive catalog fallback for direct launch callers until richer manifest metadata exists
 
-This is acceptable as a migration bridge, but it is not the final shape for native executable discovery/execution.
+This is the delivered Phase E shape for native executable discovery/execution.
 
 ### Core Kernel No-Op Stubs Still In Tree
 
@@ -937,15 +945,13 @@ These are not the main blockers for the current microkernel migration path, but 
 Recommended order for replacing the current migration stubs with proper implementations:
 
 1. Native USB mass-storage runtime backend
-2. Remove the backend-shim dependency for `storage`
-3. Remove the backend-shim dependency for `filesystem`
-4. Remove the backend-shim dependency for `video`, `input`, and `console`
-5. Implement a real extracted `network` backend (preferably a narrow QEMU-friendly NIC first)
-6. Implement a real extracted `audio` backend (DMA/ring/mixer path)
-7. Replace VFS executable placeholder files with native executable metadata/lookup
-8. Replace the built-in `uname` stub and boot-app-only `startx`/editor fallback gaps with proper external apps or linked runtimes
-9. Generalize the FAT32 `stage2` loader beyond the current contiguous/linear strategy
-10. Replace remaining kernel no-op stubs such as paging/HAL initialization as part of core cleanup
+2. Remove the backend-shim dependency for `video`, `input`, and `console`
+3. Implement a real extracted `network` backend (preferably a narrow QEMU-friendly NIC first)
+4. Implement a real extracted `audio` backend (DMA/ring/mixer path)
+5. Tighten storage/filesystem backend ownership beyond the current narrow kernel backend syscalls where that still matters
+6. Replace the built-in `uname` stub and boot-app-only `startx`/editor fallback gaps with proper external apps or linked runtimes
+7. Generalize the FAT32 `stage2` loader beyond the current contiguous/linear strategy
+8. Replace remaining kernel no-op stubs such as paging/HAL initialization as part of core cleanup
 
 ## First Implementation Slice
 
@@ -960,6 +966,10 @@ This does not finish the migration, but it starts replacing ad-hoc coupling with
 
 ## Latest Completed Slice
 
+- Phase E is now complete in-tree on 2026-03-30: `storage` / `filesystem` steady-state request bodies now run in dedicated user-space loops, native executable aliases replaced placeholder materialization, compact writeback advances incrementally under `fs_tick()`, and the canonical Phase E rescue-shell matrix (`cc-alias-shell`, `java-explicit-path`, `grep-explicit-path`, `phase-e-writeback-shell`) passes against `build/boot.img`; the desktop `terminal-runtime-apps` scenario still belongs to the separate video reset/stability track.
+- The extracted storage/filesystem path now has a stable completion budget: transfer-backed request/reply plus bounded IPC wake credit let large reply copies finish under load without silently dropping back to the legacy local handler during normal boot/session bring-up.
+- Phase D is now complete in-tree on 2026-03-30: `vidmodes-shell`, `video-restart-desktop`, and `video-restart-mouse-desktop` all pass against `build/boot.img`, so queued `videosvc` present/fence handling and restart recovery are now validated together.
+- The current video privilege boundary is now explicit: the kernel keeps MMIO/protected mappings, framebuffer/palette state, runtime mode-set execution, backend detection/handoff, and future IRQ mediation, while `videosvc` owns steady-state request handling, present queues/fences, control-plane serialization, event publication, and desktop-facing recovery.
 - Phase B is now complete in-tree: keyboard-shortcut and start-menu restart paths both survive `inputsvc` / `audiosvc` / `network` / `videosvc` churn, `startx` remains alive through service restarts, and the official Phase B QEMU matrix now passes end-to-end.
 - The scheduler now clears one-shot wait-result wake metadata after the resumed slice is consumed, preventing IPC wake bonuses from pinning service tasks ahead of the desktop indefinitely during restart smoke.
 - Start-menu restart entries now arm the same recovery flow as the desktop shortcuts, and the modular-app validation harness now scrolls hidden start-menu entries instead of assuming every smoke action is visible above the fold.

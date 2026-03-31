@@ -160,6 +160,10 @@ uint32_t sys_storage_total_sectors(void) {
     return (uint32_t)syscall5(SYSCALL_STORAGE_TOTAL_SECTORS, 0, 0, 0, 0, 0);
 }
 
+uint32_t sys_storage_partition_start_lba(void) {
+    return (uint32_t)syscall5(SYSCALL_STORAGE_PARTITION_START_LBA, 0, 0, 0, 0, 0);
+}
+
 int sys_open(const char *path, int flags) {
     return syscall5(SYSCALL_OPEN, (int)(uintptr_t)path, flags, 0, 0, 0);
 }
@@ -423,8 +427,20 @@ void sys_write_debug(const char *msg) {
     (void)syscall5(SYSCALL_WRITE_DEBUG, (int)(uintptr_t)msg, 0, 0, 0, 0);
 }
 
+void sys_text_clear(void) {
+    (void)syscall5(SYSCALL_TEXT_CLEAR, 0, 0, 0, 0, 0);
+}
+
+void sys_text_putc(char c) {
+    (void)syscall5(SYSCALL_TEXT_PUTC, (int)(uint8_t)c, 0, 0, 0, 0);
+}
+
 int sys_text_write(const char *msg) {
     return syscall5(SYSCALL_TEXT_WRITE, (int)(uintptr_t)msg, 0, 0, 0, 0);
+}
+
+int sys_text_move_cursor(int delta) {
+    return syscall5(SYSCALL_TEXT_MOVE_CURSOR, delta, 0, 0, 0, 0);
 }
 
 int sys_keyboard_set_layout(const char *name) {
@@ -445,15 +461,6 @@ int sys_service_receive(struct mk_message *message) {
 
 int sys_service_send(const struct mk_message *message) {
     return syscall5(SYSCALL_SERVICE_SEND, (int)(uintptr_t)message, 0, 0, 0, 0);
-}
-
-int sys_service_backend(const struct mk_message *request, struct mk_message *reply) {
-    return syscall5(SYSCALL_SERVICE_BACKEND,
-                    (int)(uintptr_t)request,
-                    (int)(uintptr_t)reply,
-                    0,
-                    0,
-                    0);
 }
 
 int sys_service_subscribe(uint32_t service_type) {

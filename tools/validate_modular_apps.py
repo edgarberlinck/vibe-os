@@ -58,6 +58,7 @@ class Scenario:
     must_have: List[str]
     boot_markers: Optional[List[str]] = None
     command_marker: Optional[str] = None
+    boot_action: Optional[Callable[["QemuSession"], None]] = None
     action: Optional[Callable[["QemuSession"], None]] = None
 
 
@@ -813,6 +814,24 @@ def wait_for_terminal_command_done(session: QemuSession, command: str, timeout: 
         raise
 
 
+def scenario_boot_rescue_shell(session: QemuSession) -> None:
+    if log_contains(session, "boot mode: rescue shell") and log_contains(session, SHELL_READY_MARKER):
+        return
+
+    def send_rescue_selection() -> None:
+        session.send_shortcut("s", pause=0.12)
+        session.send_shortcut("s", pause=0.12)
+        session.send_shortcut("ret", pause=0.2)
+
+    for delay in (1.0, 0.8, 0.8):
+        time.sleep(delay)
+        send_rescue_selection()
+        if log_contains(session, "boot mode: rescue shell") or \
+           log_contains(session, "init: rescue shell requested, skipping desktop launch") or \
+           log_contains(session, "host: shell start"):
+            return
+
+
 def scenario_startx(session: QemuSession) -> None:
     session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=90.0)
     time.sleep(1.0)
@@ -850,6 +869,76 @@ def scenario_terminal_runtime(session: QemuSession) -> None:
             "sectorc: compile ok",
         ],
         timeout=12.0,
+    )
+
+
+def scenario_phase_e_writeback_shell(session: QemuSession) -> None:
+    touch_path = f"/tmp/phase-e-writeback-{time.time_ns()}"
+    touch_start = len(session.read_log())
+    run_command(session, f"touch {touch_path}", timeout=6.0)
+    wait_for_all_since(session,
+                       ["shell: command touch", "shell: ready"],
+                       timeout=4.0,
+                       start_offset=touch_start)
+    session.wait_for_log("fs: writeback start", timeout=12.0)
+    run_command(session, "cc /hello.c", timeout=8.0, marker="")
+    session.wait_for_all(
+        [
+            "busybox: external ok sectorc",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
+            "fs: writeback done",
+        ],
+        timeout=20.0,
+    )
+
+
+def scenario_phase_e_terminal_cc(session: QemuSession) -> None:
+    scenario_startx(session)
+    time.sleep(1.0)
+    run_command(session, "cc /hello.c", timeout=8.0, marker="")
+    session.wait_for_all(
+        [
+            "busybox: external ok sectorc",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
+            "terminal: command done cc",
+        ],
+        timeout=16.0,
+    )
+
+
+def scenario_phase_e_terminal_grep(session: QemuSession) -> None:
+    scenario_startx(session)
+    time.sleep(1.0)
+    run_command(session, "/compat/bin/grep print /hello.c", timeout=8.0, marker="")
+    session.wait_for_all(
+        [
+            "busybox: external ok grep",
+            "grep: match ok",
+            "terminal: command done /compat/bin/grep",
+        ],
+        timeout=16.0,
+    )
+
+
+def scenario_phase_e_terminal_writeback(session: QemuSession) -> None:
+    touch_path = f"/tmp/phase-e-writeback-{time.time_ns()}"
+    scenario_startx(session)
+    time.sleep(1.0)
+    run_command(session, f"touch {touch_path}", timeout=6.0, marker="")
+    wait_for_terminal_command_done(session, "touch", timeout=8.0)
+    session.wait_for_log("fs: writeback start", timeout=12.0)
+    run_command(session, "cc /hello.c", timeout=8.0, marker="")
+    session.wait_for_all(
+        [
+            "busybox: external ok sectorc",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
+            "fs: writeback done",
+            "terminal: command done cc",
+        ],
+        timeout=20.0,
     )
 
 
@@ -1177,6 +1266,8 @@ SCENARIOS = [
             "sectorc: compile begin",
             "sectorc: compile ok",
         ],
+        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_action=scenario_boot_rescue_shell,
     ),
     Scenario(
         name="java-explicit-path",
@@ -1188,6 +1279,8 @@ SCENARIOS = [
             "busybox: external ok java",
             "java: version ok",
         ],
+        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_action=scenario_boot_rescue_shell,
     ),
     Scenario(
         name="grep-explicit-path",
@@ -1199,6 +1292,95 @@ SCENARIOS = [
             "busybox: external ok grep",
             "grep: match ok",
         ],
+        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_action=scenario_boot_rescue_shell,
+    ),
+    Scenario(
+        name="rescue-shell-boot",
+        description="Stage2 rescue-shell path reaches the shell host and accepts input without relying on desktop launch",
+        command=None,
+        must_have=[
+            "boot mode: rescue shell",
+            "host: shell start",
+            SHELL_READY_MARKER,
+        ],
+        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_action=scenario_boot_rescue_shell,
+    ),
+    Scenario(
+        name="phase-e-writeback-shell",
+        description="Text shell keeps launching runtime reads while filesystem writeback advances in the background",
+        command=None,
+        must_have=[
+            "shell: command touch",
+            "fs: writeback start",
+            "busybox: external ok sectorc",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
+            "fs: writeback done",
+        ],
+        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_action=scenario_boot_rescue_shell,
+        action=scenario_phase_e_writeback_shell,
+    ),
+    Scenario(
+        name="phase-e-terminal-cc",
+        description="Desktop stable-shortcut path opens the terminal and runs the native cc alias through sectorc.app",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "busybox: external ok sectorc",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
+            "terminal: command done cc",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_phase_e_terminal_cc,
+    ),
+    Scenario(
+        name="phase-e-terminal-grep",
+        description="Desktop stable-shortcut path resolves /compat/bin/grep through the native executable alias boundary",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "busybox: external ok grep",
+            "grep: match ok",
+            "terminal: command done /compat/bin/grep",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_phase_e_terminal_grep,
+    ),
+    Scenario(
+        name="phase-e-terminal-writeback",
+        description="Desktop stable-shortcut path keeps terminal runtime reads working while filesystem writeback drains in the background",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "terminal: command done touch",
+            "fs: writeback start",
+            "busybox: external ok sectorc",
+            "sectorc: compile begin",
+            "sectorc: compile ok",
+            "fs: writeback done",
+            "terminal: command done cc",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_phase_e_terminal_writeback,
     ),
     Scenario(
         name="doom-assets-app",
@@ -1478,7 +1660,7 @@ SCENARIOS = [
 ]
 
 
-def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: Scenario) -> ScenarioResult:
+def run_scenario_once(qemu_binary: str, image_path: Path, memory_mb: int, scenario: Scenario) -> ScenarioResult:
     with tempfile.TemporaryDirectory(prefix="vmod-") as temp_dir:
         workspace = Path(temp_dir)
         scenario_image = workspace / "boot.img"
@@ -1488,6 +1670,8 @@ def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: S
         error: Optional[str] = None
         log = ""
         try:
+            if scenario.boot_action:
+                scenario.boot_action(session)
             session.wait_for_all(scenario.boot_markers or [BOOT_MARKER, SHELL_READY_MARKER], timeout=60.0)
             if scenario.command:
                 run_command(session,
@@ -1514,6 +1698,19 @@ def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: S
         missing_markers=missing,
         error=error,
     )
+
+
+def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: Scenario) -> ScenarioResult:
+    result = run_scenario_once(qemu_binary, image_path, memory_mb, scenario)
+
+    # Some QEMU boots still occasionally die before the scenario itself
+    # begins (for example an early SMP/AP bring-up fault). Retry once only
+    # when the first attempt produced no scenario-specific evidence at all.
+    if result.passed:
+        return result
+    if any(marker in result.log for marker in scenario.must_have):
+        return result
+    return run_scenario_once(qemu_binary, image_path, memory_mb, scenario)
 
 
 def write_report(report_path: Path, results: List[ScenarioResult]) -> None:

@@ -349,6 +349,14 @@ static void mk_network_publish_status_event(void) {
                                    0u);
 }
 
+static int mk_network_current_process_is_service_worker(void) {
+    process_t *current = scheduler_current();
+
+    return current != 0 &&
+           current->kind == PROCESS_KIND_SERVICE &&
+           current->service_type == MK_SERVICE_NETWORK;
+}
+
 static uint32_t mk_network_current_pid(void) {
     return scheduler_current_pid();
 }
@@ -1425,7 +1433,7 @@ void mk_network_service_init(void) {
                                  "network",
                                  mk_network_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_network_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN);
@@ -1441,6 +1449,10 @@ int mk_network_service_get_info(struct mk_network_info *info) {
 
     if (info == 0) {
         return -1;
+    }
+    if (mk_network_current_process_is_service_worker()) {
+        *info = g_network_state.info;
+        return 0;
     }
 
     if (mk_network_prepare_request(&request, MK_MSG_NET_GETINFO, 0, 0u) != 0) {
@@ -1463,6 +1475,11 @@ int mk_network_service_get_status(struct mk_network_status *status) {
     if (status == 0) {
         return -1;
     }
+    if (mk_network_current_process_is_service_worker()) {
+        mk_network_progress_state();
+        *status = g_network_state.status;
+        return 0;
+    }
 
     if (mk_network_prepare_request(&request, MK_MSG_NET_GET_STATUS, 0, 0u) != 0) {
         return -1;
@@ -1484,6 +1501,9 @@ int mk_network_service_get_scan(uint32_t index, struct mk_network_scan_info *inf
 
     if (info == 0) {
         return -1;
+    }
+    if (mk_network_current_process_is_service_worker()) {
+        return mk_network_fill_scan_info(index, info);
     }
 
     memset(&scan_request, 0, sizeof(scan_request));
@@ -1517,6 +1537,9 @@ int mk_network_service_connect_wifi(const struct mk_network_connect_request *req
     if (request == 0) {
         return -1;
     }
+    if (mk_network_current_process_is_service_worker()) {
+        return mk_network_state_connect_wifi(request);
+    }
 
     if (mk_network_prepare_request(&message, MK_MSG_NET_CONNECT_WIFI, request, sizeof(*request)) != 0) {
         return -1;
@@ -1539,6 +1562,9 @@ int mk_network_service_connect_ethernet(const char *if_name) {
 
     if (if_name == 0) {
         return -1;
+    }
+    if (mk_network_current_process_is_service_worker()) {
+        return mk_network_state_connect_ethernet(if_name);
     }
 
     memset(&connect_request, 0, sizeof(connect_request));
@@ -1570,6 +1596,9 @@ int mk_network_service_configure_ethernet(const struct mk_network_ethernet_confi
     if (config == 0) {
         return -1;
     }
+    if (mk_network_current_process_is_service_worker()) {
+        return mk_network_apply_ethernet_config(config);
+    }
 
     if (mk_network_prepare_request(&request,
                                    MK_MSG_NET_CONFIGURE_ETHERNET,
@@ -1595,6 +1624,9 @@ int mk_network_service_disconnect(const char *if_name) {
 
     if (if_name == 0) {
         return -1;
+    }
+    if (mk_network_current_process_is_service_worker()) {
+        return mk_network_state_disconnect(if_name);
     }
 
     memset(&disconnect_request, 0, sizeof(disconnect_request));

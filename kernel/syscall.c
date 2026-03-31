@@ -25,7 +25,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 96
+#define MAX_SYSCALLS 110
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
@@ -235,6 +235,66 @@ static uint32_t sys_storage_total_sectors(uint32_t a, uint32_t b, uint32_t c,
     return mk_storage_service_total_sectors();
 }
 
+static uint32_t sys_storage_partition_start_lba(uint32_t a, uint32_t b, uint32_t c,
+                                                uint32_t d, uint32_t e) {
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    return mk_storage_service_partition_start_lba();
+}
+
+static uint32_t sys_storage_backend_load(uint32_t ptr, uint32_t size, uint32_t c,
+                                         uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)kernel_storage_load((void *)(uintptr_t)ptr, size);
+}
+
+static uint32_t sys_storage_backend_save(uint32_t ptr, uint32_t size, uint32_t c,
+                                         uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)kernel_storage_save((const void *)(uintptr_t)ptr, size);
+}
+
+static uint32_t sys_storage_backend_read_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
+                                                 uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)kernel_storage_read_sectors(lba, (void *)(uintptr_t)ptr, sector_count);
+}
+
+static uint32_t sys_storage_backend_write_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
+                                                  uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)kernel_storage_write_sectors(lba, (const void *)(uintptr_t)ptr, sector_count);
+}
+
+static uint32_t sys_storage_backend_total_sectors(uint32_t a, uint32_t b, uint32_t c,
+                                                  uint32_t d, uint32_t e) {
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    return kernel_storage_total_sectors();
+}
+
+static uint32_t sys_storage_backend_partition_start_lba(uint32_t a, uint32_t b, uint32_t c,
+                                                        uint32_t d, uint32_t e) {
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    return kernel_storage_partition_start_lba();
+}
+
 static uint32_t sys_fs_open(uint32_t path_ptr, uint32_t flags, uint32_t c,
                             uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
@@ -277,6 +337,70 @@ static uint32_t sys_fs_fstat(uint32_t fd, uint32_t stat_ptr, uint32_t c,
     (void)c; (void)d; (void)e;
     return (uint32_t)mk_filesystem_service_fstat((int)fd,
                                                  (struct stat *)(uintptr_t)stat_ptr);
+}
+
+static uint32_t sys_fs_backend_open(uint32_t path_ptr, uint32_t flags, uint32_t c,
+                                    uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)open((const char *)(uintptr_t)path_ptr, (int)flags);
+}
+
+static uint32_t sys_fs_backend_read(uint32_t fd, uint32_t buf_ptr, uint32_t count,
+                                    uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)read((int)fd, (void *)(uintptr_t)buf_ptr, count);
+}
+
+static uint32_t sys_fs_backend_write(uint32_t fd, uint32_t buf_ptr, uint32_t count,
+                                     uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)write((int)fd, (const void *)(uintptr_t)buf_ptr, count);
+}
+
+static uint32_t sys_fs_backend_close(uint32_t fd, uint32_t b, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)close((int)fd);
+}
+
+static uint32_t sys_fs_backend_lseek(uint32_t fd, uint32_t offset, uint32_t whence,
+                                     uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)lseek((int)fd, (off_t)(int32_t)offset, (int)whence);
+}
+
+static uint32_t sys_fs_backend_stat(uint32_t path_ptr, uint32_t stat_ptr, uint32_t c,
+                                    uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)stat((const char *)(uintptr_t)path_ptr,
+                          (struct stat *)(uintptr_t)stat_ptr);
+}
+
+static uint32_t sys_fs_backend_fstat(uint32_t fd, uint32_t stat_ptr, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)fstat((int)fd, (struct stat *)(uintptr_t)stat_ptr);
 }
 
 static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
@@ -758,18 +882,6 @@ static uint32_t sys_service_send(uint32_t message_ptr, uint32_t b, uint32_t c,
     return (uint32_t)rc;
 }
 
-static uint32_t sys_service_backend(uint32_t request_ptr, uint32_t reply_ptr, uint32_t c,
-                                    uint32_t d, uint32_t e) {
-    (void)c; (void)d; (void)e;
-    if (request_ptr == 0u || reply_ptr == 0u) {
-        return (uint32_t)-1;
-    }
-
-    return (uint32_t)mk_service_backend_handle_current(
-        (const struct mk_message *)(uintptr_t)request_ptr,
-        (struct mk_message *)(uintptr_t)reply_ptr);
-}
-
 static uint32_t sys_service_subscribe(uint32_t service_type, uint32_t b, uint32_t c,
                                       uint32_t d, uint32_t e) {
     process_t *current;
@@ -1078,6 +1190,8 @@ static int sys_launch_app_copy_argv(const char *const *argv,
 }
 
 static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
+    const struct mk_launch_context *current_context;
+
     if (descriptor == 0) {
         return;
     }
@@ -1089,6 +1203,20 @@ static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
         if (descriptor->stack_size < 262144u) {
             descriptor->stack_size = 262144u;
         }
+    }
+
+    current_context = mk_launch_context_current();
+    if (current_context == 0 ||
+        (current_context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) == 0u) {
+        return;
+    }
+
+    if (strcmp(descriptor->name, "audiosvc") == 0) {
+        descriptor->task_class = MK_TASK_CLASS_AUDIO_IO;
+        return;
+    }
+    if (strcmp(descriptor->name, "netmgrd") == 0) {
+        descriptor->task_class = MK_TASK_CLASS_NETWORK_IO;
     }
 }
 
@@ -1258,6 +1386,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_STORAGE_READ_SECTORS] = sys_storage_read_sectors;
     syscall_table[SYSCALL_STORAGE_WRITE_SECTORS] = sys_storage_write_sectors;
     syscall_table[SYSCALL_STORAGE_TOTAL_SECTORS] = sys_storage_total_sectors;
+    syscall_table[SYSCALL_STORAGE_PARTITION_START_LBA] = sys_storage_partition_start_lba;
     syscall_table[SYSCALL_OPEN] = sys_fs_open;
     syscall_table[SYSCALL_READ] = sys_fs_read;
     syscall_table[SYSCALL_WRITE] = sys_fs_write;
@@ -1268,8 +1397,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_INPUT_MOUSE] = sys_input_mouse;
     syscall_table[SYSCALL_INPUT_KEY] = sys_input_key;
     syscall_table[SYSCALL_INPUT_EVENT] = sys_input_event;
-    syscall_table[12] = sys_text_putc;     /* legacy text mode */
-    syscall_table[13] = sys_text_clear;    /* legacy text mode */
+    syscall_table[SYSCALL_TEXT_PUTC] = sys_text_putc;     /* legacy text mode */
+    syscall_table[SYSCALL_TEXT_CLEAR] = sys_text_clear;   /* legacy text mode */
     syscall_table[SYSCALL_TEXT_MOVE_CURSOR] = sys_text_move_cursor;
     syscall_table[SYSCALL_TEXT_WRITE] = sys_text_write;
     syscall_table[SYSCALL_SLEEP] = sys_sleep;
@@ -1313,7 +1442,6 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SHUTDOWN] = sys_shutdown;
     syscall_table[SYSCALL_SERVICE_RECV] = sys_service_receive;
     syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
-    syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
     syscall_table[SYSCALL_SERVICE_SUBSCRIBE] = sys_service_subscribe;
     syscall_table[SYSCALL_SERVICE_PID] = sys_service_pid;
     syscall_table[SYSCALL_SERVICE_RESTART] = sys_service_restart;
@@ -1321,6 +1449,20 @@ void syscall_init(void) {
     syscall_table[SYSCALL_TRANSFER_SIZE] = sys_transfer_size;
     syscall_table[SYSCALL_TRANSFER_READ] = sys_transfer_read;
     syscall_table[SYSCALL_TRANSFER_WRITE] = sys_transfer_write;
+    syscall_table[SYSCALL_STORAGE_BACKEND_LOAD] = sys_storage_backend_load;
+    syscall_table[SYSCALL_STORAGE_BACKEND_SAVE] = sys_storage_backend_save;
+    syscall_table[SYSCALL_STORAGE_BACKEND_READ_SECTORS] = sys_storage_backend_read_sectors;
+    syscall_table[SYSCALL_STORAGE_BACKEND_WRITE_SECTORS] = sys_storage_backend_write_sectors;
+    syscall_table[SYSCALL_STORAGE_BACKEND_TOTAL_SECTORS] = sys_storage_backend_total_sectors;
+    syscall_table[SYSCALL_STORAGE_BACKEND_PARTITION_START_LBA] =
+        sys_storage_backend_partition_start_lba;
+    syscall_table[SYSCALL_FS_BACKEND_OPEN] = sys_fs_backend_open;
+    syscall_table[SYSCALL_FS_BACKEND_READ] = sys_fs_backend_read;
+    syscall_table[SYSCALL_FS_BACKEND_WRITE] = sys_fs_backend_write;
+    syscall_table[SYSCALL_FS_BACKEND_CLOSE] = sys_fs_backend_close;
+    syscall_table[SYSCALL_FS_BACKEND_LSEEK] = sys_fs_backend_lseek;
+    syscall_table[SYSCALL_FS_BACKEND_STAT] = sys_fs_backend_stat;
+    syscall_table[SYSCALL_FS_BACKEND_FSTAT] = sys_fs_backend_fstat;
     syscall_table[SYSCALL_AUDIO_EVENT_SUBSCRIBE] = sys_audio_event_subscribe;
     syscall_table[SYSCALL_AUDIO_EVENT_RECV] = sys_audio_event_receive;
     syscall_table[SYSCALL_VIDEO_EVENT_SUBSCRIBE] = sys_video_event_subscribe;

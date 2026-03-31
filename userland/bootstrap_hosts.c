@@ -10,9 +10,15 @@
 #include <userland/modules/include/utils.h>
 
 #define HOST_PENDING_TASK_EVENTS_MAX 8u
+#define HOST_TASK_EXIT_POLL_TICKS 4u
 
 static struct mk_task_event g_host_pending_task_events[HOST_PENDING_TASK_EVENTS_MAX];
 static uint32_t g_host_pending_task_event_count = 0u;
+
+static void host_background_console_sink(const char *buf, int len) {
+    (void)buf;
+    (void)len;
+}
 
 static void host_debug(const char *prefix, const char *suffix) {
     char msg[96];
@@ -122,11 +128,11 @@ static int host_wait_for_task_exit(uint32_t pid) {
     }
 
     for (;;) {
-        if (sys_task_event_receive(&event, MK_TASK_EVENT_WAIT_FOREVER) != 0) {
+        if (sys_task_event_receive(&event, HOST_TASK_EXIT_POLL_TICKS) != 0) {
             if (!host_task_pid_alive(pid)) {
                 return 0;
             }
-            return -1;
+            continue;
         }
         if (event.pid != pid) {
             host_stash_task_event(&event);
@@ -144,7 +150,13 @@ static int host_subscribe_task_exit(uint32_t task_class_mask) {
 }
 
 static uint32_t host_external_task_class_mask(int argc, char **argv) {
-    if (argc > 0 && argv != 0 && argv[0] != 0 && str_eq(argv[0], "startx")) {
+    char normalized[64];
+
+    if (argc > 0 &&
+        argv != 0 &&
+        argv[0] != 0 &&
+        lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) == 0 &&
+        str_eq(normalized, "startx")) {
         return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
     }
 
@@ -227,15 +239,22 @@ void userland_app_runtime_entry(void) {
     char name[sizeof(info.name)];
     char *argv[USERLAND_LAUNCH_ARGC_MAX + 1];
     int argc;
-
-    console_init();
-    fs_init();
-    host_debug("app: runtime start", 0);
+    int background_helper = 0;
 
     if (sys_launch_info(&info) != 0 || info.name[0] == '\0') {
         host_debug("app: missing launch info", 0);
         return;
     }
+    background_helper = info.task_class == MK_TASK_CLASS_AUDIO_IO ||
+                        info.task_class == MK_TASK_CLASS_NETWORK_IO;
+    if (background_helper) {
+        console_set_output_handler(host_background_console_sink);
+    } else {
+        console_init();
+    }
+    fs_init();
+    host_debug("host: app start", 0);
+    host_debug("app: runtime start", 0);
 
     memcpy(name, info.name, sizeof(name));
     name[sizeof(name) - 1u] = '\0';
@@ -249,10 +268,16 @@ void userland_app_runtime_entry(void) {
 
     lang_invalidate_directory_cache();
     if (lang_try_run(argc, argv) == 0) {
+        if (background_helper) {
+            console_set_output_handler(0);
+        }
         host_debug("app: runtime returned ", name);
         return;
     }
 
+    if (background_helper) {
+        console_set_output_handler(0);
+    }
     host_debug("app: runtime launch failed ", name);
 }
 
@@ -381,7 +406,6 @@ void userland_startx_host_entry(void) {
 
 void userland_desktop_session_entry(void) {
     host_debug("desktop: session start", 0);
-    fs_set_deferred_catalog_stubs(1);
     fs_init();
     desktop_main();
     host_debug("desktop: session returned", 0);

@@ -72,6 +72,17 @@ static const char *netmgrd_if_kind_name(uint32_t kind) {
     }
 }
 
+static const char *netmgrd_security_name(uint32_t security) {
+    switch (security) {
+    case MK_NETWORK_SECURITY_OPEN:
+        return "open";
+    case MK_NETWORK_SECURITY_WPA_PSK:
+        return "wpa-psk";
+    default:
+        return "unknown";
+    }
+}
+
 static const char *netmgrd_backend_name(const struct mk_network_info *info) {
     if (info == 0) {
         return "indisponivel";
@@ -656,10 +667,12 @@ static int netmgrd_write_state_file(const char *path,
                                     const char *auto_ssid,
                                     const char *manager_mode,
                                     const char *lease_source) {
-    char text[640];
+    char text[1280];
     char detected_lease_source[24];
+    struct mk_network_scan_info scans[4];
     const char *target = path != 0 && *path != '\0' ? path : NETMGRD_STATUS_EXPORT_PATH;
     const char *resolved_lease_source = lease_source;
+    int scan_count = 0;
 
     if (status == 0) {
         return -1;
@@ -668,11 +681,21 @@ static int netmgrd_write_state_file(const char *path,
         netmgrd_detect_lease_source(status, detected_lease_source, (int)sizeof(detected_lease_source));
         resolved_lease_source = detected_lease_source;
     }
+    memset(scans, 0, sizeof(scans));
+    while (scan_count < (int)(sizeof(scans) / sizeof(scans[0])) &&
+           vibe_app_network_scan((uint32_t)scan_count, &scans[scan_count]) == 0) {
+        scan_count += 1;
+    }
 
     (void)vibe_app_create_dir("/runtime");
     snprintf(text,
              sizeof(text),
-             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n",
+             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n"
+             "scan_count=%d\n"
+             "scan0_ssid=%s\nscan0_security=%s\nscan0_signal=%u\nscan0_connected=%u\n"
+             "scan1_ssid=%s\nscan1_security=%s\nscan1_signal=%u\nscan1_connected=%u\n"
+             "scan2_ssid=%s\nscan2_security=%s\nscan2_signal=%u\nscan2_connected=%u\n"
+             "scan3_ssid=%s\nscan3_security=%s\nscan3_signal=%u\nscan3_connected=%u\n",
              netmgrd_link_state_name(status->link_state),
              status->active_if[0] != '\0' ? status->active_if : "-",
              netmgrd_if_kind_name(status->active_kind),
@@ -686,7 +709,24 @@ static int netmgrd_write_state_file(const char *path,
              netmgrd_dns_mode_name(info, status),
              netmgrd_lease_state_name(status),
              resolved_lease_source,
-             manager_mode != 0 && manager_mode[0] != '\0' ? manager_mode : "manual");
+             manager_mode != 0 && manager_mode[0] != '\0' ? manager_mode : "manual",
+             scan_count,
+             scan_count > 0 ? scans[0].ssid : "",
+             scan_count > 0 ? netmgrd_security_name(scans[0].security) : "unknown",
+             scan_count > 0 ? (unsigned int)scans[0].signal_strength : 0u,
+             scan_count > 0 ? (unsigned int)scans[0].connected : 0u,
+             scan_count > 1 ? scans[1].ssid : "",
+             scan_count > 1 ? netmgrd_security_name(scans[1].security) : "unknown",
+             scan_count > 1 ? (unsigned int)scans[1].signal_strength : 0u,
+             scan_count > 1 ? (unsigned int)scans[1].connected : 0u,
+             scan_count > 2 ? scans[2].ssid : "",
+             scan_count > 2 ? netmgrd_security_name(scans[2].security) : "unknown",
+             scan_count > 2 ? (unsigned int)scans[2].signal_strength : 0u,
+             scan_count > 2 ? (unsigned int)scans[2].connected : 0u,
+             scan_count > 3 ? scans[3].ssid : "",
+             scan_count > 3 ? netmgrd_security_name(scans[3].security) : "unknown",
+             scan_count > 3 ? (unsigned int)scans[3].signal_strength : 0u,
+             scan_count > 3 ? (unsigned int)scans[3].connected : 0u);
     return vibe_app_write_file(target, text, (int)strlen(text));
 }
 

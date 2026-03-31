@@ -177,6 +177,10 @@ void vibe_app_console_write(const char *text) {
     if (text == 0) {
         return;
     }
+    if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->console_write) {
+        g_app_ctx->host->console_write(text);
+        return;
+    }
     while (*text != '\0') {
         vibe_app_console_putc(*text++);
     }

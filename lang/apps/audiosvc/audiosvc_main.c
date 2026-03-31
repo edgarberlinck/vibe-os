@@ -357,6 +357,51 @@ static int audiosvc_read_enum(int control_id, int *value_out) {
     return 0;
 }
 
+static int audiosvc_parse_uint_text(const char *text, int *value_out) {
+    int value = 0;
+
+    if (text == 0 || *text == '\0' || value_out == 0) {
+        return -1;
+    }
+    while (*text != '\0') {
+        if (*text < '0' || *text > '9') {
+            return -1;
+        }
+        value = (value * 10) + (*text - '0');
+        ++text;
+    }
+    *value_out = value;
+    return 0;
+}
+
+static int audiosvc_write_level_percent(int control_id, int percent) {
+    mixer_ctrl_t control = {0};
+    int gain = (percent * AUDIO_MAX_GAIN) / 100;
+
+    if (gain < AUDIO_MIN_GAIN) {
+        gain = AUDIO_MIN_GAIN;
+    }
+    if (gain > AUDIO_MAX_GAIN) {
+        gain = AUDIO_MAX_GAIN;
+    }
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_VALUE;
+    control.un.value.num_channels = 2;
+    control.un.value.level[AUDIO_MIXER_LEVEL_LEFT] = (uint8_t)gain;
+    control.un.value.level[AUDIO_MIXER_LEVEL_RIGHT] = (uint8_t)gain;
+    return vibe_app_audio_mixer_write(&control);
+}
+
+static int audiosvc_write_enum_value(int control_id, int value) {
+    mixer_ctrl_t control = {0};
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_ENUM;
+    control.un.ord = value;
+    return vibe_app_audio_mixer_write(&control);
+}
+
 static int audiosvc_read_state(struct mk_audio_info *info,
                                struct audio_status *status,
                                int *output_volume,
@@ -394,7 +439,7 @@ static int audiosvc_read_state(struct mk_audio_info *info,
 static int audiosvc_write_state_file(const char *path) {
     struct mk_audio_info info;
     struct audio_status status;
-    char text[768];
+    char text[1024];
     int output_volume = 0;
     int input_volume = 0;
     int output_muted = 0;
@@ -437,17 +482,18 @@ static int audiosvc_write_state_file(const char *path) {
     (void)vibe_app_create_dir("/runtime");
     snprintf(text,
              sizeof(text),
-             "device=%s\nversion=%s\nconfig=%s\nbackend=%s\nactive=%d\npending=%d\nxruns=%d\n"
+             "device=%s\nversion=%s\nconfig=%s\nbackend=%s\nbackend_kind=%d\nactive=%d\npending=%d\nxruns=%d\n"
              "output_count=%d\noutput0=%s\noutput1=%s\noutput2=%s\noutput3=%s\n"
              "input_count=%d\ninput0=%s\ninput1=%s\n"
              "output_mask=%u\ninput_mask=%u\nfeature_flags=%u\nstatus_flags=%u\ntransport=%s\ncodecready_quirk=%d\nmultichannel=%d\ncapture_dma=%d\ncorb_rirb=%d\ncodec_probe=%d\nwidget_probe=%d\npath_programmed=%d\ncapture_data=%d\ncapture_xrun=%d\nirq_count=%u\n"
              "hardware=%s\npci_id=%08x\npci_location=%06x\ncodec_id=%08x\noutput_route=%04x\n"
-             "default_output=%s\ndefault_input=%s\n"
+             "default_output=%s\ndefault_input=%s\nselected_output_index=%d\nselected_input_index=%d\n"
              "output_volume=%d\ninput_volume=%d\noutput_muted=%d\ninput_muted=%d\n",
              info.device.name,
              info.device.version,
              info.device.config,
              audiosvc_backend_name(audiosvc_status_backend(&status)),
+             audiosvc_status_backend(&status),
              status.active,
              status._spare[1],
              status._spare[4],
@@ -481,6 +527,8 @@ static int audiosvc_write_state_file(const char *path) {
              info.output_route,
              audiosvc_output_name(&info, selected_output),
              input_count > 0 ? audiosvc_input_name(&info, selected_input) : "none",
+             selected_output,
+             selected_input,
              output_volume,
              input_volume,
              output_muted != 0 ? 1 : 0,
@@ -488,11 +536,97 @@ static int audiosvc_write_state_file(const char *path) {
     return vibe_app_write_file(target, text, (int)strlen(text));
 }
 
+static int audiosvc_apply_settings_file(const char *path) {
+    const char *data = 0;
+    int size = 0;
+    char text[256];
+    char *line;
+    const char *target = path != 0 && *path != '\0' ? path : "/config/audio.cfg";
+    int output_volume = -1;
+    int input_volume = -1;
+    int output_muted = -1;
+    int input_muted = -1;
+    int default_output = -1;
+    int default_input = -1;
+
+    if (vibe_app_read_file(target, &data, &size) != 0 || data == 0 || size <= 0) {
+        return audiosvc_write_state_file(AUDIOSVC_STATUS_EXPORT_PATH);
+    }
+    if (size >= (int)sizeof(text)) {
+        size = (int)sizeof(text) - 1;
+    }
+    memcpy(text, data, (size_t)size);
+    text[size] = '\0';
+
+    line = text;
+    while (*line != '\0') {
+        char *next = line;
+
+        while (*next != '\0' && *next != '\n') {
+            ++next;
+        }
+        if (*next == '\n') {
+            *next = '\0';
+            ++next;
+        }
+
+        if (strncmp(line, "output_volume=", 14u) == 0) {
+            (void)audiosvc_parse_uint_text(line + 14, &output_volume);
+        } else if (strncmp(line, "input_volume=", 13u) == 0) {
+            (void)audiosvc_parse_uint_text(line + 13, &input_volume);
+        } else if (strncmp(line, "output_muted=", 13u) == 0) {
+            (void)audiosvc_parse_uint_text(line + 13, &output_muted);
+        } else if (strncmp(line, "input_muted=", 12u) == 0) {
+            (void)audiosvc_parse_uint_text(line + 12, &input_muted);
+        } else if (strncmp(line, "default_output=", 15u) == 0) {
+            (void)audiosvc_parse_uint_text(line + 15, &default_output);
+        } else if (strncmp(line, "default_input=", 14u) == 0) {
+            (void)audiosvc_parse_uint_text(line + 14, &default_input);
+        }
+
+        line = next;
+    }
+
+    if (output_volume >= 0) {
+        if (audiosvc_write_level_percent(MK_AUDIO_MIXER_OUTPUT_LEVEL, output_volume) != 0) {
+            return -1;
+        }
+    }
+    if (input_volume >= 0) {
+        if (audiosvc_write_level_percent(MK_AUDIO_MIXER_INPUT_LEVEL, input_volume) != 0) {
+            return -1;
+        }
+    }
+    if (output_muted >= 0) {
+        if (audiosvc_write_enum_value(MK_AUDIO_MIXER_OUTPUT_MUTE, output_muted != 0 ? 1 : 0) != 0) {
+            return -1;
+        }
+    }
+    if (input_muted >= 0) {
+        if (audiosvc_write_enum_value(MK_AUDIO_MIXER_INPUT_MUTE, input_muted != 0 ? 1 : 0) != 0) {
+            return -1;
+        }
+    }
+    if (default_output >= 0) {
+        if (audiosvc_write_enum_value(MK_AUDIO_MIXER_OUTPUT_DEFAULT, default_output) != 0) {
+            return -1;
+        }
+    }
+    if (default_input >= 0) {
+        if (audiosvc_write_enum_value(MK_AUDIO_MIXER_INPUT_DEFAULT, default_input) != 0) {
+            return -1;
+        }
+    }
+
+    return audiosvc_write_state_file(AUDIOSVC_STATUS_EXPORT_PATH);
+}
+
 static void audiosvc_usage(void) {
     printf("usage: audiosvc <command> [args]\n");
     printf("commands:\n");
     printf("  status\n");
     printf("  export-state [path]\n");
+    printf("  apply-settings [path]\n");
 }
 
 static int audiosvc_command_status(void) {
@@ -665,6 +799,19 @@ static int audiosvc_command_export_state(const char *path) {
     return 0;
 }
 
+static int audiosvc_command_apply_settings(const char *path) {
+    const char *target = path != 0 && *path != '\0' ? path : "/config/audio.cfg";
+
+    if (audiosvc_apply_settings_file(target) != 0) {
+        audiosvc_debug("audiosvc: apply-settings failed\n");
+        printf("audiosvc: failed to apply %s\n", target);
+        return 1;
+    }
+    audiosvc_debug("audiosvc: apply-settings ok\n");
+    printf("audiosvc: settings applied from %s\n", target);
+    return 0;
+}
+
 static int audiosvc_command_play_asset(const char *path) {
     struct audio_async_playback playback;
     int rc;
@@ -706,6 +853,9 @@ int vibe_app_main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "export-state") == 0) {
         return audiosvc_command_export_state(argc > 2 ? argv[2] : 0);
+    }
+    if (strcmp(argv[1], "apply-settings") == 0) {
+        return audiosvc_command_apply_settings(argc > 2 ? argv[2] : 0);
     }
     if (strcmp(argv[1], "play-asset") == 0) {
         return audiosvc_command_play_asset(argc > 2 ? argv[2] : 0);

@@ -479,12 +479,19 @@ static int busybox_task_pid_alive(uint32_t pid) {
 }
 
 #define BUSYBOX_PENDING_TASK_EVENTS_MAX 8u
+#define BUSYBOX_TASK_EXIT_POLL_TICKS 4u
 
 static struct mk_task_event g_busybox_pending_task_events[BUSYBOX_PENDING_TASK_EVENTS_MAX];
 static uint32_t g_busybox_pending_task_event_count = 0u;
 
 static uint32_t busybox_external_task_class_mask(int argc, char **argv) {
-    if (argc > 0 && argv != 0 && argv[0] != 0 && strcmp(argv[0], "startx") == 0) {
+    char normalized[64];
+
+    if (argc > 0 &&
+        argv != 0 &&
+        argv[0] != 0 &&
+        lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) == 0 &&
+        strcmp(normalized, "startx") == 0) {
         return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
     }
 
@@ -544,7 +551,7 @@ static int busybox_wait_for_task_exit(uint32_t pid) {
     }
 
     for (;;) {
-        if (sys_task_event_receive(&event, MK_TASK_EVENT_WAIT_FOREVER) == 0) {
+        if (sys_task_event_receive(&event, BUSYBOX_TASK_EXIT_POLL_TICKS) == 0) {
             if (event.pid == pid &&
                 event.event_type == MK_TASK_EVENT_TERMINATED) {
                 return 0;
@@ -555,7 +562,6 @@ static int busybox_wait_for_task_exit(uint32_t pid) {
         if (!busybox_task_pid_alive(pid)) {
             return 0;
         }
-        return -1;
     }
 }
 
@@ -579,8 +585,13 @@ static int busybox_prepare_external_argv(int argc,
 
     if (has_slash(argv[0])) {
         int node = fs_resolve(argv[0]);
+        char alias_name[64];
 
-        if (node < 0 || g_fs_nodes[node].is_dir) {
+        if (node >= 0) {
+            if (g_fs_nodes[node].is_dir) {
+                return -1;
+            }
+        } else if (fs_lookup_executable_alias(argv[0], alias_name, (int)sizeof(alias_name)) != 0) {
             return -1;
         }
         patched_argv[0] = (char *)path_basename(argv[0]);

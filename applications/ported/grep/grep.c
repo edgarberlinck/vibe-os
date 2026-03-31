@@ -35,27 +35,43 @@ static int tolower_compat(int c) {
     return c;
 }
 
-static int strstr_case(const char *haystack, const char *needle, int ignore_case) {
-    if (!haystack || !needle || needle[0] == '\0') return 0;
-    
-    if (ignore_case) {
-        for (int i = 0; haystack[i]; i++) {
-            int j = 0;
-            while (needle[j] && haystack[i + j]) {
-                if (tolower_compat(haystack[i + j]) != tolower_compat(needle[j])) {
-                    break;
-                }
-                j++;
+static int grep_line_contains(const char *line,
+                              int line_len,
+                              const char *pattern,
+                              int ignore_case) {
+    int pattern_len;
+
+    if (!line || !pattern || line_len < 0 || pattern[0] == '\0') {
+        return 0;
+    }
+
+    pattern_len = (int)strlen(pattern);
+    if (pattern_len <= 0 || pattern_len > line_len) {
+        return 0;
+    }
+
+    for (int i = 0; i <= line_len - pattern_len; ++i) {
+        int matched = 1;
+
+        for (int j = 0; j < pattern_len; ++j) {
+            int lhs = (unsigned char)line[i + j];
+            int rhs = (unsigned char)pattern[j];
+
+            if (ignore_case) {
+                lhs = tolower_compat(lhs);
+                rhs = tolower_compat(rhs);
             }
-            if (needle[j] == '\0') {
-                return 1;
+            if (lhs != rhs) {
+                matched = 0;
+                break;
             }
         }
-    } else {
-        const char *result = strstr(haystack, needle);
-        return result != NULL ? 1 : 0;
+
+        if (matched) {
+            return 1;
+        }
     }
-    
+
     return 0;
 }
 
@@ -82,13 +98,10 @@ static int grep_file(const char *filename, const char *pattern,
         if (i < size && data[i] == '\n') i++;
         
         /* Check if line matches pattern */
-        int found = 0;
-        
-        /* Search in line */
-        for (int j = line_start; j < line_end; j++) {
-            found = strstr_case(&data[j], pattern, opts->ignore_case);
-            if (found) break;
-        }
+        int found = grep_line_contains(data + line_start,
+                                       line_end - line_start,
+                                       pattern,
+                                       opts->ignore_case);
         
         /* Apply logic */
         int should_print = (found && !opts->invert_match) || 

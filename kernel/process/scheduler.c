@@ -12,6 +12,7 @@
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/event.h>
 #include <kernel/microkernel/launch.h>
+#include <kernel/microkernel/service.h>
 
 /* simple singly‑linked list of processes */
 static process_t *g_head = NULL;
@@ -66,6 +67,10 @@ static struct scheduler_task_event_subscription *
 scheduler_find_task_event_subscription_locked(process_t *subscriber);
 static struct scheduler_task_event_subscription *
 scheduler_alloc_task_event_subscription_locked(process_t *subscriber);
+
+static int scheduler_keep_wait_boost(const process_t *task) {
+    return task != NULL && task->wake_boost_budget != 0u;
+}
 
 static void scheduler_account_runtime(process_t *task, uint32_t now_ticks) {
     if (task == NULL || task->state != PROCESS_RUNNING || task->last_start_tick == 0u) {
@@ -262,7 +267,8 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
      * run ahead of bulk/background work once they become ready again.
      */
     if (task->wait_result == TASK_WAIT_RESULT_SIGNALED) {
-        if (task->wait_event_class == TASK_WAIT_CLASS_IPC) {
+        if (task->wait_event_class == TASK_WAIT_CLASS_IPC &&
+            task->wake_boost_budget != 0u) {
             /*
              * Synchronous service request/reply depends on both sides of the
              * mailbox running immediately once signaled, otherwise a top-tier
@@ -315,6 +321,7 @@ static void scheduler_clear_wait_channel(process_t *task) {
     task->wait_channel = 0;
     task->wait_deadline = 0u;
     task->wait_next = 0;
+    task->wake_boost_budget = 0u;
 }
 
 void scheduler_init(void) {
@@ -507,6 +514,8 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
     process_t *mutable_task;
     struct scheduler_task_class_stream *class_stream;
     struct mk_task_event event_buf;
+    kernel_mailbox_t *target_mailboxes[SCHEDULER_TASK_EVENT_SUBSCRIBERS];
+    uint32_t target_mailbox_count = 0u;
 
     if (task == NULL || task->pid <= 0 || event_type == MK_TASK_EVENT_NONE) {
         return;
@@ -538,11 +547,6 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
     event_buf.tick = kernel_timer_get_ticks();
 
     class_stream = scheduler_task_class_stream_for_class(task->task_class);
-    if (class_stream != NULL) {
-        (void)kernel_mailbox_try_send(&class_stream->mailbox, &event_buf);
-        event_buf.class_pending_depth = kernel_mailbox_count(&class_stream->mailbox);
-        event_buf.class_dropped_events = kernel_mailbox_dropped(&class_stream->mailbox);
-    }
 
     mutable_task->last_task_event_sequence = event_buf.sequence;
     mutable_task->last_task_event_type = event_buf.event_type;
@@ -572,9 +576,20 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
         if ((subscription->task_class_mask & task_class_mask) == 0u) {
             continue;
         }
-        (void)kernel_mailbox_try_send(&subscription->mailbox, &event_buf);
+        if (target_mailbox_count < SCHEDULER_TASK_EVENT_SUBSCRIBERS) {
+            target_mailboxes[target_mailbox_count++] = &subscription->mailbox;
+        }
     }
     spinlock_unlock_irqrestore(&g_task_event_lock, flags);
+
+    if (class_stream != NULL) {
+        (void)kernel_mailbox_try_send(&class_stream->mailbox, &event_buf);
+        event_buf.class_pending_depth = kernel_mailbox_count(&class_stream->mailbox);
+        event_buf.class_dropped_events = kernel_mailbox_dropped(&class_stream->mailbox);
+    }
+    for (index = 0u; index < target_mailbox_count; ++index) {
+        (void)kernel_mailbox_try_send(target_mailboxes[index], &event_buf);
+    }
 }
 
 void scheduler_publish_lifecycle_event(uint32_t event_type, const process_t *task) {
@@ -688,7 +703,11 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
     if (current && current->state == PROCESS_RUNNING && current->current_cpu == (int)cpu_index) {
         current->context = frame;
         scheduler_account_runtime(current, now_ticks);
-        if (current->wait_result != TASK_WAIT_RESULT_NONE) {
+        if (current->wake_boost_budget != 0u) {
+            current->wake_boost_budget -= 1u;
+        }
+        if (current->wait_result != TASK_WAIT_RESULT_NONE &&
+            !scheduler_keep_wait_boost(current)) {
             /*
              * Wakeup priority should buy the task its first resumed slice, not
              * permanently bias every later reschedule after the wait was
@@ -698,6 +717,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
             current->wait_event_kind = TASK_WAIT_EVENT_NONE;
             current->wait_event_class = TASK_WAIT_CLASS_NONE;
             current->wait_owner_service = 0u;
+            current->wake_boost_budget = 0u;
         }
         current->state = PROCESS_READY;
         current->current_cpu = -1;
@@ -866,6 +886,7 @@ void scheduler_terminate_task(process_t *task) {
     task->wait_event_kind = TASK_WAIT_EVENT_NONE;
     task->wait_event_class = TASK_WAIT_CLASS_NONE;
     task->wait_owner_service = 0u;
+    task->wake_boost_budget = 0u;
     task->wait_next = 0;
 
     for (cpu = 0u; cpu < 32u; ++cpu) {
@@ -912,6 +933,7 @@ int scheduler_block_current_ex(const void *wait_channel,
     current->wait_event_kind = wait_event_kind;
     current->wait_event_class = wait_event_class;
     current->wait_owner_service = wait_owner_service;
+    current->wake_boost_budget = 0u;
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     if (g_scheduler_block_trace_budget > 0) {
         g_scheduler_block_trace_budget -= 1;
@@ -967,6 +989,11 @@ int scheduler_complete_wait(process_t *task, uint32_t wait_result) {
         }
         scheduler_clear_wait_channel(task);
         task->wait_result = wait_result;
+        task->wake_boost_budget =
+            (wait_result == TASK_WAIT_RESULT_SIGNALED &&
+             task->wait_event_class == TASK_WAIT_CLASS_IPC)
+                ? (task->kind == PROCESS_KIND_SERVICE ? 12u : 8u)
+                : 0u;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         scheduler_publish_task_event(MK_TASK_EVENT_WOKE, task);
         return 0;

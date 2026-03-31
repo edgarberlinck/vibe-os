@@ -10,6 +10,19 @@
 #define PROCESS_DEFAULT_STACK_SIZE 4096u
 #define PROCESS_MIN_STACK_SIZE 1024u
 
+__attribute__((noreturn)) static void process_entry_return_trampoline(void) {
+    process_t *current = scheduler_current();
+
+    if (current != NULL) {
+        scheduler_terminate_task(current);
+    }
+
+    schedule();
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
 static uint32_t process_normalize_stack_size(uint32_t stack_size) {
     if (stack_size == 0u) {
         stack_size = PROCESS_DEFAULT_STACK_SIZE;
@@ -134,14 +147,20 @@ static uint32_t process_priority_for(enum process_kind kind,
 
 void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
     kernel_trap_frame_t *frame;
+    uintptr_t entry_stack_top;
+    uint32_t *return_slot;
 
-    if (proc == NULL || stack_top < sizeof(kernel_trap_frame_t)) {
+    if (proc == NULL || stack_top < (sizeof(kernel_trap_frame_t) + sizeof(uint32_t))) {
         return;
     }
 
-    frame = (kernel_trap_frame_t *)(stack_top - sizeof(kernel_trap_frame_t));
+    entry_stack_top = stack_top - sizeof(uint32_t);
+    return_slot = (uint32_t *)entry_stack_top;
+    *return_slot = (uint32_t)(uintptr_t)process_entry_return_trampoline;
+
+    frame = (kernel_trap_frame_t *)(entry_stack_top - sizeof(kernel_trap_frame_t));
     memset(frame, 0, sizeof(*frame));
-    frame->esp_dummy = (uint32_t)stack_top;
+    frame->esp_dummy = (uint32_t)entry_stack_top;
     frame->eip = (uint32_t)entry;
     frame->cs = 0x08u;
     frame->eflags = 0x00000202u;
@@ -211,6 +230,7 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->wait_event_kind = TASK_WAIT_EVENT_NONE;
     p->wait_event_class = TASK_WAIT_CLASS_NONE;
     p->wait_owner_service = 0u;
+    p->wake_boost_budget = 0u;
     p->wait_next = 0;
     p->next = NULL;
 

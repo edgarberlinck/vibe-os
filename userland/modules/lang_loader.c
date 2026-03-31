@@ -5,6 +5,7 @@
 #include <userland/modules/include/lang_loader.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
+#include "app_catalog.h"
 
 #include <stdint.h>
 
@@ -16,6 +17,7 @@ static int g_host_read_file_buf_capacity = 0;
 static volatile uint32_t g_lang_arena_owner[3];
 static void lang_debug_vga(int row, const char *text);
 static int lang_has_runtime_stub(const char *name);
+static int lang_catalog_command_exists(const char *name);
 static int lang_load_directory(struct vibe_appfs_directory *directory);
 static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_directory *directory,
                                                       const char *name);
@@ -166,6 +168,38 @@ static void lang_reset_host_fds(void) {
     for (i = 0; i < LANG_HOST_MAX_FDS; ++i) {
         lang_reset_host_fd(&g_lang_host_fds[i]);
     }
+}
+
+static int lang_has_slash(const char *text) {
+    if (text == 0) {
+        return 0;
+    }
+
+    while (*text != '\0') {
+        if (*text == '/') {
+            return 1;
+        }
+        ++text;
+    }
+
+    return 0;
+}
+
+static const char *lang_path_basename(const char *path) {
+    const char *basename = path;
+
+    if (path == 0) {
+        return 0;
+    }
+
+    while (*path != '\0') {
+        if (*path == '/') {
+            basename = path + 1;
+        }
+        ++path;
+    }
+
+    return basename;
 }
 
 static int lang_host_reserve(struct lang_host_fd *fd, int needed) {
@@ -665,62 +699,78 @@ void lang_invalidate_directory_cache(void) {
     lang_memset(&g_cached_directory, 0, (uint32_t)sizeof(g_cached_directory));
 }
 
-int lang_can_run(const char *name) {
-    struct vibe_appfs_directory directory;
-
-    if (!name || name[0] == '\0') {
+static int lang_catalog_command_exists(const char *name) {
+    if (name == 0 || name[0] == '\0') {
         return 0;
     }
 
-    if (lang_has_runtime_stub(name)) {
-        return 1;
-    }
-
-    /*
-     * If the directory cannot be read right now, let the caller try the real
-     * launch path so the loader can surface the concrete storage/catalog error
-     * instead of collapsing everything into "unknown command".
-     */
-    if (lang_load_directory(&directory) != 0) {
-        return 1;
-    }
-
-    return lang_find_entry(&directory, name) != 0 ? 1 : 0;
-}
-
-static int lang_has_runtime_stub(const char *name) {
-    static const char *prefixes[] = {
-        "/bin/",
-        "/usr/bin/",
-        "/compat/bin/"
-    };
-    char path[64];
-    int prefix_i;
-
-    if (!name || name[0] == '\0') {
-        return 0;
-    }
-
-    for (prefix_i = 0; prefix_i < (int)(sizeof(prefixes) / sizeof(prefixes[0])); ++prefix_i) {
-        int pos = 0;
-        const char *prefix = prefixes[prefix_i];
-        const char *cursor = name;
-
-        while (prefix[pos] != '\0' && pos < (int)sizeof(path) - 1) {
-            path[pos] = prefix[pos];
-            ++pos;
-        }
-        while (*cursor != '\0' && pos < (int)sizeof(path) - 1) {
-            path[pos++] = *cursor++;
-        }
-        path[pos] = '\0';
-
-        if (fs_resolve(path) >= 0) {
+    for (int i = 0; i < (int)G_APP_CATALOG_SHELL_COMMANDS_COUNT; ++i) {
+        if (str_eq(name, g_app_catalog_shell_commands[i])) {
             return 1;
         }
     }
 
     return 0;
+}
+
+int lang_normalize_command_name(const char *name_or_path, char *normalized, int max_len) {
+    int node;
+
+    if (name_or_path == 0 || normalized == 0 || max_len <= 0 || name_or_path[0] == '\0') {
+        return -1;
+    }
+
+    if (!lang_has_slash(name_or_path)) {
+        str_copy_limited(normalized, name_or_path, max_len);
+        return 0;
+    }
+
+    node = fs_resolve(name_or_path);
+    if (node >= 0) {
+        if (g_fs_nodes[node].is_dir) {
+            return -1;
+        }
+        str_copy_limited(normalized, lang_path_basename(name_or_path), max_len);
+        return 0;
+    }
+
+    if (fs_lookup_executable_alias(name_or_path, normalized, max_len) == 0) {
+        return 0;
+    }
+
+    return -1;
+}
+
+int lang_can_run(const char *name) {
+    struct vibe_appfs_directory directory;
+    char normalized[64];
+
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+
+    if (lang_normalize_command_name(name, normalized, (int)sizeof(normalized)) != 0) {
+        return 0;
+    }
+
+    if (lang_has_runtime_stub(normalized)) {
+        return 1;
+    }
+
+    /*
+     * Keep the permissive catalog-read fallback so direct launch callers can
+     * still surface concrete AppFS/storage errors instead of collapsing every
+     * miss into "unknown command".
+     */
+    if (lang_load_directory(&directory) != 0) {
+        return 1;
+    }
+
+    return lang_find_entry(&directory, normalized) != 0 ? 1 : 0;
+}
+
+static int lang_has_runtime_stub(const char *name) {
+    return lang_catalog_command_exists(name);
 }
 
 static int lang_load_directory(struct vibe_appfs_directory *directory) {
@@ -1005,8 +1055,12 @@ int lang_try_run(int argc, char **argv) {
     uintptr_t entry_addr;
     int rc = -1;
     int arena_acquired = 0;
+    char normalized_name[64];
 
     if (argc <= 0 || !argv || !argv[0]) {
+        return -1;
+    }
+    if (lang_normalize_command_name(argv[0], normalized_name, (int)sizeof(normalized_name)) != 0) {
         return -1;
     }
 
@@ -1026,7 +1080,7 @@ int lang_try_run(int argc, char **argv) {
     lang_debug_vga(14, "lang: start");
     if (lang_load_directory(&directory) != 0) {
         sys_write_debug("lang: directory load failed\n");
-        if (lang_has_runtime_stub(argv[0])) {
+        if (lang_has_runtime_stub(normalized_name)) {
             lang_write_load_error("catalog");
             return 0;
         }
@@ -1036,12 +1090,12 @@ int lang_try_run(int argc, char **argv) {
     lang_debug_vga(15, "lang: dir ok");
     lang_debug_vga(11, directory.entries[0].name);
 
-    entry = lang_find_entry(&directory, argv[0]);
+    entry = lang_find_entry(&directory, normalized_name);
     if (!entry) {
         sys_write_debug("lang: entry missing\n");
         lang_debug_vga(13, "lang: no entry");
-        if (lang_has_runtime_stub(argv[0])) {
-            lang_write_missing_runtime(argv[0]);
+        if (lang_has_runtime_stub(normalized_name)) {
+            lang_write_missing_runtime(normalized_name);
             return 0;
         }
         return -1;

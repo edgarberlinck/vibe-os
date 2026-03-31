@@ -75,6 +75,7 @@ typedef struct process {
     uint32_t wait_event_kind;
     uint32_t wait_event_class;
     uint32_t wait_owner_service;
+    uint32_t wake_boost_budget;
     struct process *wait_next;
     struct process *next;   /* linked‑list pointer for scheduler */
 } process_t;

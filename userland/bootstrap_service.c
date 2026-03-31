@@ -1,16 +1,27 @@
 #include <kernel/microkernel/audio.h>
+#include <kernel/microkernel/console.h>
+#include <kernel/microkernel/filesystem.h>
 #include <kernel/microkernel/input.h>
 #include <kernel/microkernel/message.h>
+#include <kernel/microkernel/network.h>
+#include <kernel/microkernel/storage.h>
 #include <kernel/microkernel/video.h>
+#include <kernel/drivers/storage/ata.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
 #include <string.h>
 
 #define INPUT_SERVICE_LAYOUT_NAME_MAX 64u
 #define INPUT_SERVICE_LAYOUTS_TEXT_MAX 256u
+#define CONSOLE_SERVICE_TEXT_MAX 4096u
+#define STORAGE_SERVICE_BUFFER_MAX (1024u * 1024u)
+#define FILESYSTEM_SERVICE_BUFFER_MAX (1024u * 1024u)
 #define VIDEO_SERVICE_TEXT_MAX 4096u
 #define VIDEO_SERVICE_BLIT_BUFFER_MAX (1024u * 1024u)
 
+static char g_console_service_text_buffer[CONSOLE_SERVICE_TEXT_MAX];
+static uint8_t g_storage_service_buffer[STORAGE_SERVICE_BUFFER_MAX];
+static uint8_t g_filesystem_service_buffer[FILESYSTEM_SERVICE_BUFFER_MAX];
 static char g_video_service_text_buffer[VIDEO_SERVICE_TEXT_MAX];
 static uint8_t g_video_service_blit_buffer[VIDEO_SERVICE_BLIT_BUFFER_MAX];
 static uint8_t g_video_service_palette_buffer[MK_VIDEO_PALETTE_BYTES];
@@ -63,6 +74,543 @@ static void service_prepare_error_reply(struct mk_message *reply,
                                         const struct mk_message *request,
                                         uint32_t source_pid) {
     service_prepare_reply(reply, request, source_pid);
+}
+
+static void service_log_mode(const char *name) {
+    char buffer[64];
+
+    if (name == 0 || name[0] == '\0') {
+        return;
+    }
+
+    buffer[0] = '\0';
+    str_append(buffer, "service-host: direct ", (int)sizeof(buffer));
+    str_append(buffer, name, (int)sizeof(buffer));
+    str_append(buffer, " loop\n", (int)sizeof(buffer));
+    sys_write_debug(buffer);
+}
+
+static int console_service_reply_result(struct mk_message *reply,
+                                        const struct mk_message *request,
+                                        uint32_t source_pid,
+                                        int value) {
+    struct mk_console_result payload;
+
+    service_prepare_reply(reply, request, source_pid);
+    payload.value = value;
+    return service_set_payload(reply, &payload, sizeof(payload));
+}
+
+static int console_service_load_text(uint32_t transfer_id,
+                                     uint32_t length,
+                                     char **text_out) {
+    if (text_out == 0 || length == 0u || length + 1u > sizeof(g_console_service_text_buffer)) {
+        return -1;
+    }
+    if (sys_transfer_size(transfer_id) < length + 1u) {
+        return -1;
+    }
+
+    memset(g_console_service_text_buffer, 0, length + 1u);
+    if (sys_transfer_read(transfer_id, g_console_service_text_buffer, length + 1u) != 0) {
+        return -1;
+    }
+    if (g_console_service_text_buffer[length] != '\0') {
+        return -1;
+    }
+
+    *text_out = g_console_service_text_buffer;
+    return 0;
+}
+
+static int console_service_handle_request(const struct mk_message *request,
+                                          struct mk_message *reply,
+                                          uint32_t source_pid) {
+    if (request == 0 || reply == 0) {
+        return -1;
+    }
+
+    switch (request->type) {
+    case MK_MSG_CONSOLE_WRITE_DEBUG:
+    case MK_MSG_CONSOLE_TEXT_WRITE: {
+        const struct mk_console_text_request *payload;
+        char *text = 0;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_console_text_request *)request->payload;
+        if (console_service_load_text(payload->transfer_id, payload->length, &text) != 0) {
+            return console_service_reply_result(reply, request, source_pid, -1);
+        }
+        if (request->type == MK_MSG_CONSOLE_WRITE_DEBUG) {
+            sys_write_debug(text);
+            rc = 0;
+        } else {
+            rc = sys_text_write(text);
+        }
+        return console_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_CONSOLE_TEXT_CLEAR:
+        if (request->payload_size != 0u) {
+            return -1;
+        }
+        sys_text_clear();
+        return console_service_reply_result(reply, request, source_pid, 0);
+    case MK_MSG_CONSOLE_TEXT_PUTC: {
+        const struct mk_console_putc_request *payload;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_console_putc_request *)request->payload;
+        sys_text_putc((char)(payload->character & 0xFFu));
+        return console_service_reply_result(reply, request, source_pid, 0);
+    }
+    case MK_MSG_CONSOLE_CURSOR_MOVE: {
+        const struct mk_console_cursor_request *payload;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_console_cursor_request *)request->payload;
+        return console_service_reply_result(reply,
+                                            request,
+                                            source_pid,
+                                            sys_text_move_cursor(payload->delta));
+    }
+    default:
+        return -1;
+    }
+}
+
+static int network_service_reply_result(struct mk_message *reply,
+                                        const struct mk_message *request,
+                                        uint32_t source_pid,
+                                        int value) {
+    struct mk_network_result payload;
+
+    service_prepare_reply(reply, request, source_pid);
+    payload.value = value;
+    return service_set_payload(reply, &payload, sizeof(payload));
+}
+
+static int network_service_handle_request(const struct mk_message *request,
+                                          struct mk_message *reply,
+                                          uint32_t source_pid) {
+    if (request == 0 || reply == 0) {
+        return -1;
+    }
+
+    switch (request->type) {
+    case MK_MSG_HELLO:
+    case MK_MSG_NET_GETINFO: {
+        struct mk_network_info info;
+
+        if (request->payload_size != 0u) {
+            return -1;
+        }
+        memset(&info, 0, sizeof(info));
+        if (sys_network_get_info(&info) != 0) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+        service_prepare_reply(reply, request, source_pid);
+        return service_set_payload(reply, &info, sizeof(info));
+    }
+    case MK_MSG_NET_GET_STATUS: {
+        struct mk_network_status status;
+
+        if (request->payload_size != 0u) {
+            return -1;
+        }
+        memset(&status, 0, sizeof(status));
+        if (sys_network_get_status(&status) != 0) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+        service_prepare_reply(reply, request, source_pid);
+        return service_set_payload(reply, &status, sizeof(status));
+    }
+    case MK_MSG_NET_SCAN: {
+        struct mk_network_scan_request scan_request;
+        struct mk_network_scan_info info;
+
+        if (request->payload_size != sizeof(scan_request)) {
+            return -1;
+        }
+        memcpy(&scan_request, request->payload, sizeof(scan_request));
+        scan_request.if_name[sizeof(scan_request.if_name) - 1u] = '\0';
+        if (strcmp(scan_request.if_name, "wlan0") != 0) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+        memset(&info, 0, sizeof(info));
+        if (sys_network_scan(scan_request.index, &info) != 0) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+        service_prepare_reply(reply, request, source_pid);
+        return service_set_payload(reply, &info, sizeof(info));
+    }
+    case MK_MSG_NET_CONNECT_WIFI:
+        if (request->payload_size != sizeof(struct mk_network_connect_request)) {
+            return -1;
+        }
+        return network_service_reply_result(reply,
+                                            request,
+                                            source_pid,
+                                            sys_network_connect_wifi(
+                                                (const struct mk_network_connect_request *)request->payload));
+    case MK_MSG_NET_DISCONNECT: {
+        struct mk_network_disconnect_request disconnect_request;
+
+        if (request->payload_size != sizeof(disconnect_request)) {
+            return -1;
+        }
+        memcpy(&disconnect_request, request->payload, sizeof(disconnect_request));
+        disconnect_request.if_name[sizeof(disconnect_request.if_name) - 1u] = '\0';
+        return network_service_reply_result(reply,
+                                            request,
+                                            source_pid,
+                                            sys_network_disconnect(disconnect_request.if_name));
+    }
+    case MK_MSG_NET_CONNECT_ETHERNET: {
+        struct mk_network_disconnect_request connect_request;
+
+        if (request->payload_size != sizeof(connect_request)) {
+            return -1;
+        }
+        memcpy(&connect_request, request->payload, sizeof(connect_request));
+        connect_request.if_name[sizeof(connect_request.if_name) - 1u] = '\0';
+        return network_service_reply_result(reply,
+                                            request,
+                                            source_pid,
+                                            sys_network_connect_ethernet(connect_request.if_name));
+    }
+    case MK_MSG_NET_CONFIGURE_ETHERNET: {
+        struct mk_network_ethernet_config config;
+
+        if (request->payload_size != sizeof(config)) {
+            return -1;
+        }
+        memcpy(&config, request->payload, sizeof(config));
+        config.if_name[sizeof(config.if_name) - 1u] = '\0';
+        config.ip_address[sizeof(config.ip_address) - 1u] = '\0';
+        config.gateway[sizeof(config.gateway) - 1u] = '\0';
+        config.dns_server[sizeof(config.dns_server) - 1u] = '\0';
+        return network_service_reply_result(reply,
+                                            request,
+                                            source_pid,
+                                            sys_network_configure_ethernet(&config));
+    }
+    case MK_MSG_NET_SOCKET:
+        if (request->payload_size != sizeof(struct mk_network_socket_request)) {
+            return -1;
+        }
+        return network_service_reply_result(reply, request, source_pid, -1);
+    case MK_MSG_NET_BIND:
+    case MK_MSG_NET_CONNECT:
+        if (request->payload_size != sizeof(struct mk_network_name_request)) {
+            return -1;
+        }
+        return network_service_reply_result(reply, request, source_pid, -1);
+    case MK_MSG_NET_SEND:
+    case MK_MSG_NET_RECV:
+        if (request->payload_size != sizeof(struct mk_network_io_request)) {
+            return -1;
+        }
+        return network_service_reply_result(reply, request, source_pid, -1);
+    case MK_MSG_NET_SETSOCKOPT:
+    case MK_MSG_NET_GETSOCKOPT:
+        if (request->payload_size != sizeof(struct mk_network_option_request)) {
+            return -1;
+        }
+        return network_service_reply_result(reply, request, source_pid, -1);
+    default:
+        return -1;
+    }
+}
+
+static int storage_service_reply_result(struct mk_message *reply,
+                                        const struct mk_message *request,
+                                        uint32_t source_pid,
+                                        int value) {
+    struct mk_storage_result payload;
+
+    service_prepare_reply(reply, request, source_pid);
+    payload.value = value;
+    return service_set_payload(reply, &payload, sizeof(payload));
+}
+
+static int storage_service_handle_request(const struct mk_message *request,
+                                          struct mk_message *reply,
+                                          uint32_t source_pid) {
+    if (request == 0 || reply == 0) {
+        return -1;
+    }
+
+    switch (request->type) {
+    case MK_MSG_BLOCK_READ: {
+        if (request->payload_size == sizeof(struct mk_storage_sectors_request)) {
+            const struct mk_storage_sectors_request *payload;
+            uint32_t byte_count;
+            int rc;
+
+            payload = (const struct mk_storage_sectors_request *)request->payload;
+            if (payload->sector_count == 0u ||
+                payload->sector_count > (STORAGE_SERVICE_BUFFER_MAX / KERNEL_PERSIST_SECTOR_SIZE)) {
+                return storage_service_reply_result(reply, request, source_pid, -1);
+            }
+            byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
+            if (sys_transfer_size(payload->transfer_id) < byte_count) {
+                return storage_service_reply_result(reply, request, source_pid, -1);
+            }
+            rc = sys_storage_read_sectors(payload->lba,
+                                          g_storage_service_buffer,
+                                          payload->sector_count);
+            if (rc == 0 &&
+                sys_transfer_write(payload->transfer_id, g_storage_service_buffer, byte_count) != 0) {
+                rc = -1;
+            }
+            return storage_service_reply_result(reply, request, source_pid, rc);
+        }
+
+        if (request->payload_size == sizeof(struct mk_storage_persist_request)) {
+            const struct mk_storage_persist_request *payload;
+            int rc;
+
+            payload = (const struct mk_storage_persist_request *)request->payload;
+            if (payload->size == 0u || payload->size > sizeof(g_storage_service_buffer) ||
+                sys_transfer_size(payload->transfer_id) < payload->size) {
+                return storage_service_reply_result(reply, request, source_pid, -1);
+            }
+            rc = sys_storage_load(g_storage_service_buffer, payload->size);
+            if (rc == 0 &&
+                sys_transfer_write(payload->transfer_id, g_storage_service_buffer, payload->size) != 0) {
+                rc = -1;
+            }
+            return storage_service_reply_result(reply, request, source_pid, rc);
+        }
+
+        return -1;
+    }
+    case MK_MSG_BLOCK_WRITE: {
+        if (request->payload_size == sizeof(struct mk_storage_sectors_request)) {
+            const struct mk_storage_sectors_request *payload;
+            uint32_t byte_count;
+            int rc;
+
+            payload = (const struct mk_storage_sectors_request *)request->payload;
+            if (payload->sector_count == 0u ||
+                payload->sector_count > (STORAGE_SERVICE_BUFFER_MAX / KERNEL_PERSIST_SECTOR_SIZE)) {
+                return storage_service_reply_result(reply, request, source_pid, -1);
+            }
+            byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
+            if (sys_transfer_size(payload->transfer_id) < byte_count ||
+                sys_transfer_read(payload->transfer_id, g_storage_service_buffer, byte_count) != 0) {
+                return storage_service_reply_result(reply, request, source_pid, -1);
+            }
+            rc = sys_storage_write_sectors(payload->lba,
+                                           g_storage_service_buffer,
+                                           payload->sector_count);
+            return storage_service_reply_result(reply, request, source_pid, rc);
+        }
+
+        if (request->payload_size == sizeof(struct mk_storage_persist_request)) {
+            const struct mk_storage_persist_request *payload;
+            int rc;
+
+            payload = (const struct mk_storage_persist_request *)request->payload;
+            if (payload->size == 0u || payload->size > sizeof(g_storage_service_buffer) ||
+                sys_transfer_size(payload->transfer_id) < payload->size ||
+                sys_transfer_read(payload->transfer_id, g_storage_service_buffer, payload->size) != 0) {
+                return storage_service_reply_result(reply, request, source_pid, -1);
+            }
+            rc = sys_storage_save(g_storage_service_buffer, payload->size);
+            return storage_service_reply_result(reply, request, source_pid, rc);
+        }
+
+        return -1;
+    }
+    case MK_MSG_HELLO:
+    case MK_MSG_BLOCK_INFO: {
+        struct mk_storage_info info;
+
+        memset(&info, 0, sizeof(info));
+        info.total_sectors = sys_storage_total_sectors();
+        info.partition_start_lba = sys_storage_partition_start_lba();
+        service_prepare_reply(reply, request, source_pid);
+        return service_set_payload(reply, &info, sizeof(info));
+    }
+    default:
+        return -1;
+    }
+}
+
+static int filesystem_service_reply_result(struct mk_message *reply,
+                                           const struct mk_message *request,
+                                           uint32_t source_pid,
+                                           int value) {
+    struct mk_fs_result payload;
+
+    service_prepare_reply(reply, request, source_pid);
+    payload.value = value;
+    return service_set_payload(reply, &payload, sizeof(payload));
+}
+
+static int filesystem_service_load_path(uint32_t transfer_id,
+                                        uint32_t path_length,
+                                        char **path_out) {
+    char *path;
+
+    if (path_out == 0 || path_length == 0u) {
+        return -1;
+    }
+    if (path_length + 1u > sizeof(g_filesystem_service_buffer) ||
+        sys_transfer_size(transfer_id) < path_length + 1u) {
+        return -1;
+    }
+
+    path = (char *)g_filesystem_service_buffer;
+    memset(path, 0, path_length + 1u);
+    if (sys_transfer_read(transfer_id, path, path_length + 1u) != 0) {
+        return -1;
+    }
+    if (path[path_length] != '\0') {
+        return -1;
+    }
+
+    *path_out = path;
+    return 0;
+}
+
+static int filesystem_service_handle_request(const struct mk_message *request,
+                                             struct mk_message *reply,
+                                             uint32_t source_pid) {
+    if (request == 0 || reply == 0) {
+        return -1;
+    }
+
+    switch (request->type) {
+    case MK_MSG_FS_OPEN: {
+        const struct mk_fs_open_request *payload;
+        char *path = 0;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_fs_open_request *)request->payload;
+        if (filesystem_service_load_path(payload->path_transfer_id, payload->path_length, &path) != 0) {
+            return filesystem_service_reply_result(reply, request, source_pid, -1);
+        }
+        rc = sys_open(path, (int)payload->flags);
+        return filesystem_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_FS_READ: {
+        const struct mk_fs_io_request *payload;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_fs_io_request *)request->payload;
+        if (payload->size > sizeof(g_filesystem_service_buffer) ||
+            sys_transfer_size(payload->transfer_id) < payload->size) {
+            return filesystem_service_reply_result(reply, request, source_pid, -1);
+        }
+        rc = sys_read(payload->fd, g_filesystem_service_buffer, payload->size);
+        if (rc > 0 &&
+            sys_transfer_write(payload->transfer_id, g_filesystem_service_buffer, (uint32_t)rc) != 0) {
+            rc = -1;
+        }
+        return filesystem_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_FS_WRITE: {
+        const struct mk_fs_io_request *payload;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_fs_io_request *)request->payload;
+        if (payload->size > sizeof(g_filesystem_service_buffer) ||
+            sys_transfer_size(payload->transfer_id) < payload->size ||
+            sys_transfer_read(payload->transfer_id, g_filesystem_service_buffer, payload->size) != 0) {
+            return filesystem_service_reply_result(reply, request, source_pid, -1);
+        }
+        rc = sys_write(payload->fd, g_filesystem_service_buffer, payload->size);
+        return filesystem_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_FS_CLOSE: {
+        const struct mk_fs_close_request *payload;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_fs_close_request *)request->payload;
+        return filesystem_service_reply_result(reply,
+                                               request,
+                                               source_pid,
+                                               sys_close(payload->fd));
+    }
+    case MK_MSG_FS_LSEEK: {
+        const struct mk_fs_seek_request *payload;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_fs_seek_request *)request->payload;
+        return filesystem_service_reply_result(reply,
+                                               request,
+                                               source_pid,
+                                               (int)sys_lseek(payload->fd,
+                                                              (off_t)payload->offset,
+                                                              payload->whence));
+    }
+    case MK_MSG_FS_STAT: {
+        const struct mk_fs_stat_request *payload;
+        char *path = 0;
+        struct stat st;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_fs_stat_request *)request->payload;
+        if (filesystem_service_load_path(payload->path_transfer_id, payload->path_length, &path) != 0 ||
+            sys_transfer_size(payload->stat_transfer_id) < sizeof(st)) {
+            return filesystem_service_reply_result(reply, request, source_pid, -1);
+        }
+        memset(&st, 0, sizeof(st));
+        rc = sys_stat(path, &st);
+        if (rc == 0 &&
+            sys_transfer_write(payload->stat_transfer_id, &st, (uint32_t)sizeof(st)) != 0) {
+            rc = -1;
+        }
+        return filesystem_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_FS_FSTAT: {
+        const struct mk_fs_fstat_request *payload;
+        struct stat st;
+        int rc;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_fs_fstat_request *)request->payload;
+        if (sys_transfer_size(payload->stat_transfer_id) < sizeof(st)) {
+            return filesystem_service_reply_result(reply, request, source_pid, -1);
+        }
+        memset(&st, 0, sizeof(st));
+        rc = sys_fstat(payload->fd, &st);
+        if (rc == 0 &&
+            sys_transfer_write(payload->stat_transfer_id, &st, (uint32_t)sizeof(st)) != 0) {
+            rc = -1;
+        }
+        return filesystem_service_reply_result(reply, request, source_pid, rc);
+    }
+    default:
+        return -1;
+    }
 }
 
 static int input_service_reply_result(struct mk_message *reply,
@@ -860,7 +1408,7 @@ static int video_service_handle_request(const struct mk_message *request,
     }
 }
 
-__attribute__((section(".entry"))) void userland_service_entry(void) {
+__attribute__((section(".entry"))) void userland_console_service_entry(void) {
     struct userland_launch_info info;
     struct mk_message request;
     struct mk_message reply;
@@ -874,13 +1422,116 @@ __attribute__((section(".entry"))) void userland_service_entry(void) {
 
     source_pid = (uint32_t)info.pid;
     service_log_online(&info);
+    service_log_mode(info.name);
 
     for (;;) {
         if (sys_service_receive(&request) != (int)sizeof(request)) {
             continue;
         }
 
-        if (sys_service_backend(&request, &reply) != 0) {
+        if (console_service_handle_request(&request, &reply, source_pid) != 0) {
+            service_prepare_error_reply(&reply, &request, source_pid);
+        }
+        if (reply.source_pid == 0u) {
+            reply.source_pid = source_pid;
+        }
+        if (reply.target_pid == 0u) {
+            reply.target_pid = request.source_pid;
+        }
+        (void)sys_service_send(&reply);
+    }
+}
+
+__attribute__((section(".entry"))) void userland_storage_service_entry(void) {
+    struct userland_launch_info info;
+    struct mk_message request;
+    struct mk_message reply;
+    uint32_t source_pid;
+
+    if (sys_launch_info(&info) != 0) {
+        for (;;) {
+            sys_yield();
+        }
+    }
+
+    source_pid = (uint32_t)info.pid;
+    service_log_online(&info);
+    service_log_mode(info.name);
+
+    for (;;) {
+        if (sys_service_receive(&request) != (int)sizeof(request)) {
+            continue;
+        }
+
+        if (storage_service_handle_request(&request, &reply, source_pid) != 0) {
+            service_prepare_error_reply(&reply, &request, source_pid);
+        }
+        if (reply.source_pid == 0u) {
+            reply.source_pid = source_pid;
+        }
+        if (reply.target_pid == 0u) {
+            reply.target_pid = request.source_pid;
+        }
+        (void)sys_service_send(&reply);
+    }
+}
+
+__attribute__((section(".entry"))) void userland_filesystem_service_entry(void) {
+    struct userland_launch_info info;
+    struct mk_message request;
+    struct mk_message reply;
+    uint32_t source_pid;
+
+    if (sys_launch_info(&info) != 0) {
+        for (;;) {
+            sys_yield();
+        }
+    }
+
+    source_pid = (uint32_t)info.pid;
+    service_log_online(&info);
+    service_log_mode(info.name);
+
+    for (;;) {
+        if (sys_service_receive(&request) != (int)sizeof(request)) {
+            continue;
+        }
+
+        if (filesystem_service_handle_request(&request, &reply, source_pid) != 0) {
+            service_prepare_error_reply(&reply, &request, source_pid);
+        }
+        if (reply.source_pid == 0u) {
+            reply.source_pid = source_pid;
+        }
+        if (reply.target_pid == 0u) {
+            reply.target_pid = request.source_pid;
+        }
+        (void)sys_service_send(&reply);
+    }
+}
+
+__attribute__((section(".entry"))) void userland_network_service_entry(void) {
+    struct userland_launch_info info;
+    struct mk_message request;
+    struct mk_message reply;
+    uint32_t source_pid;
+
+    if (sys_launch_info(&info) != 0) {
+        for (;;) {
+            sys_yield();
+        }
+    }
+
+    source_pid = (uint32_t)info.pid;
+    service_log_online(&info);
+    service_log_mode(info.name);
+
+    for (;;) {
+        if (sys_service_receive(&request) != (int)sizeof(request)) {
+            continue;
+        }
+
+        if (network_service_handle_request(&request, &reply, source_pid) != 0) {
             service_prepare_error_reply(&reply, &request, source_pid);
         }
         if (reply.source_pid == 0u) {

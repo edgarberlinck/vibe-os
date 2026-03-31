@@ -1,4 +1,4 @@
-# name	build_var	shell_visible	prefer_external	stub_paths
+# name	build_var	shell_visible	prefer_external	alias_paths
 hello	HELLO_APP_BIN	1	0	/bin/hello
 js	JS_APP_BIN	1	0	/bin/js
 ruby	RUBY_APP_BIN	1	0	/bin/ruby

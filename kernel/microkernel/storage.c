@@ -15,6 +15,34 @@ static uint32_t mk_storage_current_pid(void) {
     return scheduler_current_pid();
 }
 
+static int mk_storage_current_process_is_service_worker(void) {
+    process_t *current = scheduler_current();
+
+    return current != 0 && current->service_type == MK_SERVICE_STORAGE;
+}
+
+static int mk_storage_reply_result(struct mk_message *reply, int value) {
+    struct mk_storage_result result;
+
+    if (reply == 0) {
+        return -1;
+    }
+
+    result.value = value;
+    return mk_message_set_payload(reply, &result, sizeof(result));
+}
+
+static int mk_storage_decode_result(const struct mk_message *reply) {
+    struct mk_storage_result result;
+
+    if (reply == 0 || reply->payload_size != sizeof(result)) {
+        return -1;
+    }
+
+    memcpy(&result, reply->payload, sizeof(result));
+    return result.value;
+}
+
 static int mk_storage_share_transfer(uint32_t transfer_id, uint32_t permissions) {
     const struct mk_service_record *service = mk_service_find_by_type(MK_SERVICE_STORAGE);
 
@@ -42,6 +70,7 @@ static int mk_storage_local_handler(const struct mk_message *request,
             const struct mk_storage_sectors_request *payload;
             uint32_t byte_count;
             void *buffer;
+            int rc;
 
             payload = (const struct mk_storage_sectors_request *)request->payload;
             byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
@@ -49,21 +78,24 @@ static int mk_storage_local_handler(const struct mk_message *request,
             if (buffer == 0 || mk_transfer_size(payload->transfer_id) < byte_count) {
                 return -1;
             }
-            return kernel_storage_read_sectors(payload->lba,
-                                               buffer,
-                                               payload->sector_count);
+            rc = kernel_storage_read_sectors(payload->lba,
+                                             buffer,
+                                             payload->sector_count);
+            return mk_storage_reply_result(reply, rc);
         }
 
         if (request->payload_size == sizeof(struct mk_storage_persist_request)) {
             const struct mk_storage_persist_request *payload;
             void *buffer;
+            int rc;
 
             payload = (const struct mk_storage_persist_request *)request->payload;
             buffer = mk_transfer_data_write(payload->transfer_id);
             if (buffer == 0 || mk_transfer_size(payload->transfer_id) < payload->size) {
                 return -1;
             }
-            return kernel_storage_load(buffer, payload->size);
+            rc = kernel_storage_load(buffer, payload->size);
+            return mk_storage_reply_result(reply, rc);
         }
 
         return -1;
@@ -73,6 +105,7 @@ static int mk_storage_local_handler(const struct mk_message *request,
             const struct mk_storage_sectors_request *payload;
             uint32_t byte_count;
             void *buffer;
+            int rc;
 
             payload = (const struct mk_storage_sectors_request *)request->payload;
             byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
@@ -80,21 +113,24 @@ static int mk_storage_local_handler(const struct mk_message *request,
             if (buffer == 0 || mk_transfer_size(payload->transfer_id) < byte_count) {
                 return -1;
             }
-            return kernel_storage_write_sectors(payload->lba,
-                                                buffer,
-                                                payload->sector_count);
+            rc = kernel_storage_write_sectors(payload->lba,
+                                              buffer,
+                                              payload->sector_count);
+            return mk_storage_reply_result(reply, rc);
         }
 
         if (request->payload_size == sizeof(struct mk_storage_persist_request)) {
             const struct mk_storage_persist_request *persist;
             void *buffer;
+            int rc;
 
             persist = (const struct mk_storage_persist_request *)request->payload;
             buffer = (void *)mk_transfer_data_read(persist->transfer_id);
             if (buffer == 0 || mk_transfer_size(persist->transfer_id) < persist->size) {
                 return -1;
             }
-            return kernel_storage_save(buffer, persist->size);
+            rc = kernel_storage_save(buffer, persist->size);
+            return mk_storage_reply_result(reply, rc);
         }
 
         return -1;
@@ -137,7 +173,7 @@ void mk_storage_service_init(void) {
                                      "storage",
                                      mk_storage_local_handler,
                                      0,
-                                     userland_service_entry,
+                                     userland_storage_service_entry,
                                      8192u,
                                      MK_LAUNCH_FLAG_BOOTSTRAP |
                                      MK_LAUNCH_FLAG_BUILTIN |
@@ -155,16 +191,14 @@ int mk_storage_service_read_sectors(uint32_t lba, void *dst, uint32_t sector_cou
     struct mk_storage_sectors_request payload;
     uint32_t transfer_id;
     uint32_t byte_count;
+    int rc;
 
     if (dst == 0 || sector_count == 0u) {
         return -1;
     }
-    /*
-     * Storage syscalls already execute in kernel context and can safely access
-     * the caller buffer through the current address space mappings. Using a
-     * transfer slot here leaks heap because the kernel heap is still bump-only.
-     */
-    return kernel_storage_read_sectors(lba, dst, sector_count);
+    if (mk_storage_current_process_is_service_worker()) {
+        return kernel_storage_read_sectors(lba, dst, sector_count);
+    }
 
     byte_count = sector_count * KERNEL_PERSIST_SECTOR_SIZE;
     if (mk_transfer_create(mk_storage_current_pid(), byte_count, &transfer_id) != 0) {
@@ -188,12 +222,13 @@ int mk_storage_service_read_sectors(uint32_t lba, void *dst, uint32_t sector_cou
         return -1;
     }
     g_last_storage_reply = reply;
-    if (mk_transfer_copy_to(transfer_id, dst, byte_count) != 0) {
+    rc = mk_storage_decode_result(&reply);
+    if (rc == 0 && mk_transfer_copy_to(transfer_id, dst, byte_count) != 0) {
         (void)mk_transfer_destroy(transfer_id);
         return -1;
     }
     (void)mk_transfer_destroy(transfer_id);
-    return 0;
+    return rc;
 }
 
 int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sector_count) {
@@ -202,9 +237,13 @@ int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sec
     struct mk_storage_sectors_request payload;
     uint32_t transfer_id;
     uint32_t byte_count;
+    int rc;
 
     if (src == 0 || sector_count == 0u) {
         return -1;
+    }
+    if (mk_storage_current_process_is_service_worker()) {
+        return kernel_storage_write_sectors(lba, src, sector_count);
     }
 
     byte_count = sector_count * KERNEL_PERSIST_SECTOR_SIZE;
@@ -232,8 +271,9 @@ int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sec
         return -1;
     }
     g_last_storage_reply = reply;
+    rc = mk_storage_decode_result(&reply);
     (void)mk_transfer_destroy(transfer_id);
-    return 0;
+    return rc;
 }
 
 int mk_storage_service_load(void *dst, uint32_t size) {
@@ -241,11 +281,14 @@ int mk_storage_service_load(void *dst, uint32_t size) {
     struct mk_message reply;
     struct mk_storage_persist_request payload;
     uint32_t transfer_id;
+    int rc;
 
     if (dst == 0 || size == 0u) {
         return -1;
     }
-    return kernel_storage_load(dst, size);
+    if (mk_storage_current_process_is_service_worker()) {
+        return kernel_storage_load(dst, size);
+    }
 
     if (mk_transfer_create(mk_storage_current_pid(), size, &transfer_id) != 0) {
         return -1;
@@ -266,12 +309,13 @@ int mk_storage_service_load(void *dst, uint32_t size) {
         return -1;
     }
     g_last_storage_reply = reply;
-    if (mk_transfer_copy_to(transfer_id, dst, size) != 0) {
+    rc = mk_storage_decode_result(&reply);
+    if (rc == 0 && mk_transfer_copy_to(transfer_id, dst, size) != 0) {
         (void)mk_transfer_destroy(transfer_id);
         return -1;
     }
     (void)mk_transfer_destroy(transfer_id);
-    return 0;
+    return rc;
 }
 
 int mk_storage_service_save(const void *src, uint32_t size) {
@@ -279,11 +323,14 @@ int mk_storage_service_save(const void *src, uint32_t size) {
     struct mk_message reply;
     struct mk_storage_persist_request payload;
     uint32_t transfer_id;
+    int rc;
 
     if (src == 0 || size == 0u) {
         return -1;
     }
-    return kernel_storage_save(src, size);
+    if (mk_storage_current_process_is_service_worker()) {
+        return kernel_storage_save(src, size);
+    }
 
     if (mk_transfer_create(mk_storage_current_pid(), size, &transfer_id) != 0) {
         return -1;
@@ -308,8 +355,9 @@ int mk_storage_service_save(const void *src, uint32_t size) {
         return -1;
     }
     g_last_storage_reply = reply;
+    rc = mk_storage_decode_result(&reply);
     (void)mk_transfer_destroy(transfer_id);
-    return 0;
+    return rc;
 }
 
 uint32_t mk_storage_service_total_sectors(void) {
@@ -317,13 +365,9 @@ uint32_t mk_storage_service_total_sectors(void) {
     struct mk_message reply;
     struct mk_storage_info info;
 
-    /*
-     * Read-only geometry queries are used by interactive shell flows such as
-     * vibefetch during desktop startup. Keep them on the kernel-owned block
-     * state until the storage service request/reply path is proven reliable
-     * for info requests as well.
-     */
-    return kernel_storage_total_sectors();
+    if (mk_storage_current_process_is_service_worker()) {
+        return kernel_storage_total_sectors();
+    }
 
     if (mk_storage_prepare_request(&request_message, MK_MSG_BLOCK_INFO, 0, 0u) != 0) {
         return 0u;
@@ -345,7 +389,9 @@ uint32_t mk_storage_service_partition_start_lba(void) {
     struct mk_message reply;
     struct mk_storage_info info;
 
-    return kernel_storage_partition_start_lba();
+    if (mk_storage_current_process_is_service_worker()) {
+        return kernel_storage_partition_start_lba();
+    }
 
     if (mk_storage_prepare_request(&request_message, MK_MSG_BLOCK_INFO, 0, 0u) != 0) {
         return 0u;

@@ -28,7 +28,6 @@
 #include <kernel/microkernel/network.h>
 #include <kernel/microkernel/video.h>
 #include <kernel/microkernel/service.h>
-#include <sys/audioio.h>
 
 #define DESKTOP_NETWORK_PROFILE_MAX 4
 #define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
@@ -341,30 +340,6 @@ static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
     }
 }
 
-static int sound_applet_output_count_from_info(const struct mk_audio_info *info) {
-    if (info == 0) {
-        return 1;
-    }
-    if ((int)info->parameters._spare[1] > 0) {
-        return (int)info->parameters._spare[1];
-    }
-    return 1;
-}
-
-static int sound_applet_input_count_from_info(const struct mk_audio_info *info) {
-    if (info == 0) {
-        return 0;
-    }
-    return (int)info->parameters._spare[2];
-}
-
-static unsigned sound_applet_output_mask_from_info(const struct mk_audio_info *info) {
-    if (info == 0) {
-        return 0x1u;
-    }
-    return info->parameters._spare[3] != 0u ? info->parameters._spare[3] : 0x1u;
-}
-
 static const char *sound_applet_output_label(int index) {
     unsigned mask = g_sound_applet.output_mask != 0u ? g_sound_applet.output_mask : 0x1u;
     const char **labels = g_sound_applet.backend_kind == 2 ? g_sound_outputs_hda : g_sound_outputs;
@@ -443,6 +418,95 @@ static void desktop_append_uint(char *buf, int value, int max_len) {
     buf[len] = '\0';
 }
 
+static int desktop_read_text_file(const char *path, char *text, int text_size) {
+    int node;
+    int size;
+
+    if (path == 0 || text == 0 || text_size <= 0) {
+        return -1;
+    }
+
+    node = fs_resolve(path);
+    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir || g_fs_nodes[node].size <= 0) {
+        return -1;
+    }
+
+    size = g_fs_nodes[node].size;
+    if (size >= text_size) {
+        size = text_size - 1;
+    }
+    memcpy(text, g_fs_nodes[node].data, (size_t)size);
+    text[size] = '\0';
+    return 0;
+}
+
+static int desktop_text_is_placeholder(const char *text) {
+    return text == 0 || *text == '\0' || (text[0] == '-' && text[1] == '\0');
+}
+
+static uint32_t desktop_parse_network_link_state(const char *text) {
+    if (text == 0) {
+        return MK_NETWORK_LINK_DISCONNECTED;
+    }
+    if (str_eq(text, "connected")) {
+        return MK_NETWORK_LINK_CONNECTED;
+    }
+    if (str_eq(text, "connecting")) {
+        return MK_NETWORK_LINK_CONNECTING;
+    }
+    return MK_NETWORK_LINK_DISCONNECTED;
+}
+
+static uint32_t desktop_parse_network_kind(const char *text) {
+    if (text == 0) {
+        return 0u;
+    }
+    if (str_eq(text, "wifi")) {
+        return MK_NETWORK_IF_WIFI;
+    }
+    if (str_eq(text, "ethernet")) {
+        return MK_NETWORK_IF_ETHERNET;
+    }
+    if (str_eq(text, "loopback")) {
+        return MK_NETWORK_IF_LOOPBACK;
+    }
+    return 0u;
+}
+
+static uint32_t desktop_parse_network_security(const char *text) {
+    if (text == 0) {
+        return MK_NETWORK_SECURITY_OPEN;
+    }
+    if (str_eq(text, "wpa-psk")) {
+        return MK_NETWORK_SECURITY_WPA_PSK;
+    }
+    return MK_NETWORK_SECURITY_OPEN;
+}
+
+static int desktop_parse_audio_backend_kind(const char *text) {
+    int value = 0;
+
+    if (text == 0) {
+        return 0;
+    }
+    if (desktop_parse_uint(text, &value)) {
+        return value;
+    }
+    if (str_eq(text, "compat-uaudio")) {
+        return 4;
+    }
+    if (str_eq(text, "pcspkr")) {
+        return 3;
+    }
+    if (str_eq(text, "compat-azalia")) {
+        return 2;
+    }
+    if (str_eq(text, "compat-ac97")) {
+        return 1;
+    }
+    return 0;
+}
+
 static const uint8_t g_color_palette_256[] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
@@ -475,6 +539,8 @@ static const uint8_t g_color_palette_256[] = {
 #define TRASH_ITEM_NAME "__item"
 #define DESKTOP_AUDIO_SETTINGS_PATH "/config/audio.cfg"
 #define DESKTOP_NETWORK_SETTINGS_PATH "/config/network.cfg"
+#define DESKTOP_AUDIO_RUNTIME_STATE_PATH "/runtime/audiosvc-status.txt"
+#define DESKTOP_NETWORK_RUNTIME_STATE_PATH "/runtime/netmgrd-status.txt"
 
 enum {
     FMENU_OPEN = 0,
@@ -501,8 +567,7 @@ enum {
     DESKTOP_STARTUP_TASK_NETWORK_SYNC = 1u << 2,
     DESKTOP_STARTUP_TASK_NETWORK_RECONCILE = 1u << 3,
     DESKTOP_STARTUP_TASK_NETWORK_EXPORT = 1u << 4,
-    DESKTOP_STARTUP_TASK_UI_ASSETS = 1u << 5,
-    DESKTOP_STARTUP_TASK_FS_CATALOG = 1u << 6
+    DESKTOP_STARTUP_TASK_UI_ASSETS = 1u << 5
 };
 enum {
     APPCTX_PRIMARY = 0,
@@ -750,6 +815,8 @@ static void network_applet_sync_backend(int force);
 static int network_applet_set_autoconnect(const char *ssid);
 static int network_applet_forget_profile(const char *ssid);
 static void sound_applet_export_service_state(void);
+static int sound_applet_apply_saved_settings(void);
+static void network_applet_export_service_state(void);
 static int desktop_launch_detached(int argc, char **argv);
 static int desktop_launch_detached_with_failure_log(int argc, char **argv, const char *failure_log);
 static void desktop_queue_startup_background_tasks(void);
@@ -5532,63 +5599,90 @@ static int sound_slider_value_from_x(const struct rect *slider, int x) {
     return (relative * 100) / slider->w;
 }
 
-static int sound_applet_read_level(int control_id, int *value_out) {
-    mixer_ctrl_t control = {0};
+static int sound_applet_load_runtime_state(void) {
+    char text[1024];
+    int backend_kind = -1;
+    int output_count = -1;
+    int input_count = -1;
+    int selected_output = -1;
+    int selected_input = -1;
+    int output_volume = -1;
+    int input_volume = -1;
+    int output_muted = -1;
+    int input_muted = -1;
+    int output_mask = -1;
 
-    control.dev = control_id;
-    control.type = AUDIO_MIXER_VALUE;
-
-    if (value_out == 0) {
-        return -1;
-    }
-    if (sys_audio_mixer_read(&control) != 0) {
-        return -1;
-    }
-    if (control.type != AUDIO_MIXER_VALUE || control.un.value.num_channels <= 0) {
-        return -1;
-    }
-
-    *value_out = control.un.value.level[0];
-    return 0;
-}
-
-static int sound_applet_read_mute(int control_id, int *muted_out) {
-    mixer_ctrl_t control = {0};
-
-    control.dev = control_id;
-    control.type = AUDIO_MIXER_ENUM;
-
-    if (muted_out == 0) {
-        return -1;
-    }
-    if (sys_audio_mixer_read(&control) != 0) {
-        return -1;
-    }
-    if (control.type != AUDIO_MIXER_ENUM) {
+    if (desktop_read_text_file(DESKTOP_AUDIO_RUNTIME_STATE_PATH, text, (int)sizeof(text)) != 0) {
         return -1;
     }
 
-    *muted_out = control.un.ord != 0;
-    return 0;
-}
+    for (char *line = text; *line != '\0'; ) {
+        char *next = line;
 
-static int sound_applet_read_enum(int control_id, int *value_out) {
-    mixer_ctrl_t control = {0};
+        while (*next != '\0' && *next != '\n') {
+            ++next;
+        }
+        if (*next == '\n') {
+            *next = '\0';
+            ++next;
+        }
 
-    control.dev = control_id;
-    control.type = AUDIO_MIXER_ENUM;
+        if (desktop_starts_with(line, "backend_kind=") && desktop_parse_uint(line + 13, &backend_kind)) {
+        } else if (desktop_starts_with(line, "backend=")) {
+            backend_kind = desktop_parse_audio_backend_kind(line + 8);
+        } else if (desktop_starts_with(line, "output_count=") && desktop_parse_uint(line + 13, &output_count)) {
+        } else if (desktop_starts_with(line, "input_count=") && desktop_parse_uint(line + 12, &input_count)) {
+        } else if (desktop_starts_with(line, "selected_output_index=") &&
+                   desktop_parse_uint(line + 22, &selected_output)) {
+        } else if (desktop_starts_with(line, "selected_input_index=") &&
+                   desktop_parse_uint(line + 21, &selected_input)) {
+        } else if (desktop_starts_with(line, "output_volume=") && desktop_parse_uint(line + 14, &output_volume)) {
+        } else if (desktop_starts_with(line, "input_volume=") && desktop_parse_uint(line + 13, &input_volume)) {
+        } else if (desktop_starts_with(line, "output_muted=") && desktop_parse_uint(line + 13, &output_muted)) {
+        } else if (desktop_starts_with(line, "input_muted=") && desktop_parse_uint(line + 12, &input_muted)) {
+        } else if (desktop_starts_with(line, "output_mask=") && desktop_parse_uint(line + 12, &output_mask)) {
+        }
 
-    if (value_out == 0) {
-        return -1;
+        line = next;
     }
-    if (sys_audio_mixer_read(&control) != 0) {
-        return -1;
+
+    if (backend_kind >= 0) {
+        g_sound_applet.backend_kind = backend_kind;
     }
-    if (control.type != AUDIO_MIXER_ENUM) {
-        return -1;
+    if (output_count < 1) {
+        output_count = 1;
+    }
+    if (input_count < 0) {
+        input_count = 0;
+    }
+    g_sound_applet.output_count = output_count;
+    g_sound_applet.input_count = input_count;
+    g_sound_applet.output_mask = output_mask > 0 ? (unsigned)output_mask : 0x1u;
+    if (output_volume >= 0 && output_volume <= 100) {
+        g_sound_applet.output_volume = output_volume;
+    }
+    if (input_volume >= 0 && input_volume <= 100) {
+        g_sound_applet.input_volume = input_volume;
+    }
+    if (output_muted >= 0) {
+        g_sound_applet.output_muted = output_muted != 0;
+    }
+    if (input_muted >= 0) {
+        g_sound_applet.input_muted = input_muted != 0;
+    }
+    if (selected_output >= 0 && selected_output < g_sound_applet.output_count) {
+        g_sound_applet.selected_output = selected_output;
+    } else if (g_sound_applet.selected_output >= g_sound_applet.output_count) {
+        g_sound_applet.selected_output = 0;
+    }
+    if (g_sound_applet.input_count == 0) {
+        g_sound_applet.selected_input = 0;
+    } else if (selected_input >= 0 && selected_input < g_sound_applet.input_count) {
+        g_sound_applet.selected_input = selected_input;
+    } else if (g_sound_applet.selected_input >= g_sound_applet.input_count) {
+        g_sound_applet.selected_input = 0;
     }
 
-    *value_out = control.un.ord;
     return 0;
 }
 
@@ -5597,8 +5691,6 @@ static void sound_applet_invalidate_backend_cache(void) {
 }
 
 static void sound_applet_sync_backend(int force) {
-    struct mk_audio_info info;
-    int value;
     uint32_t now = sys_ticks();
 
     if (!force &&
@@ -5607,90 +5699,8 @@ static void sound_applet_sync_backend(int force) {
         return;
     }
     g_sound_applet_last_sync_ticks = now;
-
-    if (sys_audio_get_info(&info) == 0) {
-        g_sound_applet.backend_kind = info.status._spare[0] & 0xff;
-        g_sound_applet.output_count = sound_applet_output_count_from_info(&info);
-        g_sound_applet.input_count = sound_applet_input_count_from_info(&info);
-        g_sound_applet.output_mask = sound_applet_output_mask_from_info(&info);
-        if (g_sound_applet.output_count < 1) {
-            g_sound_applet.output_count = 1;
-        }
-        if (g_sound_applet.input_count < 0) {
-            g_sound_applet.input_count = 0;
-        }
-        if (g_sound_applet.selected_output >= g_sound_applet.output_count) {
-            g_sound_applet.selected_output = 0;
-        }
-        if (g_sound_applet.input_count == 0) {
-            g_sound_applet.selected_input = 0;
-        } else if (g_sound_applet.selected_input >= g_sound_applet.input_count) {
-            g_sound_applet.selected_input = 0;
-        }
-    }
-
-    if (sound_applet_read_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, &value) == 0) {
-        g_sound_applet.output_volume = (value * 100) / AUDIO_MAX_GAIN;
-    }
-    if (sound_applet_read_level(MK_AUDIO_MIXER_INPUT_LEVEL, &value) == 0) {
-        g_sound_applet.input_volume = (value * 100) / AUDIO_MAX_GAIN;
-    }
-    if (sound_applet_read_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, &value) == 0) {
-        g_sound_applet.output_muted = value;
-    }
-    if (sound_applet_read_mute(MK_AUDIO_MIXER_INPUT_MUTE, &value) == 0) {
-        g_sound_applet.input_muted = value;
-    }
-    if (sound_applet_read_enum(MK_AUDIO_MIXER_OUTPUT_DEFAULT, &value) == 0 &&
-        value >= 0 &&
-        value < g_sound_applet.output_count) {
-        g_sound_applet.selected_output = value;
-    }
-    if (g_sound_applet.input_count > 0 &&
-        sound_applet_read_enum(MK_AUDIO_MIXER_INPUT_DEFAULT, &value) == 0 &&
-        value >= 0 &&
-        value < g_sound_applet.input_count) {
-        g_sound_applet.selected_input = value;
-    }
-}
-
-static void sound_applet_write_level(int control_id, int percent) {
-    mixer_ctrl_t control = {0};
-    int gain = (percent * AUDIO_MAX_GAIN) / 100;
-
-    control.dev = control_id;
-    control.type = AUDIO_MIXER_VALUE;
-
-    if (gain < AUDIO_MIN_GAIN) {
-        gain = AUDIO_MIN_GAIN;
-    }
-    if (gain > AUDIO_MAX_GAIN) {
-        gain = AUDIO_MAX_GAIN;
-    }
-
-    control.un.value.num_channels = 2;
-    control.un.value.level[AUDIO_MIXER_LEVEL_LEFT] = (uint8_t)gain;
-    control.un.value.level[AUDIO_MIXER_LEVEL_RIGHT] = (uint8_t)gain;
-    (void)sys_audio_mixer_write(&control);
-}
-
-static void sound_applet_write_mute(int control_id, int muted) {
-    mixer_ctrl_t control = {0};
-
-    control.dev = control_id;
-    control.type = AUDIO_MIXER_ENUM;
-
-    control.un.ord = muted ? 1 : 0;
-    (void)sys_audio_mixer_write(&control);
-}
-
-static void sound_applet_write_enum(int control_id, int value) {
-    mixer_ctrl_t control = {0};
-
-    control.dev = control_id;
-    control.type = AUDIO_MIXER_ENUM;
-    control.un.ord = value;
-    (void)sys_audio_mixer_write(&control);
+    (void)sound_applet_load_runtime_state();
+    sound_applet_export_service_state();
 }
 
 static void sound_applet_save_settings(void) {
@@ -5726,6 +5736,18 @@ static void sound_applet_export_service_state(void) {
     (void)desktop_launch_detached_with_failure_log(2,
                                                    export_argv,
                                                    "desktop: audio export launch failed\n");
+}
+
+static int sound_applet_apply_saved_settings(void) {
+    char *apply_argv[4];
+
+    apply_argv[0] = "audiosvc";
+    apply_argv[1] = "apply-settings";
+    apply_argv[2] = (char *)DESKTOP_AUDIO_SETTINGS_PATH;
+    apply_argv[3] = 0;
+    return desktop_launch_detached_with_failure_log(3,
+                                                    apply_argv,
+                                                    "desktop: audio apply launch failed\n");
 }
 
 static int desktop_launch_detached(int argc, char **argv) {
@@ -6134,14 +6156,13 @@ static void network_applet_try_autoconnect(void) {
 
 static void desktop_queue_startup_background_tasks(void) {
     g_desktop_startup_tasks = DESKTOP_STARTUP_TASK_UI_ASSETS |
-                              DESKTOP_STARTUP_TASK_FS_CATALOG |
                               DESKTOP_STARTUP_TASK_SOUND_EXPORT |
                               DESKTOP_STARTUP_TASK_NETWORK_RECONCILE |
                               DESKTOP_STARTUP_TASK_NETWORK_EXPORT;
 }
 
 static void desktop_process_startup_background_tasks(void) {
-    char *sound_export_argv[3] = {"audiosvc", "export-state", 0};
+    char *sound_export_argv[4] = {"audiosvc", "apply-settings", (char *)DESKTOP_AUDIO_SETTINGS_PATH, 0};
     char *network_reconcile_argv[3] = {"netmgrd", "reconcile", 0};
     char *network_export_argv[3] = {"netmgrd", "export-state", 0};
 
@@ -6151,15 +6172,9 @@ static void desktop_process_startup_background_tasks(void) {
         return;
     }
 
-    if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_FS_CATALOG) != 0u) {
-        g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_FS_CATALOG;
-        fs_complete_startup();
-        return;
-    }
-
     if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_SOUND_EXPORT) != 0u) {
         g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_SOUND_EXPORT;
-        (void)desktop_launch_detached_with_failure_log(2,
+        (void)desktop_launch_detached_with_failure_log(3,
                                                        sound_export_argv,
                                                        "desktop: startup audio export skipped\n");
         return;
@@ -6203,13 +6218,144 @@ static int network_applet_disconnect_interface(const char *fallback_if) {
     return 0;
 }
 
+static void network_applet_export_service_state(void) {
+    char *export_argv[3];
+
+    export_argv[0] = "netmgrd";
+    export_argv[1] = "export-state";
+    export_argv[2] = 0;
+    (void)desktop_launch_detached_with_failure_log(2,
+                                                   export_argv,
+                                                   "desktop: network export launch failed\n");
+}
+
 static void network_applet_invalidate_backend_cache(void) {
     g_network_applet_last_sync_ticks = 0u;
 }
 
+static int network_applet_load_runtime_state(void) {
+    char text[1400];
+    struct mk_network_status status = {0};
+    struct mk_network_scan_info scans[4];
+    int declared_scan_count = -1;
+    int highest_scan_index = -1;
+    int parsed_scan_count = 0;
+
+    if (desktop_read_text_file(DESKTOP_NETWORK_RUNTIME_STATE_PATH, text, (int)sizeof(text)) != 0) {
+        return -1;
+    }
+
+    memset(scans, 0, sizeof(scans));
+    for (char *line = text; *line != '\0'; ) {
+        char *next = line;
+
+        while (*next != '\0' && *next != '\n') {
+            ++next;
+        }
+        if (*next == '\n') {
+            *next = '\0';
+            ++next;
+        }
+
+        if (desktop_starts_with(line, "state=")) {
+            status.link_state = desktop_parse_network_link_state(line + 6);
+            g_network_applet_cache.status_valid = 1;
+        } else if (desktop_starts_with(line, "active_kind=")) {
+            status.active_kind = desktop_parse_network_kind(line + 12);
+        } else if (desktop_starts_with(line, "active_if=")) {
+            str_copy_limited(status.active_if,
+                             desktop_text_is_placeholder(line + 10) ? "" : line + 10,
+                             (int)sizeof(status.active_if));
+        } else if (desktop_starts_with(line, "ssid=")) {
+            str_copy_limited(status.current_ssid,
+                             desktop_text_is_placeholder(line + 5) ? "" : line + 5,
+                             (int)sizeof(status.current_ssid));
+        } else if (desktop_starts_with(line, "ip=")) {
+            str_copy_limited(status.ip_address,
+                             desktop_text_is_placeholder(line + 3) ? "" : line + 3,
+                             (int)sizeof(status.ip_address));
+        } else if (desktop_starts_with(line, "gateway=")) {
+            str_copy_limited(status.gateway,
+                             desktop_text_is_placeholder(line + 8) ? "" : line + 8,
+                             (int)sizeof(status.gateway));
+        } else if (desktop_starts_with(line, "dns=")) {
+            str_copy_limited(status.dns_server,
+                             desktop_text_is_placeholder(line + 4) ? "" : line + 4,
+                             (int)sizeof(status.dns_server));
+        } else if (desktop_starts_with(line, "scan_count=")) {
+            (void)desktop_parse_uint(line + 11, &declared_scan_count);
+        } else if (desktop_starts_with(line, "scan")) {
+            char *cursor = line + 4;
+            int index = -1;
+            int value = 0;
+
+            while (*cursor >= '0' && *cursor <= '9') {
+                if (index < 0) {
+                    index = 0;
+                }
+                index = (index * 10) + (*cursor - '0');
+                ++cursor;
+            }
+            if (index >= 0 && index < (int)(sizeof(scans) / sizeof(scans[0])) && *cursor == '_') {
+                scans[index].index = (uint32_t)index;
+                str_copy_limited(scans[index].if_name, "wlan0", (int)sizeof(scans[index].if_name));
+                if (index > highest_scan_index) {
+                    highest_scan_index = index;
+                }
+                if (desktop_starts_with(cursor, "_ssid=")) {
+                    str_copy_limited(scans[index].ssid,
+                                     desktop_text_is_placeholder(cursor + 6) ? "" : cursor + 6,
+                                     (int)sizeof(scans[index].ssid));
+                } else if (desktop_starts_with(cursor, "_security=")) {
+                    scans[index].security = desktop_parse_network_security(cursor + 10);
+                } else if (desktop_starts_with(cursor, "_signal=") &&
+                           desktop_parse_uint(cursor + 8, &value)) {
+                    scans[index].signal_strength = (uint32_t)value;
+                } else if (desktop_starts_with(cursor, "_connected=") &&
+                           desktop_parse_uint(cursor + 11, &value)) {
+                    scans[index].connected = (uint32_t)(value != 0);
+                }
+            }
+        }
+
+        line = next;
+    }
+
+    if (!g_network_applet_cache.status_valid) {
+        return -1;
+    }
+
+    g_network_applet_cache.status = status;
+    g_network_applet.state = network_applet_state_for_link_state(status.link_state);
+    g_network_applet_cache.scan_count = 0;
+    if (declared_scan_count < 0) {
+        declared_scan_count = highest_scan_index + 1;
+    }
+    if (declared_scan_count < 0) {
+        declared_scan_count = 0;
+    }
+    if (declared_scan_count > (int)(sizeof(scans) / sizeof(scans[0]))) {
+        declared_scan_count = (int)(sizeof(scans) / sizeof(scans[0]));
+    }
+    for (int i = 0; i < declared_scan_count; ++i) {
+        if (scans[i].ssid[0] == '\0') {
+            continue;
+        }
+        scans[i].index = (uint32_t)parsed_scan_count;
+        g_network_applet_cache.scans[parsed_scan_count++] = scans[i];
+    }
+    g_network_applet_cache.scan_count = parsed_scan_count;
+    if (g_network_applet.selected_network >= g_network_applet_cache.scan_count) {
+        g_network_applet.selected_network = g_network_applet_cache.scan_count > 0 ? 0 : -1;
+    }
+    if (g_network_applet.selected_network < 0 && g_network_applet_cache.scan_count > 0) {
+        g_network_applet.selected_network = 0;
+    }
+    network_applet_apply_saved_password_for_selected();
+    return 0;
+}
+
 static void network_applet_sync_backend(int force) {
-    struct mk_network_scan_info scan_info;
-    int count = 0;
     uint32_t now = sys_ticks();
 
     if (!force &&
@@ -6219,27 +6365,13 @@ static void network_applet_sync_backend(int force) {
     }
     g_network_applet_last_sync_ticks = now;
 
-    g_network_applet_cache.status_valid = (sys_network_get_status(&g_network_applet_cache.status) == 0);
-    if (g_network_applet_cache.status_valid) {
-        g_network_applet.state = network_applet_state_for_link_state(g_network_applet_cache.status.link_state);
-    } else {
+    g_network_applet_cache.status_valid = 0;
+    if (network_applet_load_runtime_state() != 0) {
+        g_network_applet_cache.scan_count = 0;
+        memset(&g_network_applet_cache.status, 0, sizeof(g_network_applet_cache.status));
         g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
     }
-
-    for (int i = 0; i < (int)(sizeof(g_network_applet_cache.scans) / sizeof(g_network_applet_cache.scans[0])); ++i) {
-        if (sys_network_scan((uint32_t)i, &scan_info) != 0) {
-            break;
-        }
-        g_network_applet_cache.scans[count++] = scan_info;
-    }
-    g_network_applet_cache.scan_count = count;
-    if (g_network_applet.selected_network >= g_network_applet_cache.scan_count) {
-        g_network_applet.selected_network = g_network_applet_cache.scan_count > 0 ? 0 : -1;
-    }
-    if (g_network_applet.selected_network < 0 && g_network_applet_cache.scan_count > 0) {
-        g_network_applet.selected_network = 0;
-    }
-    network_applet_apply_saved_password_for_selected();
+    network_applet_export_service_state();
 }
 
 static int desktop_service_event_affects_layout(const struct mk_service_event *event) {
@@ -6438,12 +6570,14 @@ static uint32_t desktop_pump_async_service_events(void) {
 
     if ((flags & DESKTOP_ASYNC_REFRESH_AUDIO) != 0u) {
         sound_applet_invalidate_backend_cache();
+        (void)sound_applet_apply_saved_settings();
         if (g_sound_applet.popup_open) {
             sound_applet_sync_backend(1);
         }
     }
     if ((flags & DESKTOP_ASYNC_REFRESH_NETWORK) != 0u) {
         network_applet_invalidate_backend_cache();
+        network_applet_export_service_state();
         if (g_network_applet.popup_open) {
             network_applet_sync_backend(1);
         }
@@ -6504,12 +6638,14 @@ static uint32_t desktop_pump_async_applet_events(void) {
 
     if ((flags & DESKTOP_ASYNC_REFRESH_AUDIO) != 0u) {
         sound_applet_invalidate_backend_cache();
+        sound_applet_export_service_state();
         if (g_sound_applet.popup_open) {
             sound_applet_sync_backend(1);
         }
     }
     if ((flags & DESKTOP_ASYNC_REFRESH_NETWORK) != 0u) {
         network_applet_invalidate_backend_cache();
+        network_applet_export_service_state();
         if (g_network_applet.popup_open) {
             network_applet_sync_backend(1);
         }
@@ -7050,10 +7186,9 @@ static int desktop_dispatch_applet_click(struct desktop_session_action_queue *qu
             struct rect out_row = sound_output_row_rect(&popup, i);
             if (point_in_rect(&out_row, click_x, click_y)) {
                 g_sound_applet.selected_output = i;
-                sound_applet_write_enum(MK_AUDIO_MIXER_OUTPUT_DEFAULT, i);
                 sound_applet_invalidate_backend_cache();
                 sound_applet_save_settings();
-                sound_applet_export_service_state();
+                (void)sound_applet_apply_saved_settings();
                 *dirty = 1;
             }
         }
@@ -7061,44 +7196,37 @@ static int desktop_dispatch_applet_click(struct desktop_session_action_queue *qu
             struct rect in_row = sound_input_row_rect(&popup, i);
             if (point_in_rect(&in_row, click_x, click_y)) {
                 g_sound_applet.selected_input = i;
-                sound_applet_write_enum(MK_AUDIO_MIXER_INPUT_DEFAULT, i);
                 sound_applet_invalidate_backend_cache();
                 sound_applet_save_settings();
-                sound_applet_export_service_state();
+                (void)sound_applet_apply_saved_settings();
                 *dirty = 1;
             }
         }
         if (point_in_rect(&out_slider, click_x, click_y)) {
             g_sound_applet.output_volume = sound_slider_value_from_x(&out_slider, click_x);
             g_sound_applet.output_muted = (g_sound_applet.output_volume == 0);
-            sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
-            sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
             sound_applet_invalidate_backend_cache();
             sound_applet_save_settings();
-            sound_applet_export_service_state();
+            (void)sound_applet_apply_saved_settings();
             *dirty = 1;
         } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_slider, click_x, click_y)) {
             g_sound_applet.input_volume = sound_slider_value_from_x(&in_slider, click_x);
             g_sound_applet.input_muted = (g_sound_applet.input_volume == 0);
-            sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
-            sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
             sound_applet_invalidate_backend_cache();
             sound_applet_save_settings();
-            sound_applet_export_service_state();
+            (void)sound_applet_apply_saved_settings();
             *dirty = 1;
         } else if (point_in_rect(&out_mute, click_x, click_y)) {
             g_sound_applet.output_muted = !g_sound_applet.output_muted;
-            sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
             sound_applet_invalidate_backend_cache();
             sound_applet_save_settings();
-            sound_applet_export_service_state();
+            (void)sound_applet_apply_saved_settings();
             *dirty = 1;
         } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_mute, click_x, click_y)) {
             g_sound_applet.input_muted = !g_sound_applet.input_muted;
-            sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
             sound_applet_invalidate_backend_cache();
             sound_applet_save_settings();
-            sound_applet_export_service_state();
+            (void)sound_applet_apply_saved_settings();
             *dirty = 1;
         }
         return 1;
@@ -8579,22 +8707,18 @@ void desktop_main(void) {
                 if (key == KEY_ARROW_LEFT || key == 'a' || key == 'A') {
                     g_sound_applet.output_volume = desktop_clamp_percent_step(g_sound_applet.output_volume, -5);
                     g_sound_applet.output_muted = (g_sound_applet.output_volume == 0);
-                    sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
-                    sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
                     sound_applet_invalidate_backend_cache();
                     sound_applet_save_settings();
-                    sound_applet_export_service_state();
+                    (void)sound_applet_apply_saved_settings();
                     dirty = 1;
                     continue;
                 }
                 if (key == KEY_ARROW_RIGHT || key == 'd' || key == 'D') {
                     g_sound_applet.output_volume = desktop_clamp_percent_step(g_sound_applet.output_volume, 5);
                     g_sound_applet.output_muted = 0;
-                    sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
-                    sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
                     sound_applet_invalidate_backend_cache();
                     sound_applet_save_settings();
-                    sound_applet_export_service_state();
+                    (void)sound_applet_apply_saved_settings();
                     dirty = 1;
                     continue;
                 }
@@ -8604,11 +8728,9 @@ void desktop_main(void) {
                     }
                     g_sound_applet.input_volume = desktop_clamp_percent_step(g_sound_applet.input_volume, 5);
                     g_sound_applet.input_muted = 0;
-                    sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
-                    sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
                     sound_applet_invalidate_backend_cache();
                     sound_applet_save_settings();
-                    sound_applet_export_service_state();
+                    (void)sound_applet_apply_saved_settings();
                     dirty = 1;
                     continue;
                 }
@@ -8618,20 +8740,17 @@ void desktop_main(void) {
                     }
                     g_sound_applet.input_volume = desktop_clamp_percent_step(g_sound_applet.input_volume, -5);
                     g_sound_applet.input_muted = (g_sound_applet.input_volume == 0);
-                    sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
-                    sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
                     sound_applet_invalidate_backend_cache();
                     sound_applet_save_settings();
-                    sound_applet_export_service_state();
+                    (void)sound_applet_apply_saved_settings();
                     dirty = 1;
                     continue;
                 }
                 if (key == 'm' || key == 'M' || key == '\n') {
                     g_sound_applet.output_muted = !g_sound_applet.output_muted;
-                    sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
                     sound_applet_invalidate_backend_cache();
                     sound_applet_save_settings();
-                    sound_applet_export_service_state();
+                    (void)sound_applet_apply_saved_settings();
                     dirty = 1;
                     continue;
                 }
@@ -8640,10 +8759,9 @@ void desktop_main(void) {
                         continue;
                     }
                     g_sound_applet.input_muted = !g_sound_applet.input_muted;
-                    sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
                     sound_applet_invalidate_backend_cache();
                     sound_applet_save_settings();
-                    sound_applet_export_service_state();
+                    (void)sound_applet_apply_saved_settings();
                     dirty = 1;
                     continue;
                 }

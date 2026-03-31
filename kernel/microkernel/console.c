@@ -160,7 +160,7 @@ void mk_console_service_init(void) {
                                  "console",
                                  mk_console_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_console_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |

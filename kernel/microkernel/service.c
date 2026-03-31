@@ -1,3 +1,4 @@
+#include <kernel/bootinfo.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/kernel_string.h>
 #include <kernel/drivers/timer/timer.h>
@@ -27,6 +28,8 @@ static spinlock_t g_service_event_lock;
 
 #define MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS 32u
 #define MK_SERVICE_VIDEO_CONTROL_TIMEOUT_TICKS 192u
+#define MK_SERVICE_STORAGE_TIMEOUT_TICKS 256u
+#define MK_SERVICE_FILESYSTEM_TIMEOUT_TICKS 128u
 #define MK_SERVICE_DEFERRED_REPLIES_MAX 8u
 
 static void mk_service_worker_entry(void);
@@ -39,6 +42,36 @@ static uint32_t mk_service_request_timeout_ticks(const struct mk_service_record 
 static void mk_service_restore_deferred_messages(process_t *destination,
                                                  const struct mk_message *messages,
                                                  uint32_t count);
+
+int mk_service_backend_bridge_allowed_current(uint32_t service_type) {
+    process_t *current;
+    const struct mk_launch_context *context;
+    uint32_t boot_flags;
+
+    current = scheduler_current();
+    context = mk_launch_context_current();
+    if (current == 0 || context == 0) {
+        return 0;
+    }
+
+    if (current->kind == PROCESS_KIND_SERVICE &&
+        (service_type == MK_SERVICE_NONE || current->service_type == service_type)) {
+        return 1;
+    }
+
+    boot_flags = context->boot_flags;
+    if ((boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE |
+                       BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) != 0u) {
+        return 1;
+    }
+
+    if ((context->flags & (MK_LAUNCH_FLAG_BOOTSTRAP |
+                           MK_LAUNCH_FLAG_CRITICAL)) != 0u) {
+        return 1;
+    }
+
+    return 0;
+}
 
 static int mk_service_current_prefers_local_handler(const struct mk_service_record *service,
                                                     const struct mk_message *request) {
@@ -82,6 +115,9 @@ static int mk_service_current_allows_local_fallback(const struct mk_service_reco
     if (context == 0) {
         return 1;
     }
+    if (!mk_service_backend_bridge_allowed_current(service->type)) {
+        return 0;
+    }
 
     /*
      * The desktop session must keep using the explicit input service boundary
@@ -112,6 +148,25 @@ static uint32_t mk_service_request_timeout_ticks(const struct mk_service_record 
          * that use the default budget.
          */
         return MK_SERVICE_VIDEO_CONTROL_TIMEOUT_TICKS;
+    }
+
+    if (service->type == MK_SERVICE_STORAGE) {
+        /*
+         * Persist image loads/saves and chunked AppFS reads legitimately move
+         * hundreds of kilobytes through transfers. Give the extracted storage
+         * host enough budget to complete without falling back to the legacy
+         * local path under normal desktop startup.
+         */
+        return MK_SERVICE_STORAGE_TIMEOUT_TICKS;
+    }
+
+    if (service->type == MK_SERVICE_FILESYSTEM &&
+        (request->type == MK_MSG_FS_OPEN ||
+         request->type == MK_MSG_FS_READ ||
+         request->type == MK_MSG_FS_WRITE ||
+         request->type == MK_MSG_FS_STAT ||
+         request->type == MK_MSG_FS_FSTAT)) {
+        return MK_SERVICE_FILESYSTEM_TIMEOUT_TICKS;
     }
 
     return MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS;
@@ -948,28 +1003,6 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
     }
 
     return -1;
-}
-
-int mk_service_backend_handle_current(const struct mk_message *request, struct mk_message *reply) {
-    process_t *current;
-    const struct mk_service_record *service;
-
-    if (request == 0 || reply == 0) {
-        return -1;
-    }
-
-    current = scheduler_current();
-    if (current == 0 || current->kind != PROCESS_KIND_SERVICE ||
-        current->service_type == MK_SERVICE_NONE) {
-        return -1;
-    }
-
-    service = mk_service_find_by_type(current->service_type);
-    if (service == 0 || service->local_handler == 0) {
-        return -1;
-    }
-
-    return service->local_handler(request, reply, service->context);
 }
 
 int mk_service_subscribe(uint32_t type, struct process *subscriber) {

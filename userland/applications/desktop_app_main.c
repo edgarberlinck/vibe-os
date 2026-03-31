@@ -112,7 +112,6 @@ int vibe_app_main(int argc, char **argv) {
 
     desktop_app_debug_launch(app_name);
     sys_write_debug("desktop.app: fs init\n");
-    fs_set_deferred_catalog_stubs(1);
     fs_init();
     sys_write_debug("desktop.app: prepare launch\n");
     desktop_prepare_launch(argc, argv);

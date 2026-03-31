@@ -75,8 +75,8 @@ int mk_service_launch_task(uint32_t type,
 int mk_service_is_online(uint32_t type);
 int mk_service_ensure(uint32_t type);
 int mk_service_restart(uint32_t type);
+int mk_service_backend_bridge_allowed_current(uint32_t service_type);
 int mk_service_request(uint32_t type, const struct mk_message *request, struct mk_message *reply);
-int mk_service_backend_handle_current(const struct mk_message *request, struct mk_message *reply);
 int mk_service_subscribe(uint32_t type, struct process *subscriber);
 int mk_service_unsubscribe(uint32_t type, struct process *subscriber);
 int mk_service_event_receive(uint32_t type,

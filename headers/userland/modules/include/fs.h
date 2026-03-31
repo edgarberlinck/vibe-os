@@ -29,8 +29,6 @@ extern int g_fs_root;
 extern int g_fs_cwd;
 
 void fs_init(void);
-void fs_set_deferred_catalog_stubs(int enabled);
-void fs_complete_startup(void);
 void fs_tick(void);
 void fs_flush(void);
 int fs_create(const char *path, int is_dir);
@@ -45,5 +43,6 @@ int fs_read_file_bytes(const char *path, int offset, void *dst, int size);
 int fs_copy_node_to_path(int src_node, const char *dst_path);
 void fs_build_path(int node, char *out, int max_len);
 int fs_resolve(const char *path);
+int fs_lookup_executable_alias(const char *path, char *name_out, int max_len);
 
 #endif // FS_H

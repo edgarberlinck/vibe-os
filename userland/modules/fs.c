@@ -6,40 +6,63 @@
 #include <string.h>
 
 #define FS_PERSIST_MAGIC 0x56465331u
-#define FS_PERSIST_VERSION 3u
+#define FS_PERSIST_VERSION 4u
 #define FS_SECTOR_SIZE 512u
 #define FS_STORAGE_RETRY_COUNT 4u
 #define FS_STORAGE_DATA_START_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
-struct fs_persist_image {
+
+struct fs_persist_header {
     uint32_t magic;
     uint32_t version;
+    uint32_t used_bytes;
     int32_t root;
     int32_t cwd;
-    struct fs_node nodes[FS_MAX_NODES];
     uint32_t checksum;
+};
+
+struct fs_persist_node {
+    uint8_t used;
+    uint8_t is_dir;
+    uint8_t storage_kind;
+    uint8_t reserved;
+    int32_t parent;
+    int32_t first_child;
+    int32_t next_sibling;
+    int32_t size;
+    uint32_t image_lba;
+    uint32_t image_sector_count;
+    uint32_t data_offset;
+    uint32_t data_size;
+    char name[FS_NAME_MAX + 1];
 };
 
 struct fs_node g_fs_nodes[FS_MAX_NODES];
 int g_fs_root = -1;
 int g_fs_cwd = -1;
-static struct fs_persist_image g_fs_persist_image;
+static uint8_t g_fs_persist_buffer[KERNEL_PERSIST_MAX_BYTES];
 static int g_fs_sync_suspended = 0;
 static uint32_t g_fs_total_sectors_cache = 0u;
 static int g_fs_dirty = 0;
+static uint32_t g_fs_dirty_generation = 0u;
 static uint32_t g_fs_last_sync_tick = 0u;
+static int g_fs_writeback_active = 0;
+static uint32_t g_fs_writeback_generation = 0u;
+static uint32_t g_fs_writeback_bytes = 0u;
+static uint32_t g_fs_writeback_sector_index = 0u;
+static uint32_t g_fs_writeback_progress_tick = 0xffffffffu;
+static int g_fs_allow_immediate_writeback = 0;
 static int g_fs_doom_assets_scanned = 0;
 static int g_fs_texture_assets_scanned = 0;
 static int g_fs_assets_scanned = 0;
-static int g_fs_defer_catalog_stubs = 0;
-static int g_fs_pending_catalog_stubs = 0;
 
 #define FS_SYNC_PERIOD_TICKS 1000u
+#define FS_WRITEBACK_SECTORS_PER_TICK 4u
 
 static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
 static void fs_ensure_assets_registered(void);
 static uint32_t fs_storage_total_sectors(void);
-static void fs_materialize_catalog_stubs(void);
+static int fs_validate_loaded_tree(void);
 
 #define DOOM_WAD_IMAGE_LBA 131728u
 #define DOOM_WAD_IMAGE_SECTORS 24235u
@@ -100,6 +123,162 @@ static uint32_t fs_checksum_bytes(const uint8_t *data, int size) {
         hash *= 16777619u;
     }
     return hash;
+}
+
+static uint32_t fs_persist_inline_base(void) {
+    return (uint32_t)(sizeof(struct fs_persist_header) +
+                      (sizeof(struct fs_persist_node) * FS_MAX_NODES));
+}
+
+static uint32_t fs_persist_sector_count_for_bytes(uint32_t byte_count) {
+    if (byte_count == 0u) {
+        return 0u;
+    }
+    return (byte_count + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+}
+
+static int fs_serialize_persistent_image(uint8_t *buffer,
+                                         uint32_t capacity,
+                                         uint32_t *used_bytes_out) {
+    struct fs_persist_header *header;
+    struct fs_persist_node *persist_nodes;
+    uint32_t data_cursor;
+
+    if (buffer == 0 || used_bytes_out == 0) {
+        return -1;
+    }
+
+    data_cursor = fs_persist_inline_base();
+    if (data_cursor > capacity) {
+        return -1;
+    }
+
+    memset(buffer, 0, capacity);
+    header = (struct fs_persist_header *)buffer;
+    persist_nodes = (struct fs_persist_node *)(buffer + sizeof(*header));
+
+    for (int i = 0; i < FS_MAX_NODES; ++i) {
+        struct fs_persist_node *persist = &persist_nodes[i];
+        const struct fs_node *node = &g_fs_nodes[i];
+
+        persist->used = (uint8_t)(node->used != 0);
+        if (!node->used) {
+            continue;
+        }
+
+        persist->is_dir = (uint8_t)(node->is_dir != 0);
+        persist->storage_kind = (uint8_t)node->storage_kind;
+        persist->parent = (int32_t)node->parent;
+        persist->first_child = (int32_t)node->first_child;
+        persist->next_sibling = (int32_t)node->next_sibling;
+        persist->size = (int32_t)node->size;
+        persist->image_lba = node->image_lba;
+        persist->image_sector_count = node->image_sector_count;
+        str_copy_limited(persist->name, node->name, FS_NAME_MAX + 1);
+
+        if (node->is_dir || node->storage_kind != FS_NODE_STORAGE_INLINE || node->size <= 0) {
+            continue;
+        }
+
+        if (node->size > FS_FILE_MAX || (uint32_t)node->size > (capacity - data_cursor)) {
+            return -1;
+        }
+
+        persist->data_offset = data_cursor;
+        persist->data_size = (uint32_t)node->size;
+        memcpy(buffer + data_cursor, node->data, persist->data_size);
+        data_cursor += persist->data_size;
+    }
+
+    header->magic = FS_PERSIST_MAGIC;
+    header->version = FS_PERSIST_VERSION;
+    header->used_bytes = data_cursor;
+    header->root = g_fs_root;
+    header->cwd = g_fs_cwd;
+    header->checksum = 0u;
+    header->checksum = fs_checksum_bytes(buffer, (int)data_cursor);
+    *used_bytes_out = data_cursor;
+    return 0;
+}
+
+static int fs_deserialize_persistent_image(uint8_t *buffer, uint32_t capacity) {
+    struct fs_persist_header *header;
+    struct fs_persist_node *persist_nodes;
+    uint32_t checksum;
+
+    if (buffer == 0 || capacity < fs_persist_inline_base()) {
+        return -1;
+    }
+
+    header = (struct fs_persist_header *)buffer;
+    if (header->magic != FS_PERSIST_MAGIC || header->version != FS_PERSIST_VERSION) {
+        return -1;
+    }
+    if (header->used_bytes < fs_persist_inline_base() || header->used_bytes > capacity) {
+        return -1;
+    }
+
+    checksum = header->checksum;
+    header->checksum = 0u;
+    if (checksum != fs_checksum_bytes(buffer, (int)header->used_bytes)) {
+        header->checksum = checksum;
+        return -1;
+    }
+    header->checksum = checksum;
+    persist_nodes = (struct fs_persist_node *)(buffer + sizeof(*header));
+
+    for (int i = 0; i < FS_MAX_NODES; ++i) {
+        const struct fs_persist_node *persist = &persist_nodes[i];
+        struct fs_node *node = &g_fs_nodes[i];
+
+        fs_reset_node(i);
+        if (!persist->used) {
+            continue;
+        }
+
+        node->used = 1;
+        node->is_dir = persist->is_dir != 0;
+        node->parent = persist->parent;
+        node->first_child = persist->first_child;
+        node->next_sibling = persist->next_sibling;
+        node->storage_kind = persist->storage_kind;
+        node->size = persist->size;
+        node->image_lba = persist->image_lba;
+        node->image_sector_count = persist->image_sector_count;
+        str_copy_limited(node->name, persist->name, FS_NAME_MAX + 1);
+
+        if (node->is_dir) {
+            node->storage_kind = FS_NODE_STORAGE_INLINE;
+            node->size = 0;
+            node->image_lba = 0u;
+            node->image_sector_count = 0u;
+            continue;
+        }
+
+        if (node->storage_kind == FS_NODE_STORAGE_INLINE) {
+            if (node->size < 0 || persist->data_size > (uint32_t)FS_FILE_MAX ||
+                persist->data_size != (uint32_t)node->size ||
+                persist->data_offset < fs_persist_inline_base() ||
+                persist->data_offset > header->used_bytes ||
+                persist->data_size > (header->used_bytes - persist->data_offset)) {
+                return -1;
+            }
+            if (persist->data_size > 0u) {
+                memcpy(node->data, buffer + persist->data_offset, persist->data_size);
+            }
+            node->data[persist->data_size] = '\0';
+            continue;
+        }
+
+        if (node->storage_kind != FS_NODE_STORAGE_IMAGE || node->size < 0) {
+            return -1;
+        }
+        node->data[0] = '\0';
+    }
+
+    g_fs_root = header->root;
+    g_fs_cwd = header->cwd;
+    return fs_validate_loaded_tree() ? 0 : -1;
 }
 
 static int fs_storage_read_sector_verified(uint32_t lba, uint8_t *dst) {
@@ -257,6 +436,23 @@ static void fs_debug_asset_path(const char *prefix, const char *path) {
     sys_write_debug(msg);
 }
 
+static const char *fs_path_basename(const char *path) {
+    const char *basename = path;
+
+    if (path == 0) {
+        return 0;
+    }
+
+    while (*path != '\0') {
+        if (*path == '/') {
+            basename = path + 1;
+        }
+        ++path;
+    }
+
+    return basename;
+}
+
 static void fs_maybe_register_boot_assets_for_path(const char *path) {
     if (fs_path_matches_root_prefix(path, "/DOOM") && !g_fs_doom_assets_scanned) {
         g_fs_doom_assets_scanned = 1;
@@ -408,70 +604,112 @@ static int fs_validate_loaded_tree(void) {
 }
 
 static int fs_load_persistent_image(void) {
-    struct fs_persist_image *image = &g_fs_persist_image;
-    uint32_t checksum;
     extern void kernel_debug_puts(const char *);
 
     kernel_debug_puts("fs: sys_storage_load begin\n");
-    if (sys_storage_load(image, (uint32_t)sizeof(*image)) != 0) {
+    if (sys_storage_load(g_fs_persist_buffer, (uint32_t)sizeof(g_fs_persist_buffer)) != 0) {
         kernel_debug_puts("fs: sys_storage_load failed\n");
         return -1;
     }
     kernel_debug_puts("fs: sys_storage_load returned\n");
-    if (image->magic != FS_PERSIST_MAGIC || image->version != FS_PERSIST_VERSION) {
-        return -1;
-    }
-
-    checksum = image->checksum;
-    image->checksum = 0u;
-    if (checksum != fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image))) {
-        return -1;
-    }
-    image->checksum = checksum;
-
-    for (int i = 0; i < FS_MAX_NODES; ++i) {
-        g_fs_nodes[i] = image->nodes[i];
-    }
-    g_fs_root = image->root;
-    g_fs_cwd = image->cwd;
-    return fs_validate_loaded_tree() ? 0 : -1;
+    return fs_deserialize_persistent_image(g_fs_persist_buffer,
+                                           (uint32_t)sizeof(g_fs_persist_buffer));
 }
 
-static int fs_sync_now(void) {
-    struct fs_persist_image *image = &g_fs_persist_image;
+static int fs_prepare_writeback(void) {
     extern void kernel_debug_puts(const char *);
 
     if (g_fs_sync_suspended) {
         return 0;
     }
-
-    memset(image, 0, sizeof(*image));
-    image->magic = FS_PERSIST_MAGIC;
-    image->version = FS_PERSIST_VERSION;
-    image->root = g_fs_root;
-    image->cwd = g_fs_cwd;
-    for (int i = 0; i < FS_MAX_NODES; ++i) {
-        image->nodes[i] = g_fs_nodes[i];
+    if (!g_fs_dirty || g_fs_writeback_active) {
+        return 0;
     }
-    image->checksum = 0u;
-    image->checksum = fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image));
-    kernel_debug_puts("fs: sys_storage_save begin\n");
-    if (sys_storage_save(image, (uint32_t)sizeof(*image)) != 0) {
-        kernel_debug_puts("fs: sys_storage_save failed\n");
+    if (fs_serialize_persistent_image(g_fs_persist_buffer,
+                                      (uint32_t)sizeof(g_fs_persist_buffer),
+                                      &g_fs_writeback_bytes) != 0) {
+        kernel_debug_puts("fs: persist image too large\n");
         return -1;
     }
-    kernel_debug_puts("fs: sys_storage_save returned\n");
-    g_fs_dirty = 0;
-    g_fs_last_sync_tick = sys_ticks();
+    g_fs_writeback_active = 1;
+    g_fs_writeback_generation = g_fs_dirty_generation;
+    g_fs_writeback_sector_index = 0u;
+    g_fs_writeback_progress_tick = 0xffffffffu;
+    kernel_debug_puts("fs: writeback start\n");
     return 0;
+}
+
+static int fs_writeback_step(uint32_t sector_budget) {
+    uint32_t total_sectors;
+    extern void kernel_debug_puts(const char *);
+
+    if (!g_fs_writeback_active) {
+        return 0;
+    }
+
+    total_sectors = fs_persist_sector_count_for_bytes(g_fs_writeback_bytes);
+    if (sector_budget == 0u) {
+        sector_budget = total_sectors;
+    }
+
+    while (g_fs_writeback_sector_index < total_sectors && sector_budget > 0u) {
+        if (sys_storage_write_sectors(KERNEL_PERSIST_START_LBA + g_fs_writeback_sector_index,
+                                      g_fs_persist_buffer + (g_fs_writeback_sector_index * FS_SECTOR_SIZE),
+                                      1u) != 0) {
+            kernel_debug_puts("fs: writeback failed\n");
+            g_fs_writeback_active = 0;
+            g_fs_writeback_progress_tick = 0xffffffffu;
+            return -1;
+        }
+        g_fs_writeback_sector_index += 1u;
+        sector_budget -= 1u;
+    }
+
+    if (g_fs_writeback_sector_index < total_sectors) {
+        return 0;
+    }
+
+    g_fs_writeback_active = 0;
+    g_fs_writeback_sector_index = 0u;
+    g_fs_writeback_progress_tick = 0xffffffffu;
+    if (g_fs_writeback_generation == g_fs_dirty_generation) {
+        g_fs_dirty = 0;
+        g_fs_last_sync_tick = sys_ticks();
+    } else {
+        g_fs_last_sync_tick = 0u;
+    }
+    kernel_debug_puts("fs: writeback done\n");
+    return 1;
+}
+
+static int fs_sync_now(void) {
+    for (;;) {
+        int rc;
+
+        if (!g_fs_dirty && !g_fs_writeback_active) {
+            return 0;
+        }
+        if (!g_fs_writeback_active && fs_prepare_writeback() != 0) {
+            return -1;
+        }
+        rc = fs_writeback_step(0u);
+        if (rc < 0) {
+            return -1;
+        }
+    }
 }
 
 static void fs_mark_dirty(void) {
     g_fs_dirty = 1;
+    g_fs_dirty_generation += 1u;
+    g_fs_last_sync_tick = 0u;
+    if (g_fs_allow_immediate_writeback && !g_fs_sync_suspended && !g_fs_writeback_active) {
+        (void)fs_prepare_writeback();
+    }
 }
 
 void fs_flush(void) {
-    if (!g_fs_dirty) {
+    if (!g_fs_dirty && !g_fs_writeback_active) {
         return;
     }
     (void)fs_sync_now();
@@ -480,14 +718,29 @@ void fs_flush(void) {
 void fs_tick(void) {
     uint32_t now;
 
-    if (g_fs_sync_suspended || !g_fs_dirty) {
+    if (g_fs_sync_suspended) {
         return;
     }
     now = sys_ticks();
+    if (g_fs_writeback_active) {
+        if (g_fs_writeback_progress_tick == now) {
+            return;
+        }
+        g_fs_writeback_progress_tick = now;
+        (void)fs_writeback_step(FS_WRITEBACK_SECTORS_PER_TICK);
+        return;
+    }
+    if (!g_fs_dirty) {
+        return;
+    }
     if ((uint32_t)(now - g_fs_last_sync_tick) < FS_SYNC_PERIOD_TICKS) {
         return;
     }
-    (void)fs_sync_now();
+    if (fs_prepare_writeback() != 0) {
+        return;
+    }
+    g_fs_writeback_progress_tick = now;
+    (void)fs_writeback_step(FS_WRITEBACK_SECTORS_PER_TICK);
 }
 
 static int fs_alloc_node(void) {
@@ -689,6 +942,28 @@ int fs_resolve(const char *path) {
     }
 
     return cur;
+}
+
+int fs_lookup_executable_alias(const char *path, char *name_out, int max_len) {
+    const char *basename;
+
+    if (path == 0 || name_out == 0 || max_len <= 0) {
+        return -1;
+    }
+
+    for (int i = 0; i < (int)G_APP_CATALOG_ALIAS_PATHS_COUNT; ++i) {
+        if (!str_eq(path, g_app_catalog_alias_paths[i])) {
+            continue;
+        }
+        basename = fs_path_basename(path);
+        if (basename == 0 || basename[0] == '\0') {
+            return -1;
+        }
+        str_copy_limited(name_out, basename, max_len);
+        return 0;
+    }
+
+    return -1;
 }
 
 int fs_read_node_bytes(int node, int offset, void *dst, int size) {
@@ -1140,18 +1415,6 @@ static void fs_ensure_assets_registered(void) {
                             BOOTLOADER_BG_IMAGE_BYTES);
 }
 
-static void fs_materialize_catalog_stubs(void) {
-    if (g_fs_root < 0 || !g_fs_pending_catalog_stubs) {
-        return;
-    }
-
-    for (int i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
-        (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
-    }
-    g_fs_pending_catalog_stubs = 0;
-    sys_write_debug("fs: deferred compat stubs ready\n");
-}
-
 void fs_build_path(int node, char *out, int max_len) {
     int stack[FS_MAX_NODES];
     int top = 0;
@@ -1192,10 +1455,19 @@ void fs_init(void) {
     extern void kernel_debug_puts(const char *);
 
     g_fs_sync_suspended = 1;
+    g_fs_dirty = 0;
+    g_fs_dirty_generation = 0u;
+    g_fs_last_sync_tick = 0u;
+    g_fs_writeback_active = 0;
+    g_fs_writeback_generation = 0u;
+    g_fs_writeback_bytes = 0u;
+    g_fs_writeback_sector_index = 0u;
+    g_fs_writeback_progress_tick = 0xffffffffu;
+    g_fs_allow_immediate_writeback = 0;
     g_fs_doom_assets_scanned = 0;
     g_fs_texture_assets_scanned = 0;
     g_fs_assets_scanned = 0;
-    g_fs_pending_catalog_stubs = 0;
+    memset(g_fs_persist_buffer, 0, sizeof(g_fs_persist_buffer));
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
     }
@@ -1208,8 +1480,9 @@ void fs_init(void) {
         kernel_debug_puts("fs: persistent image valid\n");
         kernel_debug_puts("fs: asset scans deferred\n");
         g_fs_sync_suspended = 0;
-        g_fs_dirty = 1;
+        fs_mark_dirty();
         g_fs_last_sync_tick = 0u;
+        g_fs_allow_immediate_writeback = 1;
         kernel_debug_puts("fs: initial sync deferred\n");
         return;
     }
@@ -1248,28 +1521,12 @@ void fs_init(void) {
                         "}\n",
                         0);
     kernel_debug_puts("fs: base tree created\n");
-    if (g_fs_defer_catalog_stubs) {
-        g_fs_pending_catalog_stubs = 1;
-        sys_write_debug("fs: compat stubs deferred\n");
-    } else {
-        for (i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
-            (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
-        }
-        kernel_debug_puts("fs: compat stubs created\n");
-    }
+    kernel_debug_puts("fs: executable aliases are virtual\n");
     fs_ensure_assets_registered();
     kernel_debug_puts("fs: asset scans deferred\n");
     g_fs_sync_suspended = 0;
-    g_fs_dirty = 1;
+    fs_mark_dirty();
     g_fs_last_sync_tick = 0u;
+    g_fs_allow_immediate_writeback = 1;
     kernel_debug_puts("fs: initial sync deferred\n");
-}
-
-void fs_set_deferred_catalog_stubs(int enabled) {
-    g_fs_defer_catalog_stubs = enabled != 0;
-}
-
-void fs_complete_startup(void) {
-    fs_materialize_catalog_stubs();
-    g_fs_defer_catalog_stubs = 0;
 }
