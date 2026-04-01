@@ -1,0 +1,14 @@
+Improve error message when using -g option with links instead of links2.
+(Closes: #602227)
+
+--- a/main.c
++++ b/main.c
+@@ -464,7 +464,7 @@
+ 				freetype_init();
+ 			}
+ #else
+-			fprintf(stderr, "Graphics not enabled when compiling\n");
++			fprintf(stderr, "Graphics not enabled when compiling (use links2 instead for graphics mode)\n");
+ 			retval = RET_SYNTAX;
+ 			goto ttt;
+ #endif

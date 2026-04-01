@@ -1,0 +1,15 @@
+Description: Use a wrapper around x-terminal-emulator instead of xterm.
+Reviewed-By: Axel Beckert <abe@debian.org>
+Forwarded: not-needed
+
+--- a/os_dep.c
++++ b/os_dep.c
+@@ -3117,7 +3117,7 @@
+ #elif defined(HAIKU)
+ 		xterm = cast_uchar "Terminal";
+ #else
+-		xterm = cast_uchar "xterm -e";
++		xterm = cast_uchar "/usr/share/links2/x-terminal-emulator-which-properly-handles-dash-e -e";
+ #endif
+ 	}
+ 	return xterm;

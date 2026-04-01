@@ -1,0 +1,46 @@
+#!/bin/sh
+
+# Script to blacklist some possible alternatives for
+# x-terminal-emulator as they have known issues with "-e". At least
+# gnome-terminal and xfce4-terminal are known to exit immediately if a
+# terminal of the same type is already running.
+#
+# There seems no chance to get gnome-terminal to behave properly, so
+# ignore it and use a fallback instead.
+#
+# xfce4-terminal on the other hand can be forced into proper behaviour
+# with "-e" by disabling dbus communication with
+# "--disable-server". Unfortunately its wrapper (which does other
+# magic) silently drops the option unknown to it and hence we need to
+# call xfce4-terminal directly, which shouldn't hurt for links2's
+# default configuration values.
+
+emu=$(readlink /etc/alternatives/x-terminal-emulator)
+
+call_fallback() {
+    # Package xterm also contains the lxterm wrapper
+    if [ -e /usr/bin/lxterm ]; then
+        exec /usr/bin/lxterm "$@"
+    # rxvt is also managed via alternatives and could actually spawn urxvt
+    elif [ -e /usr/bin/rxvt ]; then
+        exec /usr/bin/urxvt "$@"
+    # Fallback in case nothing else is found
+    elif which xterm > /dev/null ; then
+        exec xterm "$@"
+    else
+        exec x-terminal-emulator "$@"
+    fi
+            
+}
+
+case "$emu" in
+     /usr/bin/gnome-terminal.wrapper)
+        call_fallback "$@"
+        ;;
+    # xfce-terminal offers --disable-server but its wrapper doesn't pass it
+    /usr/bin/xfce4-terminal.wrapper)
+        exec xfce4-terminal --disable-server "$@"
+        ;;
+    *)
+        exec x-terminal-emulator "$@"
+esac

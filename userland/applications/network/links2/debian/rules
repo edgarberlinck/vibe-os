@@ -1,0 +1,55 @@
+#!/usr/bin/make -f
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+include /usr/share/dpkg/architecture.mk
+
+# configure seem to fail to add this since 2.9
+export DEB_LDFLAGS_MAINT_APPEND=-lpthread
+export DEB_BUILD_MAINT_OPTIONS=hardening=+all
+
+BUILT_USING=$(shell dpkg-query -f '$${source:Package} (= $${source:Version}), ' -W publicsuffix)
+
+ifeq ($(origin CC),default)
+export CC := $(DEB_HOST_GNU_TYPE)-gcc
+endif
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+#	build the full-featured version
+	env PKG_CONFIG=`which pkg-config` dh_auto_configure -Bbuild-links2 -- \
+		--enable-graphics \
+		--with-x \
+		--without-fb
+
+#	build the textmode only version
+	env PKG_CONFIG=`which pkg-config` dh_auto_configure -Bbuild-links -- \
+		--without-libevent \
+		--without-svgalib \
+		--without-x --without-fb \
+		--without-directfb \
+		--without-libjpeg \
+		--without-librsvg \
+		--without-libtiff \
+		--without-libavif \
+		--without-libwebp
+
+override_dh_auto_install:
+	dh_auto_install -Bbuild-links2
+	# rename links.1 and links to links2.1 and links2
+	mv $(CURDIR)/debian/tmp/usr/bin/links \
+           $(CURDIR)/debian/tmp/usr/bin/links2
+	mv $(CURDIR)/debian/tmp/usr/share/man/man1/links.1 \
+           $(CURDIR)/debian/tmp/usr/share/man/man1/links2.1
+
+	dh_auto_install -Bbuild-links
+	# Fix "links2" occurrences in links' man-page, see #602228
+	sed -z \
+	    -e 's/\([^.]\)\(links\)2/\1\2/gi;s/\\f3-g\\f1.*\\f3-force-html\\f1/\\f3-force-html\\f1/' \
+	    -i $(CURDIR)/debian/tmp/usr/share/man/man1/links.1
+
+override_dh_gencontrol:
+	dh_gencontrol -a -- -VBuilt-Using="$(BUILT_USING)"

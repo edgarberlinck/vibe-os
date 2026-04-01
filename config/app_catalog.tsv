@@ -1,4 +1,4 @@
-# name	build_var	shell_visible	prefer_external	stub_paths
+# name	build_var	shell_visible	prefer_external	alias_paths
 hello	HELLO_APP_BIN	1	0	/bin/hello
 js	JS_APP_BIN	1	0	/bin/js
 ruby	RUBY_APP_BIN	1	0	/bin/ruby
@@ -8,6 +8,10 @@ javac	JAVAC_APP_BIN	1	0	/bin/javac,/usr/bin/javac
 userland	USERLAND_BOOT_APP_BIN	0	0
 lua	LUA_APP_BIN	1	0	/bin/lua
 sectorc	SECTORC_APP_BIN	1	0	/bin/sectorc
+soundctl	SOUNDCTL_APP_BIN	1	0	/bin/soundctl
+audiosvc	AUDIOSVC_APP_BIN	1	0	/bin/audiosvc
+netmgrd	NETMGRD_APP_BIN	1	0	/bin/netmgrd
+netctl	NETCTL_APP_BIN	1	0	/bin/netctl
 startx	STARTX_APP_BIN	1	1	/bin/startx
 edit	EDIT_APP_BIN	1	1	/bin/edit
 nano	NANO_APP_BIN	1	1	/bin/nano
@@ -86,3 +90,14 @@ loadkeys	LOADKEYS_APP_BIN	1	0	/bin/loadkeys,/compat/bin/loadkeys
 true	TRUE_APP_BIN	1	1	/compat/bin/true
 false	FALSE_APP_BIN	1	1	/compat/bin/false
 printf	PRINTF_APP_BIN	1	1	/compat/bin/printf
+uname	UNAME_APP_BIN	1	1	/bin/uname,/usr/bin/uname,/compat/bin/uname
+sync	SYNC_APP_BIN	1	0	/bin/sync,/usr/bin/sync,/compat/bin/sync
+tr	TR_APP_BIN	1	0	/bin/tr,/usr/bin/tr,/compat/bin/tr
+ifconfig	IFCONFIG_APP_BIN	1	1	/sbin/ifconfig,/bin/ifconfig,/usr/sbin/ifconfig,/compat/sbin/ifconfig
+route	ROUTE_APP_BIN	1	1	/sbin/route,/bin/route,/usr/sbin/route,/compat/sbin/route
+netstat	NETSTAT_APP_BIN	1	1	/usr/bin/netstat,/bin/netstat,/compat/bin/netstat
+ping	PING_APP_BIN	1	1	/sbin/ping,/bin/ping,/usr/sbin/ping,/compat/sbin/ping
+host	HOST_APP_BIN	1	1	/usr/bin/host,/bin/host,/compat/bin/host
+dig	DIG_APP_BIN	1	1	/usr/bin/dig,/bin/dig,/compat/bin/dig
+ftp	FTP_APP_BIN	1	1	/usr/bin/ftp,/bin/ftp,/compat/bin/ftp
+curl	CURL_APP_BIN	1	1	/usr/bin/curl,/bin/curl,/compat/bin/curl

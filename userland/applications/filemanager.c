@@ -70,36 +70,80 @@ static int filemanager_row_count(const struct filemanager_state *fm) {
     return count;
 }
 
+static int filemanager_visible_rows(const struct filemanager_state *fm) {
+    struct rect list = filemanager_list_rect(fm);
+    int visible = list.h / FILEMGR_ROW_HEIGHT;
+
+    if (visible < 1) {
+        visible = 1;
+    }
+    return visible;
+}
+
+static int filemanager_scroll_limit(const struct filemanager_state *fm) {
+    int limit = filemanager_row_count(fm) - filemanager_visible_rows(fm);
+
+    if (limit < 0) {
+        return 0;
+    }
+    return limit;
+}
+
+static void filemanager_clamp_scroll(struct filemanager_state *fm) {
+    int limit = filemanager_scroll_limit(fm);
+
+    if (fm->scroll_offset < 0) {
+        fm->scroll_offset = 0;
+    }
+    if (fm->scroll_offset > limit) {
+        fm->scroll_offset = limit;
+    }
+}
+
 void filemanager_init_state(struct filemanager_state *fm) {
     fm->window = DEFAULT_FILEMGR_WINDOW;
     fm->cwd = g_fs_root;
     fm->selected_node = -1;
+    fm->scroll_offset = 0;
 }
 
 static void draw_listing(struct filemanager_state *fm) {
     int row = 0;
+    int visible_row = 0;
     int child = g_fs_nodes[fm->cwd].first_child;
     struct rect list = filemanager_list_rect(fm);
     const struct desktop_theme *theme = ui_theme_get();
 
+    filemanager_clamp_scroll(fm);
+
     ui_draw_inset(&list, ui_color_window_bg());
 
     if (fm->cwd != g_fs_root) {
-        struct rect parent_row = filemanager_row_rect(fm, row++);
-        ui_draw_button(&parent_row, "../", UI_BUTTON_NORMAL, 0);
+        if (row >= fm->scroll_offset) {
+            struct rect parent_row = filemanager_row_rect(fm, visible_row++);
+            ui_draw_button(&parent_row, "../", UI_BUTTON_NORMAL, 0);
+        }
+        ++row;
     }
 
     if (child == -1) {
-        if (row == 0) {
+        if (visible_row == 0) {
             sys_text(list.x + 4, list.y + 4, theme->text, "(vazio)");
         }
         return;
     }
 
     while (child != -1) {
-        struct rect item = filemanager_row_rect(fm, row++);
+        struct rect item;
         char line[32];
 
+        if (row < fm->scroll_offset) {
+            child = g_fs_nodes[child].next_sibling;
+            ++row;
+            continue;
+        }
+
+        item = filemanager_row_rect(fm, visible_row++);
         if (item.y + item.h > list.y + list.h) {
             break;
         }
@@ -113,6 +157,7 @@ static void draw_listing(struct filemanager_state *fm) {
         filemanager_row_label(child, line, sizeof(line));
         sys_text(item.x + 4, item.y + 4, theme->text, line);
         child = g_fs_nodes[child].next_sibling;
+        ++row;
     }
 }
 
@@ -120,9 +165,20 @@ int filemanager_hit_test_entry(const struct filemanager_state *fm, int x, int y)
     int row = 0;
     int child = g_fs_nodes[fm->cwd].first_child;
     int total_rows = filemanager_row_count(fm);
+    struct rect list = filemanager_list_rect(fm);
 
     for (row = 0; row < total_rows; ++row) {
-        struct rect item = filemanager_row_rect(fm, row);
+        int visible_row;
+        struct rect item;
+
+        if (row < fm->scroll_offset) {
+            continue;
+        }
+        visible_row = row - fm->scroll_offset;
+        item = filemanager_row_rect(fm, visible_row);
+        if (item.y + item.h > list.y + list.h) {
+            break;
+        }
         if (!point_in_rect(&item, x, y)) {
             continue;
         }
@@ -149,6 +205,7 @@ int filemanager_open_node(struct filemanager_state *fm, int node) {
         if (fm->cwd != g_fs_root) {
             fm->cwd = g_fs_nodes[fm->cwd].parent;
             fm->selected_node = -1;
+            fm->scroll_offset = 0;
             return 1;
         }
         return 0;
@@ -165,7 +222,16 @@ int filemanager_open_node(struct filemanager_state *fm, int node) {
 
     fm->cwd = node;
     fm->selected_node = -1;
+    fm->scroll_offset = 0;
     return 1;
+}
+
+void filemanager_scroll_by(struct filemanager_state *fm, int delta) {
+    if (fm == NULL || delta == 0) {
+        return;
+    }
+    fm->scroll_offset += delta;
+    filemanager_clamp_scroll(fm);
 }
 
 void filemanager_draw_window(struct filemanager_state *fm, int active,

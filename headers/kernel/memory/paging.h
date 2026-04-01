@@ -10,5 +10,7 @@ uintptr_t paging_page_directory_phys(void);
 int paging_snapshot_large_region(uintptr_t virtual_start, size_t size, uint32_t *entries_out, size_t entry_capacity);
 int paging_map_large_region(uintptr_t virtual_start, uintptr_t physical_start, size_t size);
 int paging_restore_large_region(uintptr_t virtual_start, size_t size, const uint32_t *entries, size_t entry_capacity);
+int paging_pat_wc_enabled(void);
+int paging_set_framebuffer_wc(uintptr_t fb_addr, size_t size);
 
 #endif /* KERNEL_MEMORY_PAGING_H */

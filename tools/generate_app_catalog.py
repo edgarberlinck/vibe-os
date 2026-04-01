@@ -17,16 +17,16 @@ def parse_manifest(path: Path):
             build_var = row[1].strip()
             shell_visible = row[2].strip() == "1"
             prefer_external = row[3].strip() == "1"
-            stub_paths = []
+            alias_paths = []
             if len(row) >= 5 and row[4].strip():
-                stub_paths = [item.strip() for item in row[4].split(",") if item.strip()]
+                alias_paths = [item.strip() for item in row[4].split(",") if item.strip()]
             entries.append(
                 {
                     "name": name,
                     "build_var": build_var,
                     "shell_visible": shell_visible,
                     "prefer_external": prefer_external,
-                    "stub_paths": stub_paths,
+                    "alias_paths": alias_paths,
                 }
             )
     return entries
@@ -65,8 +65,8 @@ def emit_header(entries):
     prefer_external = unique_in_order(
         entry["name"] for entry in entries if entry["prefer_external"]
     )
-    stub_paths = unique_in_order(
-        path for entry in entries for path in entry["stub_paths"]
+    alias_paths = unique_in_order(
+        path for entry in entries for path in entry["alias_paths"]
     )
 
     def string_array(name, values):
@@ -87,7 +87,7 @@ def emit_header(entries):
         "",
         string_array("g_app_catalog_shell_commands", shell_commands),
         string_array("g_app_catalog_prefer_external", prefer_external),
-        string_array("g_app_catalog_stub_paths", stub_paths),
+        string_array("g_app_catalog_alias_paths", alias_paths),
         "#endif",
         "",
     ]

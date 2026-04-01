@@ -27,7 +27,11 @@ static struct GLFWmonitor g_monitor;
 static double g_time_value = 0.0;
 static GLFWvidmode g_modes[] = {
     {640, 480, 8, 8, 8, 60},
-    {800, 600, 8, 8, 8, 60}
+    {800, 600, 8, 8, 8, 60},
+    {1024, 768, 8, 8, 8, 60},
+    {1360, 768, 8, 8, 8, 60},
+    {1366, 768, 8, 8, 8, 60},
+    {1920, 1080, 8, 8, 8, 60}
 };
 static GLFWkeyfun g_key_cb = 0;
 static GLFWcharfun g_char_cb = 0;
@@ -43,34 +47,96 @@ static int g_mouse_x = 0;
 static int g_mouse_y = 0;
 static int g_mouse_dx = 0;
 static int g_mouse_dy = 0;
+static double g_mouse_scroll_y = 0.0;
 static uint8_t g_mouse_buttons = 0u;
 static int g_mouse_inside = 0;
 static int g_window_focused = 0;
 static int g_pending_keys[128];
 static int g_pending_key_count = 0;
+static int g_swap_interval = 0;
+static uint32_t g_swap_deadline_ticks = 0u;
+static uint32_t g_swap_tick_remainder = 0u;
 
-#define CRAFT_GLFW_MAX_WIDTH 640
-#define CRAFT_GLFW_MAX_HEIGHT 480
 #define CRAFT_GLFW_KEY_HOLD_TICKS 6
+#define CRAFT_GLFW_TIMER_HZ 100u
+#define CRAFT_GLFW_PRESENT_HZ 60u
+
+static void craft_glfw_reset_swap_pacing(void) {
+    g_swap_deadline_ticks = 0u;
+    g_swap_tick_remainder = 0u;
+}
+
+static void craft_glfw_wait_swap_slot(void) {
+    uint32_t now;
+    uint32_t delta_ticks;
+
+    if (g_swap_interval <= 0) {
+        return;
+    }
+
+    now = sys_ticks();
+    if (g_swap_deadline_ticks == 0u) {
+        g_swap_deadline_ticks = now;
+    }
+
+    while ((int32_t)(g_swap_deadline_ticks - now) > 0) {
+        sys_sleep();
+        now = sys_ticks();
+    }
+
+    g_swap_tick_remainder += (CRAFT_GLFW_TIMER_HZ * (uint32_t)g_swap_interval);
+    delta_ticks = g_swap_tick_remainder / CRAFT_GLFW_PRESENT_HZ;
+    g_swap_tick_remainder %= CRAFT_GLFW_PRESENT_HZ;
+    if (delta_ticks == 0u) {
+        delta_ticks = 1u;
+    }
+
+    if ((int32_t)(now - g_swap_deadline_ticks) > (int32_t)CRAFT_GLFW_TIMER_HZ) {
+        g_swap_deadline_ticks = now + delta_ticks;
+        g_swap_tick_remainder = 0u;
+        return;
+    }
+
+    g_swap_deadline_ticks += delta_ticks;
+}
 
 static void craft_glfw_clamp_window_size(int *width, int *height) {
+    struct video_mode mode;
+    int max_width = 0;
+    int max_height = 0;
+
     if (!width || !height) {
         return;
     }
-    if (*width > CRAFT_GLFW_MAX_WIDTH) {
-        *width = CRAFT_GLFW_MAX_WIDTH;
+
+    if (sys_gfx_info(&mode) == 0) {
+        max_width = (int)mode.width;
+        max_height = (int)mode.height;
     }
-    if (*height > CRAFT_GLFW_MAX_HEIGHT) {
-        *height = CRAFT_GLFW_MAX_HEIGHT;
+
+    if (max_width <= 0) {
+        max_width = *width;
+    }
+    if (max_height <= 0) {
+        max_height = *height;
+    }
+
+    if (*width > max_width) {
+        *width = max_width;
+    }
+    if (*height > max_height) {
+        *height = max_height;
+    }
+    if (*width < 1) {
+        *width = 1;
+    }
+    if (*height < 1) {
+        *height = 1;
     }
 }
 
 static void craft_glfw_debug(const char *message) {
-    if (!message) {
-        return;
-    }
-    sys_write_debug(message);
-    sys_write_debug("\n");
+    (void)message;
 }
 
 static void craft_glfw_push_mapped_key(int mapped, int raw) {
@@ -141,17 +207,23 @@ GLFWwindow *glfwCreateWindow(int width, int height, const char *title, GLFWmonit
     g_mouse_x = width / 2;
     g_mouse_y = height / 2;
     g_mouse_buttons = 0u;
+    g_mouse_scroll_y = 0.0;
     g_mouse_inside = 0;
     g_window_focused = 0;
     g_pending_key_count = 0;
+    g_swap_interval = 0;
     g_last_ticks = sys_ticks();
+    craft_glfw_reset_swap_pacing();
     craft_glfw_debug("craft: glfwCreateWindow before gl init");
     craft_gl_init_window(width, height);
     craft_glfw_debug("craft: glfwCreateWindow after gl init");
     return &g_window;
 }
 void glfwMakeContextCurrent(GLFWwindow *window) { (void)window; }
-void glfwSwapInterval(int interval) { (void)interval; }
+void glfwSwapInterval(int interval) {
+    g_swap_interval = interval;
+    craft_glfw_reset_swap_pacing();
+}
 void glfwSetInputMode(GLFWwindow *window, int mode, int value) {
     if (window && mode == GLFW_CURSOR) {
         window->cursor_mode = value;
@@ -181,7 +253,10 @@ int glfwGetKey(GLFWwindow *window, int key) {
     return window->key_states[key];
 }
 void glfwPollEvents(void) {
-    uint32_t now = sys_ticks();
+    uint32_t now;
+
+    craft_glfw_wait_swap_slot();
+    now = sys_ticks();
     if (g_last_ticks == 0u) {
         g_last_ticks = now;
     }
@@ -245,6 +320,10 @@ void glfwPollEvents(void) {
             }
             g_window.mouse_states[button] = pressed ? GLFW_PRESS : GLFW_RELEASE;
         }
+        if (g_mouse_scroll_y != 0.0 && g_scroll_cb) {
+            g_scroll_cb(&g_window, 0.0, g_mouse_scroll_y);
+            g_mouse_scroll_y = 0.0;
+        }
         g_mouse_prev_x = g_mouse_x;
         g_mouse_prev_y = g_mouse_y;
         g_mouse_prev_buttons = buttons;
@@ -255,7 +334,10 @@ void glfwPollEvents(void) {
         }
     }
 }
-void glfwSwapBuffers(GLFWwindow *window) { (void)window; craft_gl_present(); }
+void glfwSwapBuffers(GLFWwindow *window) {
+    (void)window;
+    craft_gl_present();
+}
 int glfwWindowShouldClose(GLFWwindow *window) { return window ? window->should_close : 1; }
 double glfwGetTime(void) { return g_time_value; }
 void glfwSetTime(double time) { g_time_value = time; }
@@ -271,11 +353,12 @@ void craft_glfw_inject_key(int raw) {
 }
 
 void craft_glfw_set_mouse_state(int x, int y, int dx, int dy,
-                                uint8_t buttons, int focused, int inside) {
+                                int wheel, uint8_t buttons, int focused, int inside) {
     g_mouse_x = x;
     g_mouse_y = y;
     g_mouse_dx = dx;
     g_mouse_dy = dy;
+    g_mouse_scroll_y = (double)wheel;
     g_mouse_buttons = buttons;
     g_window_focused = focused || g_window.cursor_mode == GLFW_CURSOR_DISABLED;
     g_mouse_inside = inside || g_window.cursor_mode == GLFW_CURSOR_DISABLED;
@@ -302,8 +385,10 @@ void craft_glfw_reset_embedded(void) {
     g_window.cursor_y = g_window.height / 2;
     g_mouse_ready = 0;
     g_mouse_buttons = 0u;
+    g_mouse_scroll_y = 0.0;
     g_mouse_inside = 0;
     g_window_focused = 0;
     g_pending_key_count = 0;
+    craft_glfw_reset_swap_pacing();
     craft_gl_shutdown_window();
 }

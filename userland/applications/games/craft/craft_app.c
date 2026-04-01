@@ -3,8 +3,8 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
 
-#define CRAFT_EMBED_MAX_WIDTH 640
-#define CRAFT_EMBED_MAX_HEIGHT 480
+#define CRAFT_EMBED_MAX_WIDTH 480
+#define CRAFT_EMBED_MAX_HEIGHT 360
 #define CRAFT_WINDOW_CHROME_W 8
 #define CRAFT_WINDOW_CHROME_H 22
 #define CRAFT_WINDOW_MARGIN 16
@@ -128,6 +128,7 @@ void craft_init_state(struct craft_state *state) {
     state->mouse_y = 0;
     state->mouse_dx = 0;
     state->mouse_dy = 0;
+    state->mouse_wheel = 0;
     state->mouse_buttons = 0u;
     if (craft_storage_available()) {
         str_copy_limited(state->status, "Inicializando renderer do Craft", (int)sizeof(state->status));
@@ -137,13 +138,14 @@ void craft_init_state(struct craft_state *state) {
 }
 
 void craft_update_input(struct craft_state *state, int focused,
-                        int mouse_x, int mouse_y, int mouse_dx, int mouse_dy,
+                        int mouse_x, int mouse_y, int mouse_dx, int mouse_dy, int mouse_wheel,
                         uint8_t mouse_buttons) {
     state->focused = focused;
     state->mouse_x = mouse_x;
     state->mouse_y = mouse_y;
     state->mouse_dx = mouse_dx;
     state->mouse_dy = mouse_dy;
+    state->mouse_wheel = mouse_wheel;
     state->mouse_buttons = mouse_buttons;
 }
 
@@ -156,6 +158,7 @@ void craft_shutdown_state(struct craft_state *state) {
     state->focused = 0;
     state->mouse_dx = 0;
     state->mouse_dy = 0;
+    state->mouse_wheel = 0;
     state->mouse_buttons = 0u;
     str_copy_limited(state->status, "Craft encerrado", (int)sizeof(state->status));
 }
@@ -199,7 +202,7 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
 
     craft_upstream_resize(render.w, render.h);
     craft_upstream_set_mouse(local_x, local_y,
-                             state->mouse_dx, state->mouse_dy,
+                             state->mouse_dx, state->mouse_dy, state->mouse_wheel,
                              state->mouse_buttons, state->focused, inside);
     state->last_code = craft_upstream_frame();
     {

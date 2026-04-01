@@ -16,6 +16,7 @@
 #include <kernel/drivers/video/video.h>
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/drivers/usb/usb_host.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/microkernel.h>
 #include <kernel/userland.h>
@@ -37,6 +38,29 @@ struct bootdebug_persist {
 
 static volatile struct bootdebug_persist *const bootdebug_persist =
     (volatile struct bootdebug_persist *)(uintptr_t)BOOTDEBUG_ADDR;
+
+static const char *kernel_smp_skip_reason(void) {
+    const struct kernel_cpu_topology *topology = kernel_cpu_topology();
+
+    if (topology == 0 || topology->cpu_count <= 1u) {
+        return "single processor";
+    }
+    if (!topology->apic_supported) {
+        return "local apic unavailable";
+    }
+    if (!topology->mp_table_present &&
+        !topology->acpi_madt_present &&
+        !topology->synthetic_apic_map) {
+        return "no multiprocessor topology";
+    }
+    if (!topology->mp_table_present && !topology->acpi_madt_present) {
+        return "synthetic apic map only";
+    }
+    if (!local_apic_enabled()) {
+        return "local apic not enabled";
+    }
+    return "unknown";
+}
 
 static void kernel_bootdebug_append(uint8_t code) {
     if (bootdebug_persist->magic != BOOTDEBUG_MAGIC ||
@@ -326,16 +350,30 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     if (kernel_cpu_count() > 1u) {
         if (kernel_cpu_is_smp_capable()) {
             kernel_text_puts("CPU topology: multiprocessor platform verified\n");
+            kernel_debug_puts("CPU topology: multiprocessor platform verified\n");
         } else {
             kernel_text_puts("CPU topology: multiple cores detected, SMP bring-up deferred\n");
+            kernel_debug_puts("CPU topology: multiple cores detected, SMP bring-up deferred\n");
+            kernel_debug_printf("smp: fallback reason=%s cpu_count=%d apic=%d mp=%d\n",
+                                kernel_smp_skip_reason(),
+                                (int)kernel_cpu_count(),
+                                (int)kernel_cpu_topology()->apic_supported,
+                                (int)kernel_cpu_topology()->mp_table_present);
         }
     } else {
         kernel_text_puts("CPU topology: single processor\n");
+        kernel_debug_puts("CPU topology: single processor\n");
     }
-    if (kernel_cpu_is_smp_capable()) {
+    if (kernel_cpu_is_smp_capable() &&
+        (kernel_cpu_topology()->mp_table_present ||
+         kernel_cpu_topology()->acpi_madt_present)) {
         local_apic_init();
     } else {
         kernel_text_puts("LAPIC/SMP deferred on this platform\n");
+        kernel_text_puts("SMP fallback: platform not APIC-ready\n");
+        kernel_debug_puts("LAPIC/SMP deferred on this platform\n");
+        kernel_debug_puts("SMP fallback: platform not APIC-ready\n");
+        kernel_debug_printf("smp: fallback reason=%s\n", kernel_smp_skip_reason());
     }
     kernel_text_puts("Video OK\n");
 
@@ -450,6 +488,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
         heap_end = 0x00900000u;
     }
     kernel_mm_init(heap_start, heap_end - heap_start);
+    kernel_video_refresh_backend();
     mk_transfer_init();
     kernel_text_puts("Memory OK\n");
     kernel_bootdebug_mark_stable();
@@ -461,23 +500,44 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_text_puts("Initializing scheduler/driver manager...\n");
     scheduler_init();
     driver_manager_init(); /* second call to debug init performs HW setup */
+    kernel_usb_host_init();
     kernel_text_puts("Scheduler OK\n");
 
-    if (kernel_cpu_is_smp_capable() && local_apic_enabled()) {
-        kernel_text_puts("SMP deferred\n");
+    if (kernel_cpu_is_smp_capable() &&
+        (kernel_cpu_topology()->mp_table_present ||
+         kernel_cpu_topology()->acpi_madt_present) &&
+        local_apic_enabled()) {
+        kernel_text_puts("SMP bring-up...\n");
+        smp_persist_trace_arm();
+        smp_persist_trace_mark('B');
+        smp_init();
+        smp_persist_trace_mark('R');
+        if (smp_started_cpu_count() > 1u) {
+            kernel_text_puts("SMP OK\n");
+            kernel_debug_puts("SMP OK\n");
+            smp_persist_trace_disarm();
+        } else {
+            kernel_text_puts("SMP partial\n");
+            kernel_debug_puts("SMP partial\n");
+        }
     } else {
         kernel_text_puts("SMP skipped\n");
+        kernel_debug_puts("SMP skipped\n");
+        kernel_debug_printf("smp: skip reason=%s started=%d total=%d\n",
+                            kernel_smp_skip_reason(),
+                            (int)smp_started_cpu_count(),
+                            (int)kernel_cpu_count());
     }
 
     kernel_text_puts("Initializing VFS...\n");
     vfs_init();
     mk_storage_service_init();
-    mk_filesystem_service_init();
     mk_video_service_init();
+    mk_audio_service_init();
+    mk_filesystem_service_init();
     mk_input_service_init();
     mk_console_service_init();
     mk_network_service_init();
-    mk_audio_service_init();
     kernel_text_puts("VFS OK\n");
 
     kernel_text_puts("Initializing syscalls...\n");

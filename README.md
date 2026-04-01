@@ -1,42 +1,46 @@
-# VIBE OS - Um sistema operacional x86 simples usando IA e vibe coding (e muitas patas de raposo e mãos humanas)
+# VibeOS
+
+VibeOS e um sistema operacional x86 BIOS em 32-bit com bootloader proprio, kernel hibrido orientado a servicos, AppFS modular para apps e uma arvore grande de ports reaproveitados de `compat/`.
+
+O repositorio ja nao e mais a demo minima original. Hoje o fluxo real e:
+
+`BIOS -> MBR -> VBR/stage1 -> stage2 -> KERNEL.BIN -> kernel -> init -> AppFS -> userland.app/startx -> shell e apps`
 
 ## Aviso
 
-Este repositório é um projeto experimental de sistema operacional x86 BIOS feito com forte apoio de IA. Há bastante código funcional, mas também há áreas incompletas, inconsistentes ou ainda em transição arquitetural.
+Este repositorio e um projeto experimental. Ha bastante codigo funcional, mas tambem existem partes incompletas, inconsistentes ou ainda em transicao arquitetural.
 
 Leia o projeto como:
 
 - experimento de bootloader + kernel + runtime modular
-- base para estudo, depuração e refatoração
-- código que ainda não representa um sistema operacional "acabado"
+- base para estudo, depuracao e refatoracao
+- sistema em evolucao, nao um OS "acabado"
 
-## Resumo
+## Estado atual
 
-O estado atual do projeto é este:
+Ja esta materialmente funcionando:
 
-- boot **BIOS legado**, em múltiplos estágios
-- **MBR -> VBR -> stage2 -> `KERNEL.BIN`**
-- partição de boot **FAT32**
-- segunda partição **raw** para **AppFS**, persistência e assets
-- kernel 32-bit com:
-  - inicialização de CPU, GDT, IDT, PIC e PIT
-  - drivers de vídeo, teclado, mouse e storage
-  - scheduler simples
-  - camada de serviços estilo microkernel
-  - tabela de syscalls
-- bootstrap de userland via serviço interno `init`
-- carregamento de apps externos via **AppFS**
-- shell modular e caminho gráfico com `startx` e desktop
+- boot BIOS funcional com imagem particionada
+- pipeline `MBR -> FAT32 boot -> stage2 -> kernel`
+- kernel com scheduler, memoria paginada, ELF loader, VFS, IPC e servicos bootstrap
+- shell externa via `userland.app` carregada do AppFS no boot normal
+- desktop grafico, terminal, file manager, editor, task manager, jogos e apps modulares
+- scroll wheel do mouse de ponta a ponta no kernel e no desktop
+- matriz principal de validacao em QEMU para boot, apps, audio e video
 
-Em outras palavras: o sistema não é mais um blob único "kernel + userland embutida" no sentido antigo do README. Hoje o fluxo real é:
+Ainda em fechamento:
 
-`BIOS -> MBR -> stage1/VBR -> stage2 -> KERNEL.BIN -> kernel -> init -> AppFS -> userland.app/startx -> shell e apps`
+- rede real completa
+- audio robusto em hardware real, especialmente `compat-azalia`
+- video nativo em hardware real fora do QEMU
+- SMP estavel em hardware real multiprocessado
+- alguns gaps de runtime/POSIX e smoke por app
 
-## Aviso sobre a documentação detalhada
+O plano consolidado atual esta em [docs/FINALIZATION_EXECUTION_PLAN.md](docs/FINALIZATION_EXECUTION_PLAN.md).
 
-Os arquivos detalhados em `docs/` estão **somente em inglês**.
+## Documentacao principal
 
-Se você quer a visão técnica mais fiel ao código atual, comece por eles:
+Os arquivos tecnicos detalhados em `docs/` estao em ingles. Se voce quer a visao mais fiel ao codigo atual, comece por:
 
 - [docs/overview.md](docs/overview.md)
 - [docs/workflow.md](docs/workflow.md)
@@ -49,236 +53,176 @@ Se você quer a visão técnica mais fiel ao código atual, comece por eles:
 - [docs/runtime_and_services.md](docs/runtime_and_services.md)
 - [docs/apps_and_modules.md](docs/apps_and_modules.md)
 
-## Índice rápido
+Planos, migracoes e guidelines historicas agora ficam em [docs/guidelines/](docs/guidelines/), incluindo:
 
-- [Arquitetura atual](#arquitetura-atual)
-- [Mapa de diretórios](#mapa-de-diretórios)
-- [Build](#build)
-- [Execução no QEMU](#execução-no-qemu)
-- [Artefatos gerados](#artefatos-gerados)
-- [Documentação](#documentação)
-- [Status real do projeto](#status-real-do-projeto)
-- [English version](README.en.md)
+- [docs/guidelines/QUICK_BUILD.md](docs/guidelines/QUICK_BUILD.md)
+- [docs/guidelines/MICROKERNEL_MIGRATION.md](docs/guidelines/MICROKERNEL_MIGRATION.md)
+- [docs/guidelines/COMPAT_PLAN.md](docs/guidelines/COMPAT_PLAN.md)
+- [docs/guidelines/smp.md](docs/guidelines/smp.md)
 
-## Arquitetura atual
+## Arquitetura
 
 ### Boot
 
-- [`boot/mbr.asm`](boot/mbr.asm)
-  - relocação do MBR
-  - inicialização de `BOOTINFO`
-  - descoberta da partição ativa
-  - carga do VBR
-- [`boot/stage1.asm`](boot/stage1.asm)
-  - leitura do `stage2` a partir dos setores reservados da partição FAT32
-  - trace persistente de boot em RAM baixa
-- [`boot/stage2.asm`](boot/stage2.asm)
-  - parse mínimo de FAT32
-  - leitura de `VIBEBG.BIN` e `KERNEL.BIN`
-  - enumeração VESA
-  - detecção de memória
-  - ativação de A20
-  - menu de boot
-  - retorno para real mode para uso de BIOS e handoff final ao kernel
+- `boot/mbr.asm`: MBR BIOS
+- `boot/stage1.asm`: VBR/FAT32 bootstrap
+- `boot/stage2.asm`: loader principal e handoff para o kernel
 
 ### Kernel
 
-O kernel atual entra por [`kernel/entry.c`](kernel/entry.c) e faz:
+- `kernel/`: kernel principal
+- `kernel/microkernel/`: limites de servico e bridges atuais
+- `kernel/process/`: processos e scheduler
+- `kernel/memory/`: paging, physmem e heap
+- `kernel/drivers/`: input, video, storage, timer, debug, PCI, USB
+- `kernel/cpu/`, `kernel/apic.c`, `kernel/smp.c`: topologia, LAPIC e bring-up SMP
 
-- bring-up básico de CPU/GDT/IDT/PIC/PIT
-- inicialização de vídeo e console de texto
-- teclado PS/2 e mouse PS/2
-- descoberta de storage nativo:
-  - AHCI primeiro
-  - ATA depois
-- inicialização de memória, heap e arenas para apps externos
-- scheduler
-- registro e bootstrap de serviços
-- syscalls
-- lançamento do `init` interno
+### Userland e apps
 
-### Runtime e apps
+- `userland/userland.c`: `userland.app`, shell externa autostartada no boot
+- `userland/modules/`: runtime e bibliotecas comuns
+- `userland/applications/`: desktop e apps nativos/modulares
+- `applications/ported/`: utilitarios e apps portados
 
-O caminho atual de execução de apps não depende de um VFS completo no kernel.
-
-O fluxo é:
-
-- o kernel sobe o serviço interno `init`
-- `init` prepara console e filesystem de userland
-- `init` tenta lançar `userland.app` via AppFS
-- `userland.app` sobe o shell
-- em boot normal para desktop, `userland.app` autoexecuta `startx`
-- `startx` e o desktop lançam apps gráficos modulares
-
-### Storage em tempo de execução
+### Storage em tempo de execucao
 
 Hoje existem dois "mundos" de storage:
 
-1. partição de boot FAT32
-   - usada pelo loader BIOS
-   - contém `KERNEL.BIN`, `STAGE2.BIN`, manifests e assets de boot
-2. partição raw de dados
-   - AppFS
-   - área de persistência
-   - assets raw como wallpaper e dados de jogos
-
-## Mapa de diretórios
-
-```text
-.
-├── boot/                # MBR, VBR/stage1 e stage2 em assembly
-├── kernel/              # kernel C
-├── kernel_asm/          # assembly do kernel
-├── headers/             # headers centralizados
-├── userland/            # bootstrap, módulos e apps nativos
-├── lang/                # runtime/AppFS SDK e apps de linguagem
-├── applications/        # apps/ports auxiliares usados no build
-├── compat/              # árvore de compatibilidade/ports
-├── tools/               # empacotamento da imagem, AppFS e validações
-├── linker/              # scripts de link
-├── assets/              # imagens de boot e runtime
-└── docs/
-    ├── *.md             # documentação técnica detalhada (em inglês)
-    └── guidelines/      # planos, guidelines e docs voltados a agentes
-```
+1. particao de boot FAT32
+2. particao raw de dados para AppFS, persistencia e assets
 
 ## Build
 
-### Requisitos
+Requisitos minimos praticos:
 
 - `nasm`
 - `make`
 - `python3`
-- toolchain i386 ELF recomendada:
-  - `i686-elf-gcc`
-  - `i686-elf-ld`
-  - `i686-elf-objcopy`
 - `qemu-system-i386` ou `qemu-system-x86_64`
-- ferramentas FAT para montar/copiar arquivos na partição de boot:
-  - `mkfs.fat` ou equivalente
-  - `mcopy`
-  - `mmd`
+- `mtools` e `mkfs.fat` ou equivalente
 
-### Linux
+Toolchain:
 
-Exemplo mínimo em Debian/Ubuntu:
+- recomendado: `i686-elf-*`
+- fallback suportado em Linux: toolchain host GNU 32-bit (`gcc`, `ld`, `objcopy`, `nm`, `ar`, `ranlib`)
 
-```bash
-sudo apt update
-sudo apt install -y build-essential make python3 nasm qemu-system-x86 mtools dosfstools binutils gcc-multilib
-```
-
-### macOS
-
-Exemplo com Homebrew:
-
-```bash
-brew install nasm qemu mtools dosfstools i686-elf-gcc
-```
-
-### Comando principal
+Build principal:
 
 ```bash
 make
 ```
 
-Alvos úteis:
+Alvos uteis:
 
 - `make` ou `make all`: build completo da imagem
 - `make full`: limpa e recompila tudo
-- `make img`: gera a imagem bootável
-- `make imb`: gera a imagem final para gravação/uso externo
-- `make legacy-data-img`: gera só `build/data-partition.img`
+- `make img`: gera a imagem bootavel
+- `make imb`: gera a imagem final para gravacao/uso externo
+- `make legacy-data-img`: gera so `build/data-partition.img`
 - `make clean`: limpa artefatos
 
-## Execução no QEMU
-
-Modo normal:
-
-```bash
-make run
-```
-
-Modo headless com serial no terminal:
-
-```bash
-make run-headless-debug
-```
-
-Outros alvos de depuração úteis já definidos no `Makefile`:
-
-- `make run-debug`
-- `make run-headless-core2duo-debug`
-- `make run-headless-pentium-debug`
-- `make run-headless-atom-debug`
-- `make run-headless-ahci-debug`
-- `make run-headless-usb-debug`
-
-## Artefatos gerados
-
-Os mais importantes hoje são:
+Artefatos importantes:
 
 - `build/mbr.bin`
 - `build/boot.bin`
 - `build/stage2.bin`
 - `build/kernel.bin`
+- `build/kernel.elf`
 - `build/data-partition.img`
 - `build/boot.img`
 - `build/generated/app_catalog.h`
 - `build/lang/userland.app`
 
-Também são gerados manifests de layout/política para a partição FAT32 de boot.
+Referencia curta de comandos: [docs/guidelines/QUICK_BUILD.md](docs/guidelines/QUICK_BUILD.md).
 
-## Documentação
+## Rodando no QEMU
 
-### Documentação técnica principal
+Execucao normal:
 
-- [docs/overview.md](docs/overview.md): mapa geral
-- [docs/workflow.md](docs/workflow.md): fluxo completo do boot até apps
-- [docs/memory_map.md](docs/memory_map.md): layout de memória e disco
-- [docs/kernel_init.md](docs/kernel_init.md): sequência real de inicialização do kernel
-- [docs/drivers.md](docs/drivers.md): drivers atuais
-- [docs/runtime_and_services.md](docs/runtime_and_services.md): scheduler, serviços, init, syscalls e AppFS
-- [docs/apps_and_modules.md](docs/apps_and_modules.md): catálogo de apps, módulos e runtimes
+```bash
+make run
+```
 
-### Guidelines e planos
+O perfil padrao de `make run` agora e propositalmente mais proximo de um notebook antigo classe T61:
 
-Eles são úteis como contexto histórico e planejamento, mas não devem ser lidos como descrição definitiva do estado atual do código. Esses
-arquivos estão disponíveis em [docs/guidelines/](docs/guidelines/)
+- `-cpu core2duo`
+- `-smp 2,sockets=1,cores=2,threads=1,maxcpus=2`
+- `-machine pc`
+- `-vga std`
 
-## Status real do projeto
+Exemplos de override:
 
-O que já existe de forma material:
+```bash
+make run QEMU_RUN_SMP=1
+make run QEMU_RUN_CPU=pentium
+make run QEMU_RUN_MACHINE=q35
+```
 
-- boot BIOS em múltiplos estágios
-- partição FAT32 de boot funcionando no pipeline
-- carga de `KERNEL.BIN` por stage2
-- `BOOTINFO` compartilhado entre loader e kernel
-- framebuffer VESA preservado quando válido
-- drivers básicos de vídeo, teclado, mouse, timer e storage
-- scheduler e processos/tarefas simples
-- camada de serviços estilo microkernel
-- syscalls suficientes para shell, runtime gráfico e AppFS
-- `init` interno + `userland.app` externo
-- desktop e conjunto razoável de apps gráficos
-- catálogo grande de apps externos, utilitários e ports
+Debugs uteis:
 
-O que continua limitado ou em transição:
+```bash
+make run-debug
+make run-headless-debug
+make run-headless-core2duo-debug
+make run-headless-ahci-debug
+make run-headless-usb-debug
+```
 
-- o VFS do kernel ainda é mínimo
-- o caminho principal de execução de apps ainda passa por AppFS, não por um loader ELF/VFS geral
-- isolamento de processos e modelo "ring3 completo" não devem ser assumidos
-- há várias partes de compatibilidade e ports ainda adaptadas de forma pragmática
-- o projeto ainda contém muito código e documentação histórica de transição
+## Fluxo de boot atual
 
-### Futuro do projeto
+O fluxo esperado hoje e:
 
-O projeto no momento está sendo desenvolvido por mim e pela querida [Mel Santos](https://github.com/melmonfre). A ideia é evoluir o máximo
-para termos uma versão completa de um pequeno sistema operacional modular. Além disso, como se trata do 
-Sr. Raposo responsável pelo projeto, está previsto a construção de um pequeno SLM (Small Lanugage Model) executando
-diretamente no kernel usando uma arquitetura simples de GPT (e o máximo de técnicas de incremento que conseguir). A ideia 
-é implementar dentro do shell tornando o inteligente.
+1. BIOS carrega a imagem e entra pelo caminho `MBR -> FAT32 boot`.
+2. `stage2` prepara o ambiente e entrega controle ao kernel.
+3. O kernel sobe servicos bootstrap.
+4. O `init` tenta carregar `userland.app` do AppFS.
+5. A shell externa entra como caminho normal de boot.
+6. `startx` sobe o desktop grafico.
 
-## Versão em inglês
+O shell embutido permanece como fallback/rescue path, nao como steady-state esperado.
+
+## Validacao
+
+Alvos uteis:
+
+```bash
+make validate-phase6
+make validate-smp
+make validate-audio-stack
+make validate-audio-hda-startup
+make validate-gpu-backends
+```
+
+Esses fluxos escrevem relatorios em `build/`.
+
+## Hardware real
+
+Para iterar no bootloader sem regravar a imagem inteira:
+
+```bash
+make build/stage2.bin build/boot.bin
+python3 tools/patch_boot_sectors.py --target /dev/sdX --vbr build/boot.bin --stage2 build/stage2.bin
+```
+
+Se voce mudou `kernel.bin`, assets ou o conteudo FAT32/AppFS, gere `build/boot.img` de novo.
+
+## Limitacoes honestas
+
+- BIOS legado apenas, sem UEFI
+- o kernel ainda e um hibrido: existem limites de servico reais, mas parte do backend ainda vive em bridges kernel-side
+- SMP ainda esta em estabilizacao para hardware real
+- rede real completa ainda nao esta fechada
+- audio em notebook real ainda exige endurecimento por chipset/backend
+- video real fora do QEMU ainda esta em consolidacao
+- o VFS do kernel ainda e minimo em varias frentes
+- isolamento de processos e modelo "ring3 completo" nao devem ser assumidos
+
+## Licenca
+
+O repositorio usa GPLv3 no root em [LICENSE](LICENSE).
+
+Arvores importadas de terceiros dentro de `compat/`, `lang/vendor/` e similares podem manter suas licencas originais. Veja tambem [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## English Version
 
 - [README.en.md](README.en.md)

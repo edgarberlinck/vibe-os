@@ -1,0 +1,17 @@
+links2 (2.16-1) unstable; urgency=low
+
+  Links 2 ships its own list of Certificate Authorities Root
+  Certificates since release 2.15. The according upstream changelog entry
+  says:
+
+        Use built-in SSL certificates
+        This improves tor hardening (the tor exit node could not differentiate
+        links users from each other based on installed certificates)
+        It also makes it possible to use certificate verification on systems
+        with no default certificate store
+
+  Despite the above entry suggests that this feature is activated by
+  default, it doesn't seem so: You need to activate it under "Setup →
+  Network Options → SSL options → Use built-in certificates".
+
+ -- Axel Beckert <abe@debian.org>  Mon, 09 Jul 2018 23:09:25 +0200

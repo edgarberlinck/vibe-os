@@ -1,6 +1,7 @@
 #include <kernel/kernel.h>
 #include <kernel/microkernel.h>
 #include <kernel/scheduler.h>
+#include <kernel/smp.h>
 #include <kernel/userland.h>
 
 extern void userland_entry(void);
@@ -10,6 +11,7 @@ static const struct mk_launch_descriptor g_init_launch = {
     .kind = MK_LAUNCH_KIND_SERVICE,
     .service_type = MK_SERVICE_INIT,
     .flags = MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_CRITICAL | MK_LAUNCH_FLAG_BUILTIN,
+    .task_class = MK_TASK_CLASS_SUPERVISION,
     .stack_size = 65536u,
     .name = "init",
     .entry = userland_entry,
@@ -29,6 +31,7 @@ __attribute__((noreturn)) void userland_run(void) {
     }
 
     kernel_text_puts("UL schedule...\n");
+    scheduler_set_preemption_ready(1);
     schedule();
     kernel_panic("scheduler returned after init bootstrap");
     for (;;) {

@@ -63,6 +63,7 @@ enum ui_button_style {
 };
 
 void ui_init(void);
+void ui_complete_startup(void);
 void ui_refresh_metrics(void);
 int ui_set_resolution(uint32_t width, uint32_t height);
 const struct desktop_theme *ui_theme_get(void);
@@ -82,6 +83,9 @@ void ui_wallpaper_clear(void);
 int ui_wallpaper_set_from_node(int node);
 int ui_wallpaper_source_node(void);
 struct rect ui_taskbar_start_button_rect(void);
+struct rect ui_taskbar_tray_rect(void);
+struct rect ui_taskbar_network_applet_rect(void);
+struct rect ui_taskbar_sound_applet_rect(void);
 struct rect ui_start_menu_rect(void);
 struct rect ui_start_menu_item_rect(int index);
 struct rect ui_desktop_files_icon_rect(void);
@@ -119,6 +123,8 @@ void draw_desktop(const struct mouse_state *mouse,
 void desktop_request_open_editor(const char *path);
 void desktop_request_open_nano(const char *path);
 void desktop_request_open_app(enum app_type type);
+void desktop_request_cycle_app(enum app_type type, uint32_t iterations, uint32_t hold_ticks);
+void desktop_request_drag_stress(uint32_t steps, uint32_t hold_ticks);
 void desktop_main(void);
 
 #endif // UI_H

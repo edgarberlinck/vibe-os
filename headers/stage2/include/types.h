@@ -19,6 +19,7 @@ struct mouse_state {
     int y;
     int dx;
     int dy;
+    int wheel;
     uint8_t buttons;
 };
 

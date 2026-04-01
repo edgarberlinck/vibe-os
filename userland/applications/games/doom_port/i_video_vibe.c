@@ -20,8 +20,47 @@ static int g_mouse_prev_x = 0;
 static int g_mouse_prev_y = 0;
 static uint8_t g_mouse_prev_buttons = 0;
 static uint8_t g_key_hold[512];
+static uint32_t g_present_deadline_ticks = 0u;
+static uint32_t g_present_tick_remainder = 0u;
 
 #define DOOM_KEY_HOLD_TICS 4
+#define DOOM_PRESENT_TIMER_HZ 100u
+#define DOOM_PRESENT_TARGET_HZ TICRATE
+
+static void doom_video_reset_pacing(void) {
+    g_present_deadline_ticks = 0u;
+    g_present_tick_remainder = 0u;
+}
+
+static void doom_video_wait_present_slot(void) {
+    uint32_t now;
+    uint32_t delta_ticks;
+
+    now = sys_ticks();
+    if (g_present_deadline_ticks == 0u) {
+        g_present_deadline_ticks = now;
+    }
+
+    while ((int32_t)(g_present_deadline_ticks - now) > 0) {
+        sys_sleep();
+        now = sys_ticks();
+    }
+
+    g_present_tick_remainder += DOOM_PRESENT_TIMER_HZ;
+    delta_ticks = g_present_tick_remainder / DOOM_PRESENT_TARGET_HZ;
+    g_present_tick_remainder %= DOOM_PRESENT_TARGET_HZ;
+    if (delta_ticks == 0u) {
+        delta_ticks = 1u;
+    }
+
+    if ((int32_t)(now - g_present_deadline_ticks) > (int32_t)DOOM_PRESENT_TIMER_HZ) {
+        g_present_deadline_ticks = now + delta_ticks;
+        g_present_tick_remainder = 0u;
+        return;
+    }
+
+    g_present_deadline_ticks += delta_ticks;
+}
 
 static void doom_video_refresh_layout(void) {
     struct video_mode mode;
@@ -81,9 +120,11 @@ void I_ShutdownGraphics(void) {
     doom_port_restore_palette();
     g_inited = 0;
     g_mouse_ready = 0;
+    doom_video_reset_pacing();
 }
 
 void I_StartFrame(void) {
+    doom_video_wait_present_slot();
 }
 
 void I_StartTic(void) {
@@ -155,6 +196,7 @@ void I_InitGraphics(void) {
 
     doom_port_capture_palette();
     doom_video_refresh_layout();
+    doom_video_reset_pacing();
 
     g_inited = 1;
 }
@@ -165,8 +207,7 @@ void I_UpdateNoBlit(void) {
 void I_FinishUpdate(void) {
     byte *src = screens[0];
     doom_video_refresh_layout();
-    sys_gfx_blit8_stretch(src, SCREENWIDTH, SCREENHEIGHT, 0, 0, g_dst_w, g_dst_h);
-    sys_present();
+    sys_gfx_blit8_stretch_present(src, SCREENWIDTH, SCREENHEIGHT, 0, 0, g_dst_w, g_dst_h);
 }
 
 void I_ReadScreen(byte *scr) {

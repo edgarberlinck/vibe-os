@@ -6,6 +6,35 @@
 #define VIBE_APP_SYSCALL_YIELD 10
 #define VIBE_APP_SYSCALL_WRITE_DEBUG 11
 #define VIBE_APP_SYSCALL_TEXT_PUTC 12
+#define VIBE_APP_SYSCALL_AUDIO_GETINFO 51
+#define VIBE_APP_SYSCALL_AUDIO_MIXER_READ 52
+#define VIBE_APP_SYSCALL_AUDIO_MIXER_WRITE 53
+#define VIBE_APP_SYSCALL_AUDIO_CONTROL_INFO 54
+#define VIBE_APP_SYSCALL_AUDIO_SET_PARAMS 60
+#define VIBE_APP_SYSCALL_AUDIO_START 61
+#define VIBE_APP_SYSCALL_AUDIO_STOP 62
+#define VIBE_APP_SYSCALL_AUDIO_WRITE 63
+#define VIBE_APP_SYSCALL_AUDIO_GET_STATUS 64
+#define VIBE_APP_SYSCALL_AUDIO_READ 75
+#define VIBE_APP_SYSCALL_AUDIO_EVENT_SUBSCRIBE 81
+#define VIBE_APP_SYSCALL_AUDIO_EVENT_RECV 82
+#define VIBE_APP_SYSCALL_NETWORK_EVENT_SUBSCRIBE 86
+#define VIBE_APP_SYSCALL_NETWORK_EVENT_RECV 87
+#define VIBE_APP_SYSCALL_NETWORK_GETINFO 55
+#define VIBE_APP_SYSCALL_NETWORK_GET_STATUS 56
+#define VIBE_APP_SYSCALL_NETWORK_SCAN 57
+#define VIBE_APP_SYSCALL_NETWORK_CONNECT_WIFI 58
+#define VIBE_APP_SYSCALL_NETWORK_DISCONNECT 59
+#define VIBE_APP_SYSCALL_NETWORK_SOCKET 65
+#define VIBE_APP_SYSCALL_NETWORK_BIND 66
+#define VIBE_APP_SYSCALL_NETWORK_CONNECT 67
+#define VIBE_APP_SYSCALL_NETWORK_SEND 68
+#define VIBE_APP_SYSCALL_NETWORK_RECV 69
+#define VIBE_APP_SYSCALL_NETWORK_CLOSE 70
+#define VIBE_APP_SYSCALL_NETWORK_LISTEN 71
+#define VIBE_APP_SYSCALL_NETWORK_ACCEPT 72
+#define VIBE_APP_SYSCALL_NETWORK_CONNECT_ETHERNET 73
+#define VIBE_APP_SYSCALL_NETWORK_CONFIGURE_ETHERNET 74
 #define EOF (-1)
 #define VIBE_APP_CLOCK_HZ 100u
 
@@ -152,6 +181,10 @@ void vibe_app_console_write(const char *text) {
     if (text == 0) {
         return;
     }
+    if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->console_write) {
+        g_app_ctx->host->console_write(text);
+        return;
+    }
     while (*text != '\0') {
         vibe_app_console_putc(*text++);
     }
@@ -268,6 +301,13 @@ int vibe_app_lseek(int fd, int offset, int whence) {
         return -1;
     }
     return g_app_ctx->host->seek_fd(fd, offset, whence);
+}
+
+int vibe_app_sync(void) {
+    if (!g_app_ctx || !g_app_ctx->host || !g_app_ctx->host->sync_filesystem) {
+        return -1;
+    }
+    return g_app_ctx->host->sync_filesystem();
 }
 
 int vibe_app_stat(const char *path, struct vibe_app_stat *stat_out) {
@@ -797,6 +837,295 @@ size_t strlen(const char *text) {
     return len;
 }
 
+int vibe_app_audio_get_info(struct mk_audio_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_GETINFO,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_get_status(struct audio_status *status) {
+    if (status == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_GET_STATUS,
+                             (int)(uintptr_t)status,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_set_params(const struct audio_swpar *params) {
+    if (params == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_SET_PARAMS,
+                             (int)(uintptr_t)params,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_start(void) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_START, 0, 0, 0, 0, 0);
+}
+
+int vibe_app_audio_stop(void) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_STOP, 0, 0, 0, 0, 0);
+}
+
+int vibe_app_audio_write(const void *data, uint32_t size) {
+    if (data == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_WRITE,
+                             (int)(uintptr_t)data,
+                             (int)size,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_read(void *data, uint32_t size) {
+    if (data == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_READ,
+                             (int)(uintptr_t)data,
+                             (int)size,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_event_subscribe(void) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+}
+
+int vibe_app_audio_event_receive(struct mk_audio_event *event, uint32_t timeout_ticks) {
+    if (event == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_EVENT_RECV,
+                             (int)(uintptr_t)event,
+                             (int)timeout_ticks,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_get_control_info(uint32_t index, struct mk_audio_control_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_CONTROL_INFO,
+                             (int)index,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_mixer_read(mixer_ctrl_t *control) {
+    if (control == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_MIXER_READ,
+                             (int)(uintptr_t)control,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_mixer_write(const mixer_ctrl_t *control) {
+    if (control == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_MIXER_WRITE,
+                             (int)(uintptr_t)control,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_get_info(struct mk_network_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_GETINFO,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_get_status(struct mk_network_status *status) {
+    if (status == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_GET_STATUS,
+                             (int)(uintptr_t)status,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_scan(uint32_t index, struct mk_network_scan_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_SCAN,
+                             (int)index,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_connect_wifi(const struct mk_network_connect_request *request) {
+    if (request == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONNECT_WIFI,
+                             (int)(uintptr_t)request,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_connect_ethernet(const char *if_name) {
+    if (if_name == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONNECT_ETHERNET,
+                             (int)(uintptr_t)if_name,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_configure_ethernet(const struct mk_network_ethernet_config *config) {
+    if (config == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONFIGURE_ETHERNET,
+                             (int)(uintptr_t)config,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_disconnect(const char *if_name) {
+    if (if_name == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_DISCONNECT,
+                             (int)(uintptr_t)if_name,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_socket(uint32_t domain, uint32_t type, uint32_t protocol) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_SOCKET,
+                             (int)domain,
+                             (int)type,
+                             (int)protocol,
+                             0,
+                             0);
+}
+
+int vibe_app_network_bind(int handle, const struct sockaddr *address, uint32_t address_length) {
+    if (address == 0 || address_length == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_BIND,
+                             handle,
+                             (int)(uintptr_t)address,
+                             (int)address_length,
+                             0,
+                             0);
+}
+
+int vibe_app_network_socket_connect(int handle, const struct sockaddr *address, uint32_t address_length) {
+    if (address == 0 || address_length == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONNECT,
+                             handle,
+                             (int)(uintptr_t)address,
+                             (int)address_length,
+                             0,
+                             0);
+}
+
+int vibe_app_network_send(int handle, const void *data, uint32_t size) {
+    if (data == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_SEND,
+                             handle,
+                             (int)(uintptr_t)data,
+                             (int)size,
+                             0,
+                             0);
+}
+
+int vibe_app_network_recv(int handle, void *buffer, uint32_t size) {
+    if (buffer == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_RECV,
+                             handle,
+                             (int)(uintptr_t)buffer,
+                             (int)size,
+                             0,
+                             0);
+}
+
+int vibe_app_network_close(int handle) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CLOSE, handle, 0, 0, 0, 0);
+}
+
+int vibe_app_network_listen(int handle, int backlog) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_LISTEN, handle, backlog, 0, 0, 0);
+}
+
+int vibe_app_network_accept(int handle) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_ACCEPT, handle, 0, 0, 0, 0);
+}
+
+int vibe_app_network_event_subscribe(void) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+}
+
+int vibe_app_network_event_receive(struct mk_network_event *event, uint32_t timeout_ticks) {
+    if (event == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_EVENT_RECV,
+                             (int)(uintptr_t)event,
+                             (int)timeout_ticks,
+                             0,
+                             0,
+                             0);
+}
+
 int strcmp(const char *a, const char *b) {
     while (*a != '\0' && *b != '\0') {
         if (*a != *b) {
@@ -1001,102 +1330,235 @@ static int vibe_parse_mode(const char *mode, int *flags_out) {
     return 0;
 }
 
+static int vibe_vsnprintf_internal(char *str, size_t size, const char *fmt, va_list ap) {
+    size_t written = 0u;
+
+    if (!fmt) {
+        return -1;
+    }
+    if (size == 0u) {
+        str = 0;
+        size = (size_t)-1;
+    }
+
+    while (*fmt && written + 1u < size) {
+        if (*fmt != '%') {
+            if (str) {
+                str[written] = *fmt;
+            }
+            ++written;
+            ++fmt;
+            continue;
+        }
+
+        ++fmt;
+        if (*fmt == '\0') {
+            break;
+        }
+        if (*fmt == '%') {
+            if (str) {
+                str[written] = '%';
+            }
+            ++written;
+            ++fmt;
+            continue;
+        }
+
+        {
+            int zero_pad = 0;
+            int width = 0;
+            int precision = -1;
+
+            if (*fmt == '0') {
+                zero_pad = 1;
+                ++fmt;
+            }
+            while (*fmt >= '0' && *fmt <= '9') {
+                width = (width * 10) + (*fmt - '0');
+                ++fmt;
+            }
+            if (*fmt == '.') {
+                precision = 0;
+                ++fmt;
+                while (*fmt >= '0' && *fmt <= '9') {
+                    precision = (precision * 10) + (*fmt - '0');
+                    ++fmt;
+                }
+            }
+
+            if (*fmt == 's') {
+                const char *s = va_arg(ap, const char *);
+
+                if (!s) {
+                    s = "(null)";
+                }
+                while (*s && written + 1u < size) {
+                    if (str) {
+                        str[written] = *s;
+                    }
+                    ++written;
+                    ++s;
+                }
+                ++fmt;
+                continue;
+            }
+
+            if (*fmt == 'c') {
+                int c = va_arg(ap, int);
+
+                if (str) {
+                    str[written] = (char)c;
+                }
+                ++written;
+                ++fmt;
+                continue;
+            }
+
+            if (*fmt == 'd' || *fmt == 'i' || *fmt == 'u' ||
+                *fmt == 'x' || *fmt == 'X' || *fmt == 'p') {
+                unsigned int base = 10u;
+                unsigned int value_u = 0u;
+                char tmp[32];
+                int pos = 0;
+                int upper = (*fmt == 'X');
+                int negative = 0;
+                int digits;
+                int pad_count;
+
+                if (*fmt == 'x' || *fmt == 'X' || *fmt == 'p') {
+                    base = 16u;
+                }
+
+                if (*fmt == 'p') {
+                    uintptr_t p = (uintptr_t)va_arg(ap, void *);
+                    value_u = (unsigned int)p;
+                } else if (*fmt == 'd' || *fmt == 'i') {
+                    int value_s = va_arg(ap, int);
+
+                    if (value_s < 0) {
+                        negative = 1;
+                        value_u = (unsigned int)(-value_s);
+                    } else {
+                        value_u = (unsigned int)value_s;
+                    }
+                } else {
+                    value_u = va_arg(ap, unsigned int);
+                }
+
+                if (value_u == 0u) {
+                    tmp[pos++] = '0';
+                } else {
+                    while (value_u > 0u && pos < (int)sizeof(tmp)) {
+                        unsigned int digit = value_u % base;
+                        tmp[pos++] = (char)(digit < 10u ? ('0' + digit)
+                                                         : ((upper ? 'A' : 'a') + (digit - 10u)));
+                        value_u /= base;
+                    }
+                }
+
+                digits = pos;
+                if (precision > digits) {
+                    pad_count = precision - digits;
+                } else if (zero_pad && width > digits + negative) {
+                    pad_count = width - digits - negative;
+                } else {
+                    pad_count = 0;
+                }
+
+                if (negative) {
+                    if (str && written + 1u < size) {
+                        str[written] = '-';
+                    }
+                    ++written;
+                }
+
+                if (*fmt == 'p') {
+                    if (str && written + 1u < size) {
+                        str[written] = '0';
+                    }
+                    ++written;
+                    if (str && written + 1u < size) {
+                        str[written] = 'x';
+                    }
+                    ++written;
+                }
+
+                while (pad_count-- > 0 && written + 1u < size) {
+                    if (str) {
+                        str[written] = '0';
+                    }
+                    ++written;
+                }
+                while (pos > 0 && written + 1u < size) {
+                    if (str) {
+                        str[written] = tmp[--pos];
+                    }
+                    ++written;
+                }
+                ++fmt;
+                continue;
+            }
+
+            if (str) {
+                str[written] = '%';
+            }
+            ++written;
+            if (written + 1u < size && str) {
+                str[written] = *fmt;
+            }
+            ++written;
+            ++fmt;
+        }
+    }
+
+    if (str && size > 0u) {
+        str[written < size ? written : (size - 1u)] = '\0';
+    }
+    return (int)written;
+}
+
 /* Helper: write formatted output to file */
 static int vibe_vfprintf_helper(FILE *f, const char *fmt, va_list ap) {
-    int count = 0;
-    
+    char stack_buf[256];
+    char *buffer = stack_buf;
+    va_list measure_ap;
+    va_list write_ap;
+    int needed;
+    int wrote = -1;
+
     if (!f || !fmt) {
         return -1;
     }
-    
-    while (*fmt) {
-        if (*fmt == '%') {
-            fmt++;
-            if (*fmt == 'd') {
-                int val = va_arg(ap, int);
-                char buf[32];
-                int len = 0;
-                int neg = 0;
-                
-                if (val < 0) {
-                    neg = 1;
-                    val = -val;
-                }
-                
-                if (val == 0) {
-                    buf[len++] = '0';
-                } else {
-                    int divisor = 1;
-                    while (divisor <= val / 10) divisor *= 10;
-                    while (divisor > 0) {
-                        buf[len++] = '0' + (val / divisor) % 10;
-                        divisor /= 10;
-                    }
-                }
-                
-                if (neg) {
-                    vibe_app_console_putc('-');
-                    count++;
-                }
-                
-                for (int i = 0; i < len; i++) {
-                    vibe_app_console_putc(buf[i]);
-                    count++;
-                }
-            } else if (*fmt == 's') {
-                const char *s = va_arg(ap, const char *);
-                if (s) {
-                    while (*s) {
-                        vibe_app_console_putc(*s++);
-                        count++;
-                    }
-                }
-            } else if (*fmt == 'c') {
-                int c = va_arg(ap, int);
-                vibe_app_console_putc((char)c);
-                count++;
-            } else if (*fmt == 'x' || *fmt == 'X') {
-                unsigned int val = va_arg(ap, unsigned int);
-                const char *hex = (*fmt == 'x') ? "0123456789abcdef" : "0123456789ABCDEF";
-                char buf[16];
-                int len = 0;
-                
-                if (val == 0) {
-                    buf[len++] = '0';
-                } else {
-                    unsigned int temp = val;
-                    while (temp > 0) {
-                        buf[len++] = hex[temp % 16];
-                        temp /= 16;
-                    }
-                    for (int i = 0; i < len / 2; i++) {
-                        char t = buf[i];
-                        buf[i] = buf[len - 1 - i];
-                        buf[len - 1 - i] = t;
-                    }
-                }
-                
-                for (int i = 0; i < len; i++) {
-                    vibe_app_console_putc(buf[i]);
-                    count++;
-                }
-            } else if (*fmt == '%') {
-                vibe_app_console_putc('%');
-                count++;
-            }
-            fmt++;
-        } else if (*fmt == '\\' && *(fmt + 1) == 'n') {
-            vibe_app_console_putc('\n');
-            count++;
-            fmt += 2;
-        } else {
-            vibe_app_console_putc(*fmt);
-            count++;
-            fmt++;
+
+    va_copy(measure_ap, ap);
+    needed = vibe_vsnprintf_internal(0, 0u, fmt, measure_ap);
+    va_end(measure_ap);
+    if (needed < 0) {
+        return -1;
+    }
+
+    if ((size_t)needed >= sizeof(stack_buf)) {
+        buffer = (char *)malloc((size_t)needed + 1u);
+        if (!buffer) {
+            return -1;
         }
     }
-    
-    return count;
+
+    va_copy(write_ap, ap);
+    wrote = vibe_vsnprintf_internal(buffer, (size_t)needed + 1u, fmt, write_ap);
+    va_end(write_ap);
+    if (wrote >= 0) {
+        if (vibe_is_console_file(f)) {
+            vibe_app_console_write(buffer);
+        } else if (fwrite(buffer, 1u, (size_t)wrote, f) != (size_t)wrote) {
+            wrote = -1;
+        }
+    }
+
+    if (buffer != stack_buf) {
+        free(buffer);
+    }
+    return wrote;
 }
 
 int printf(const char *fmt, ...) {
@@ -1135,35 +1597,31 @@ int vfprintf(FILE *f, const char *fmt, va_list ap) {
 }
 
 int sprintf(char *str, const char *fmt, ...) {
-    /* Not implemented - too complex for embedded context */
-    (void)str;
-    (void)fmt;
-    return -1;
+    int ret;
+    va_list ap;
+
+    va_start(ap, fmt);
+    ret = vsprintf(str, fmt, ap);
+    va_end(ap);
+    return ret;
 }
 
 int snprintf(char *str, size_t size, const char *fmt, ...) {
-    /* Not implemented - too complex for embedded context */
-    (void)str;
-    (void)size;
-    (void)fmt;
-    return -1;
+    int ret;
+    va_list ap;
+
+    va_start(ap, fmt);
+    ret = vsnprintf(str, size, fmt, ap);
+    va_end(ap);
+    return ret;
 }
 
 int vsprintf(char *str, const char *fmt, va_list ap) {
-    /* Not implemented */
-    (void)str;
-    (void)fmt;
-    (void)ap;
-    return -1;
+    return vibe_vsnprintf_internal(str, (size_t)-1, fmt, ap);
 }
 
 int vsnprintf(char *str, size_t size, const char *fmt, va_list ap) {
-    /* Not implemented */
-    (void)str;
-    (void)size;
-    (void)fmt;
-    (void)ap;
-    return -1;
+    return vibe_vsnprintf_internal(str, size, fmt, ap);
 }
 
 /* File operations - minimal stubs */

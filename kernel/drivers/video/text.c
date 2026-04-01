@@ -14,6 +14,7 @@
 static int g_text_x = 0;
 static int g_text_y = 0;
 static char g_text_cells[VGA_ROWS][VGA_COLS];
+static int g_text_batch_render = 0;
 
 static int kernel_text_graphics_active(void) {
     struct video_mode *mode = kernel_video_get_mode();
@@ -149,12 +150,23 @@ void kernel_text_putc(char c) {
     }
 
     kernel_text_sync_cursor();
-    kernel_text_render_graphics();
+    if (!g_text_batch_render) {
+        kernel_text_render_graphics();
+    }
 }
 
 void kernel_text_puts(const char *s) {
+    const int batch_render = kernel_text_graphics_active();
+
+    if (batch_render) {
+        g_text_batch_render = 1;
+    }
     while (*s) {
         kernel_text_putc(*s++);
+    }
+    if (batch_render) {
+        g_text_batch_render = 0;
+        kernel_text_render_graphics();
     }
 }
 

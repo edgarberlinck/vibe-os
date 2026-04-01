@@ -3,3 +3,13 @@ build/
 .vscode/
 .idea
 .continue
+kernel/**/*.o
+kernel/**/*.d
+* 2.o
+* 2.d
+* 2.elf
+* 2.app
+* 2.c
+* 2.h
+* 2.hpp
+* 2.html
