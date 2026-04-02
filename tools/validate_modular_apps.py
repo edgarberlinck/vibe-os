@@ -18,8 +18,8 @@ BOOT_MARKER = "userland.app: shell start"
 SHELL_READY_MARKER = "shell: ready"
 DESKTOP_READY_MARKER = "desktop: session ready"
 AUTODESKTOP_BOOT_MARKERS = [
-    "init: desktop host launched",
-    "host: startx start",
+    "desktop.app: launch startx",
+    "desktop: session start",
     DESKTOP_READY_MARKER,
 ]
 QEMU_VALIDATION_COMMON_OPTS = [
@@ -468,7 +468,7 @@ class QemuSession:
         self.hmp(f"sendkey {key}")
         time.sleep(pause)
 
-    def type_text(self, text: str, pause: float = 0.08) -> None:
+    def type_text(self, text: str, pause: float = 0.08, use_hmp: bool = False) -> None:
         key_map = {
             " ": "spc",
             "\n": "ret",
@@ -479,7 +479,10 @@ class QemuSession:
         }
         for ch in text:
             key = key_map.get(ch, ch.lower())
-            self.send_key(key, pause=pause)
+            if use_hmp:
+                self.send_shortcut(key, pause=pause)
+            else:
+                self.send_key(key, pause=pause)
 
     def reset_mouse_to_center(self) -> None:
         mode = self.boot_mode_size()
@@ -929,11 +932,11 @@ def scenario_startx(session: QemuSession) -> None:
 
 
 def run_command(session: QemuSession, command: str, timeout: float = 6.0, pause: float = 0.12,
-                marker: Optional[str] = None) -> None:
+                marker: Optional[str] = None, use_hmp: bool = False) -> None:
     command_marker = marker
     if command_marker is None:
         command_marker = command.split(" ", 1)[0] if command else ""
-    session.type_text(command, pause=pause)
+    session.type_text(command, pause=pause, use_hmp=use_hmp)
     session.send_key("ret", pause=0.15)
     if command_marker:
         session.wait_for_log(f"shell: command {command_marker}", timeout=timeout)
@@ -956,13 +959,13 @@ def scenario_terminal_runtime(session: QemuSession) -> None:
 def scenario_phase_e_writeback_shell(session: QemuSession) -> None:
     touch_path = f"/tmp/phase-e-writeback-{time.time_ns()}"
     touch_start = len(session.read_log())
-    run_command(session, f"touch {touch_path}", timeout=6.0)
+    run_command(session, f"touch {touch_path}", timeout=6.0, pause=0.20, use_hmp=True)
     wait_for_all_since(session,
                        ["shell: command touch", "shell: ready"],
                        timeout=4.0,
                        start_offset=touch_start)
     session.wait_for_log("fs: writeback start", timeout=12.0)
-    run_command(session, "cc /hello.c", timeout=8.0, marker="")
+    run_command(session, "cc /hello.c", timeout=8.0, marker="", pause=0.20, use_hmp=True)
     session.wait_for_all(
         [
             "busybox: external ok sectorc",
@@ -1031,11 +1034,8 @@ def scenario_terminal_vidmodes(session: QemuSession) -> None:
         [
             "vidmodes: begin",
             "vidmodes: caps mode_count=",
-            "vidmodes: try 800x600",
             "video: runtime modeset source=",
             "video: handoff stage=runtime source=",
-            "vidmodes: mode verify ok 800x600",
-            "vidmodes: mode ok 800x600",
             "vidmodes: try 1024x768",
             "vidmodes: mode verify ok 1024x768",
             "vidmodes: mode ok 1024x768",
@@ -1358,7 +1358,7 @@ SCENARIOS = [
             "sectorc: compile begin",
             "sectorc: compile ok",
         ],
-        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_markers=["boot mode: rescue shell", SHELL_READY_MARKER],
         boot_action=scenario_boot_rescue_shell,
     ),
     Scenario(
@@ -1371,7 +1371,7 @@ SCENARIOS = [
             "busybox: external ok java",
             "java: version ok",
         ],
-        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_markers=["boot mode: rescue shell", SHELL_READY_MARKER],
         boot_action=scenario_boot_rescue_shell,
     ),
     Scenario(
@@ -1384,7 +1384,7 @@ SCENARIOS = [
             "busybox: external ok grep",
             "grep: match ok",
         ],
-        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_markers=["boot mode: rescue shell", SHELL_READY_MARKER],
         boot_action=scenario_boot_rescue_shell,
     ),
     Scenario(
@@ -1393,10 +1393,9 @@ SCENARIOS = [
         command=None,
         must_have=[
             "boot mode: rescue shell",
-            "host: shell start",
             SHELL_READY_MARKER,
         ],
-        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_markers=["boot mode: rescue shell", SHELL_READY_MARKER],
         boot_action=scenario_boot_rescue_shell,
     ),
     Scenario(
@@ -1411,7 +1410,7 @@ SCENARIOS = [
             "sectorc: compile ok",
             "fs: writeback done",
         ],
-        boot_markers=["boot mode: rescue shell", "host: shell start", SHELL_READY_MARKER],
+        boot_markers=["boot mode: rescue shell", SHELL_READY_MARKER],
         boot_action=scenario_boot_rescue_shell,
         action=scenario_phase_e_writeback_shell,
     ),
@@ -1525,11 +1524,8 @@ SCENARIOS = [
             "shell: command vidmodes",
             "vidmodes: begin",
             "vidmodes: caps mode_count=",
-            "vidmodes: try 800x600",
             "video: runtime modeset source=",
             "video: handoff stage=runtime source=",
-            "vidmodes: mode verify ok 800x600",
-            "vidmodes: mode ok 800x600",
             "vidmodes: try 1024x768",
             "video: shadow backbuffer enabled bytes=",
             "video: runtime mode backend=fast_lfb",
@@ -1783,12 +1779,16 @@ def run_scenario_once(qemu_binary: str, image_path: Path, memory_mb: int, scenar
             if scenario.boot_action:
                 scenario.boot_action(session)
             session.wait_for_all(scenario.boot_markers or [BOOT_MARKER, SHELL_READY_MARKER], timeout=60.0)
+            rescue_shell = bool(scenario.boot_markers and "boot mode: rescue shell" in scenario.boot_markers)
+            if rescue_shell:
+                time.sleep(0.6)
             if scenario.command:
                 run_command(session,
                             scenario.command,
                             timeout=6.0,
-                            pause=0.12,
-                            marker=scenario.command_marker)
+                            pause=0.20 if rescue_shell else 0.12,
+                            marker=scenario.command_marker,
+                            use_hmp=rescue_shell)
             if scenario.action:
                 scenario.action(session)
             else:

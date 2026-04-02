@@ -226,7 +226,7 @@ static int audio_should_use_kernel_async(const char *tag) {
     return audio_is_desktop_async_tag(tag);
 }
 
-static int audio_backend_kind(void) {
+int audio_backend_kind(void) {
     struct audio_status status;
 
     if (sys_audio_get_status(&status) != 0) {

@@ -22,36 +22,10 @@ static int mk_input_current_process_is_service_worker(void) {
 static int g_input_service_transport_degraded = 0;
 
 static int mk_input_current_allows_local_fallback(void) {
-    return mk_service_backend_bridge_allowed_current(MK_SERVICE_INPUT);
+    return 0;
 }
 
 static int mk_input_should_use_local_fallback(void) {
-    const struct mk_service_record *service = mk_service_find_by_type(MK_SERVICE_INPUT);
-
-    if (service == 0) {
-        return 1;
-    }
-    if (service->process == 0 || service->pid <= 0) {
-        return 1;
-    }
-
-    if (g_input_service_transport_degraded ||
-        service->transport_degraded != 0u ||
-        !mk_service_is_online(MK_SERVICE_INPUT)) {
-        if (mk_service_ensure(MK_SERVICE_INPUT) != 0) {
-            return 1;
-        }
-        service = mk_service_find_by_type(MK_SERVICE_INPUT);
-        if (service == 0 ||
-            service->process == 0 ||
-            service->pid <= 0 ||
-            service->transport_degraded != 0u ||
-            !mk_service_is_online(MK_SERVICE_INPUT)) {
-            return 1;
-        }
-        g_input_service_transport_degraded = 0;
-    }
-
     return 0;
 }
 

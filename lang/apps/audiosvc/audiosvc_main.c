@@ -874,7 +874,10 @@ static int audiosvc_command_apply_settings(const char *path) {
 
 static int audiosvc_command_play_asset(const char *path) {
     struct audio_async_playback playback;
+    struct audio_status status;
     int result;
+    int poll_result;
+    int backend_kind;
     
     if (path == 0 || *path == '\0') {
         audiosvc_debug("audiosvc: play-asset missing-path\n");
@@ -884,26 +887,53 @@ static int audiosvc_command_play_asset(const char *path) {
 
     audiosvc_debug("audiosvc: play-asset begin\n");
     
+    /* Get audio backend kind directly */
+    if (sys_audio_get_status(&status) == 0) {
+        backend_kind = status._spare[0] & (int)MK_AUDIO_STATUS_BACKEND_MASK;
+    } else {
+        backend_kind = -1;
+    }
+    printf("audiosvc: audio backend kind = %d\n", backend_kind);
+    
     /* Start async audio playback */
     result = audio_play_wav_async_start(&playback, path, "audio-service");
+    printf("audiosvc: async_start result = %d\n", result);
+    
     if (result != 0) {
         audiosvc_debug("audiosvc: play-asset async-start failed\n");
         /* Fall back to sync version if async fails */
+        printf("audiosvc: falling back to sync playback\n");
         if (audio_play_wav_best_effort(path, "audio-service-fallback") == 0) {
             audiosvc_debug("audiosvc: play-asset sync fallback done\n");
+            printf("audiosvc: sync playback completed\n");
             return 0;
         }
         audiosvc_debug("audiosvc: play-asset failed\n");
+        printf("audiosvc: all playback attempts failed\n");
         return 1;
     }
     
+    printf("audiosvc: async playback started, polling...\n");
     /* Poll until playback completes */
-    while (audio_play_wav_async_poll(&playback) > 0) {
+    int poll_count = 0;
+    while ((poll_result = audio_play_wav_async_poll(&playback)) > 0) {
         sys_sleep(); /* Yield to other processes */
+        poll_count++;
+        if (poll_count % 10 == 0) {
+            printf("audiosvc: still polling... (%d)\n", poll_count);
+        }
     }
     
-    audiosvc_debug("audiosvc: play-asset done\n");
-    return 0;
+    printf("audiosvc: final poll result = %d\n", poll_result);
+    if (poll_result == 0) {
+        audiosvc_debug("audiosvc: play-asset done\n");
+        printf("audiosvc: async playback completed successfully\n");
+        return 0;
+    } else {
+        audiosvc_debug("audiosvc: play-asset poll error\n");
+        printf("audiosvc: async playback failed\n");
+        return 1;
+    }
 }
 
 int vibe_app_main(int argc, char **argv) {

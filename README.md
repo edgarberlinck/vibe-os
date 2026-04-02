@@ -42,6 +42,7 @@ O plano consolidado atual esta em [docs/FINALIZATION_EXECUTION_PLAN.md](docs/FIN
 
 Os arquivos tecnicos detalhados em `docs/` estao em ingles. Se voce quer a visao mais fiel ao codigo atual, comece por:
 
+- [docs/README.md](docs/README.md)
 - [docs/overview.md](docs/overview.md)
 - [docs/workflow.md](docs/workflow.md)
 - [docs/mbr.md](docs/mbr.md)
@@ -55,6 +56,7 @@ Os arquivos tecnicos detalhados em `docs/` estao em ingles. Se voce quer a visao
 
 Planos, migracoes e guidelines historicas agora ficam em [docs/guidelines/](docs/guidelines/), incluindo:
 
+- [docs/guidelines/README.md](docs/guidelines/README.md)
 - [docs/guidelines/QUICK_BUILD.md](docs/guidelines/QUICK_BUILD.md)
 - [docs/guidelines/MICROKERNEL_MIGRATION.md](docs/guidelines/MICROKERNEL_MIGRATION.md)
 - [docs/guidelines/COMPAT_PLAN.md](docs/guidelines/COMPAT_PLAN.md)

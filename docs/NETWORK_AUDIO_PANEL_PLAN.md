@@ -1,5 +1,7 @@
 # Plano de Rede + Som no Painel
 
+Este e um plano ativo de produto/desktop. Para a visao arquitetural canônica da migracao de servicos, use [guidelines/MICROKERNEL_MIGRATION.md](guidelines/MICROKERNEL_MIGRATION.md).
+
 Data da proposta: 2026-03-25
 
 ## Objetivo

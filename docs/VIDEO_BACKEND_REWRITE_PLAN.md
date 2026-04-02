@@ -1,5 +1,7 @@
 # Plano de Reescrita do Backend Grafico
 
+Este e um plano ativo de backend grafico. Para a documentacao tecnica do estado atual, veja [overview.md](overview.md) e [drivers.md](drivers.md).
+
 ## Objetivo
 
 Reescrever o backend grafico do vibeOS para sair do modelo atual de `VBE/LFB + copia simples + heap fragil` e chegar a um pipeline mais apropriado para desktop e jogos, mantendo o driver atual como fallback seguro.

@@ -23,6 +23,7 @@ int audio_play_wav_best_effort(const char *path, const char *tag);
 const char *audio_last_playback_error(void);
 const char *audio_last_playback_detail(void);
 int audio_desktop_startup_wav_allowed(void);
+int audio_backend_kind(void);
 
 struct audio_async_playback {
     int active;

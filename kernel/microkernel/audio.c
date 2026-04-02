@@ -1905,6 +1905,7 @@ static int mk_audio_uaudio_flush_staging(uint8_t drain_all) {
     return (int)written;
 }
 
+/*
 static int mk_audio_is_auich_device(uint16_t vendor_id, uint16_t device_id) {
     switch (vendor_id) {
     case PCI_VENDOR_INTEL:
@@ -1957,6 +1958,7 @@ static int mk_audio_is_auich_device(uint16_t vendor_id, uint16_t device_id) {
         return 0;
     }
 }
+*/
 
 static int mk_audio_auich_prefers_native_mmio(uint16_t vendor_id, uint16_t device_id) {
     if (vendor_id != PCI_VENDOR_INTEL) {
@@ -4788,6 +4790,7 @@ static int mk_audio_backend_current_is_usable(void) {
     return 0;
 }
 
+/*
 static int mk_audio_probe_compat_cb(const struct kernel_pci_device_info *info, void *ctx_ptr) {
     struct mk_audio_probe_ctx *ctx = (struct mk_audio_probe_ctx *)ctx_ptr;
 
@@ -4806,7 +4809,9 @@ static int mk_audio_probe_compat_cb(const struct kernel_pci_device_info *info, v
     ctx->found = 1;
     return 1;
 }
+*/
 
+/*
 static int mk_audio_probe_compat_backend(struct kernel_pci_device_info *pci_out) {
     struct mk_audio_probe_ctx ctx;
 
@@ -4821,7 +4826,9 @@ static int mk_audio_probe_compat_backend(struct kernel_pci_device_info *pci_out)
     }
     return ctx.found ? 0 : -1;
 }
+*/
 
+/*
 static int mk_audio_probe_azalia_cb(const struct kernel_pci_device_info *info, void *ctx_ptr) {
     struct mk_audio_probe_ctx *ctx = (struct mk_audio_probe_ctx *)ctx_ptr;
 
@@ -4840,7 +4847,9 @@ static int mk_audio_probe_azalia_cb(const struct kernel_pci_device_info *info, v
     ctx->found = 1;
     return 1;
 }
+*/
 
+/*
 static int mk_audio_probe_azalia_backend(struct kernel_pci_device_info *pci_out) {
     struct mk_audio_probe_ctx ctx;
 
@@ -4855,15 +4864,17 @@ static int mk_audio_probe_azalia_backend(struct kernel_pci_device_info *pci_out)
     }
     return ctx.found ? 0 : -1;
 }
+*/
 
-static void mk_audio_select_compat_backend(const struct kernel_pci_device_info *pci);
-static void mk_audio_select_azalia_backend(const struct kernel_pci_device_info *pci);
+/* static void mk_audio_select_compat_backend(const struct kernel_pci_device_info *pci);
+static void mk_audio_select_azalia_backend(const struct kernel_pci_device_info *pci); */
 
 struct mk_audio_try_ctx {
     int matched;
     int selected;
 };
 
+/*
 static int mk_audio_try_azalia_backend_cb(const struct kernel_pci_device_info *info, void *ctx_ptr) {
     struct mk_audio_try_ctx *ctx = (struct mk_audio_try_ctx *)ctx_ptr;
 
@@ -4886,7 +4897,9 @@ static int mk_audio_try_azalia_backend_cb(const struct kernel_pci_device_info *i
     }
     return 0;
 }
+*/
 
+/*
 static int mk_audio_try_compat_backend_cb(const struct kernel_pci_device_info *info, void *ctx_ptr) {
     struct mk_audio_try_ctx *ctx = (struct mk_audio_try_ctx *)ctx_ptr;
 
@@ -4909,7 +4922,9 @@ static int mk_audio_try_compat_backend_cb(const struct kernel_pci_device_info *i
     }
     return 0;
 }
+*/
 
+/*
 static int mk_audio_try_azalia_backends(void) {
     struct mk_audio_try_ctx ctx;
 
@@ -4941,6 +4956,7 @@ static int mk_audio_probe_any_hardware_backend(void) {
     }
     return 0;
 }
+*/
 
 static void mk_audio_select_soft_backend(void);
 static void mk_audio_select_pcspkr_backend(void);
@@ -5210,6 +5226,7 @@ static void mk_audio_set_softmix_reason(const char *reason) {
     mk_audio_copy_limited(g_audio_state.info.device.config, reason, MAX_AUDIO_DEV_LEN);
 }
 
+#if 0
 static void mk_audio_select_compat_backend(const struct kernel_pci_device_info *pci) {
     char location[MAX_AUDIO_DEV_LEN];
 
@@ -5325,7 +5342,7 @@ static void mk_audio_select_compat_backend(const struct kernel_pci_device_info *
             mk_audio_compat_apply_params();
             mk_audio_compat_apply_mixer_state();
         }
-        if (pci->irq_line < 16u) {
+        if (pci->irq_line < 16u && pci->irq_line != 12u) {
             (void)kernel_irq_register_handler(pci->irq_line, mk_audio_compat_irq_handler);
             kernel_irq_unmask(pci->irq_line);
             g_audio_state.compat_irq_registered = 1u;
@@ -5335,6 +5352,7 @@ static void mk_audio_select_compat_backend(const struct kernel_pci_device_info *
     }
     mk_audio_refresh_topology_snapshot();
 }
+#endif
 
 static int mk_audio_azalia_reset_controller(void) {
     uint32_t control;
@@ -8223,6 +8241,7 @@ static void mk_audio_azalia_update_output_progress(void) {
     }
 }
 
+#if 0
 static void mk_audio_select_azalia_backend(const struct kernel_pci_device_info *pci) {
     char location[MAX_AUDIO_DEV_LEN];
 
@@ -8399,6 +8418,7 @@ static void mk_audio_select_azalia_backend(const struct kernel_pci_device_info *
 
     mk_audio_refresh_topology_snapshot();
 }
+#endif
 
 static void mk_audio_state_reset_playback(void) {
     g_audio_state.playback_head = 0u;
@@ -9641,7 +9661,7 @@ static int mk_audio_local_handler(const struct mk_message *request,
 }
 
 void mk_audio_service_init(void) {
-    struct kernel_pci_device_info detected_pci;
+    // struct kernel_pci_device_info detected_pci; // Removido porque não está sendo usado
 
     memset(&g_last_audio_request, 0, sizeof(g_last_audio_request));
     memset(&g_last_audio_reply, 0, sizeof(g_last_audio_reply));
@@ -9677,6 +9697,10 @@ void mk_audio_service_init(void) {
     mk_audio_select_soft_backend();
     mk_audio_refresh_usb_attach_snapshot();
     kernel_debug_puts("audio: service init enter\n");
+    
+    // FORÇAR USO DO BACKEND SOFT PARA EVITAR PROBLEMAS COM HARDWARE
+    // Comente a seção abaixo para evitar detecção de hardware problemático
+    /*
     if (mk_audio_try_azalia_backends() != 0 &&
         mk_audio_try_compat_backends() != 0) {
         int hardware_detected = mk_audio_probe_any_hardware_backend();
@@ -9840,6 +9864,10 @@ void mk_audio_service_init(void) {
             }
         }
     }
+    */
+    // FIM DA SEÇÃO COMENTADA
+    
+    kernel_debug_puts("audio: using forced soft backend to avoid hardware issues\n");
     mk_audio_refresh_topology_snapshot();
     mk_audio_debug_backend_state("audio: service init exit backend=");
 

@@ -32,6 +32,7 @@ static spinlock_t g_service_event_lock;
 #define MK_SERVICE_STORAGE_TIMEOUT_TICKS 256u
 #define MK_SERVICE_FILESYSTEM_TIMEOUT_TICKS 128u
 #define MK_SERVICE_DEFERRED_REPLIES_MAX 8u
+#define MK_SERVICE_RECOVERY_RETRY_LIMIT 1u
 
 static void mk_service_worker_entry(void);
 static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type);
@@ -43,6 +44,27 @@ static uint32_t mk_service_request_timeout_ticks(const struct mk_service_record 
 static void mk_service_restore_deferred_messages(process_t *destination,
                                                  const struct mk_message *messages,
                                                  uint32_t count);
+
+static int mk_service_type_allows_rescue_local_fallback(uint32_t service_type) {
+    switch (service_type) {
+    case MK_SERVICE_STORAGE:
+    case MK_SERVICE_FILESYSTEM:
+    case MK_SERVICE_CONSOLE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static void mk_service_mark_transport_degraded(struct mk_service_record *service) {
+    if (service == 0) {
+        return;
+    }
+    if (service->transport_degraded == 0u) {
+        service->transport_degraded = 1u;
+        mk_service_publish_event(service, MK_SERVICE_EVENT_DEGRADED);
+    }
+}
 
 int mk_service_backend_bridge_allowed_current(uint32_t service_type) {
     process_t *current;
@@ -96,6 +118,16 @@ static int mk_service_current_allows_local_fallback(const struct mk_service_reco
         return 1;
     }
     if (!mk_service_backend_bridge_allowed_current(service->type)) {
+        return 0;
+    }
+
+    /*
+     * Keep the local handler bridge restricted to the minimal rescue/bootstrap
+     * surface still required to bring up diagnostics and storage-backed
+     * recovery flows. Interactive domains must exercise the explicit service
+     * boundary even while degraded so restart/containment behavior stays real.
+     */
+    if (!mk_service_type_allows_rescue_local_fallback(service->type)) {
         return 0;
     }
 
@@ -706,6 +738,7 @@ static int mk_service_request_process(const struct mk_service_record *service,
     uint32_t request_timeout_ticks;
     uint32_t waiting_pid;
     uint32_t deferred_reply_count = 0u;
+    uint32_t recovery_attempts = 0u;
 
     if (service == 0 || request == 0 || reply == 0) {
         return -1;
@@ -737,6 +770,18 @@ static int mk_service_request_process(const struct mk_service_record *service,
             service = live_service;
         }
         if (service == 0 || service->process == 0 || service->pid <= 0) {
+            struct mk_service_record *mutable_service =
+                service != 0 ? mk_service_find_mutable_by_type(service->type) : 0;
+
+            if (mutable_service != 0) {
+                mk_service_mark_transport_degraded(mutable_service);
+                if (recovery_attempts < MK_SERVICE_RECOVERY_RETRY_LIMIT &&
+                    mk_service_restart_worker_record(mutable_service) == 0) {
+                    recovery_attempts += 1u;
+                    service = mk_service_find_by_type(mutable_service->type);
+                    continue;
+                }
+            }
             if (service != 0 &&
                 service->local_handler != 0 &&
                 mk_service_current_allows_local_fallback(service, &request_copy)) {
@@ -788,16 +833,19 @@ static int mk_service_request_process(const struct mk_service_record *service,
         }
 
         if (ipc_send(service->process, &request_copy, sizeof(request_copy)) != 0) {
+            struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+
+            if (mutable_service != 0) {
+                mk_service_mark_transport_degraded(mutable_service);
+                if (recovery_attempts < MK_SERVICE_RECOVERY_RETRY_LIMIT &&
+                    mk_service_restart_worker_record(mutable_service) == 0) {
+                    recovery_attempts += 1u;
+                    service = mk_service_find_by_type(mutable_service->type);
+                    continue;
+                }
+            }
             if (service->local_handler != 0 &&
                 mk_service_current_allows_local_fallback(service, &request_copy)) {
-                struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
-
-                if (mutable_service != 0) {
-                    if (mutable_service->transport_degraded == 0u) {
-                        mutable_service->transport_degraded = 1u;
-                        mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_DEGRADED);
-                    }
-                }
                 if (g_transport_fallback_budget > 0) {
                     g_transport_fallback_budget -= 1;
                     kernel_debug_printf("service: transport fallback type=%d src=%d dst=%d service=%d\n",
@@ -896,11 +944,13 @@ static int mk_service_request_process(const struct mk_service_record *service,
                 }
 
                 if (mutable_service != 0) {
-                    if (mutable_service->transport_degraded == 0u) {
-                        mutable_service->transport_degraded = 1u;
-                        mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_DEGRADED);
+                    mk_service_mark_transport_degraded(mutable_service);
+                    if (recovery_attempts < MK_SERVICE_RECOVERY_RETRY_LIMIT &&
+                        mk_service_restart_worker_record(mutable_service) == 0) {
+                        recovery_attempts += 1u;
+                        service = mk_service_find_by_type(mutable_service->type);
+                        break;
                     }
-                    (void)mk_service_restart_worker_record(mutable_service);
                     if (mutable_service->local_handler != 0 &&
                         mk_service_current_allows_local_fallback(mutable_service, &request_copy)) {
                         if (g_transport_fallback_budget > 0) {
