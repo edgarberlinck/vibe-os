@@ -39,6 +39,11 @@ extern void userland_boot_audio_host_entry(void);
 extern void userland_app_host_entry(void);
 extern void userland_app_runtime_entry(void);
 
+static int sys_launch_app_copy_argv(const char *const *argv,
+                                    uint32_t argc,
+                                    struct mk_launch_descriptor *descriptor);
+static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor);
+
 static const char *sys_launch_path_basename(const char *path) {
     const char *last = path;
 
@@ -651,14 +656,32 @@ static uint32_t sys_audio_write_async(uint32_t data_ptr, uint32_t size, uint32_t
 
 static uint32_t sys_audio_play_asset(uint32_t path_ptr, uint32_t b, uint32_t c,
                                      uint32_t d, uint32_t e) {
+    const char *const argv[3] = {(const char *)(uintptr_t)"audiosvc",
+                                 (const char *)(uintptr_t)"play-asset",
+                                 (const char *)(uintptr_t)path_ptr};
+    struct mk_launch_descriptor descriptor;
+    int result;
+
     (void)b; (void)c; (void)d; (void)e;
     if (path_ptr == 0u) {
         return (uint32_t)-1;
     }
-    
-    /* Always return success immediately to avoid UI blocking */
-    /* The actual playback will be handled by audiosvc launched in background */
-    return 0u;
+
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
+    descriptor.kind = MK_LAUNCH_KIND_USER;
+    descriptor.flags = MK_LAUNCH_FLAG_USER_APP;
+    descriptor.task_class = MK_TASK_CLASS_AUDIO_IO;
+    descriptor.stack_size = 65536u;
+
+    if (sys_launch_app_copy_argv(argv, 3u, &descriptor) != 0) {
+        return (uint32_t)-1;
+    }
+    sys_launch_app_apply_role(&descriptor);
+    descriptor.entry = userland_app_runtime_entry;
+
+    result = mk_launch_bootstrap(&descriptor);
+    return result > 0 ? 0u : (uint32_t)-1;
 }
 
 static uint32_t sys_audio_read(uint32_t data_ptr, uint32_t size, uint32_t c,

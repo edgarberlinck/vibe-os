@@ -346,10 +346,6 @@ static void desktop_note_present_success(void) {
     }
 }
 
-static void desktop_note_present_failure(uint32_t ticks) {
-    g_desktop_present_retry_tick = ticks + DESKTOP_PRESENT_RETRY_TICKS;
-}
-
 static void desktop_note_present_backpressure(uint32_t ticks) {
     g_desktop_present_retry_tick = ticks + DESKTOP_PRESENT_BACKPRESSURE_TICKS;
 }
@@ -6532,10 +6528,11 @@ static int desktop_submit_present_full(uint32_t ticks) {
         return 0;
     }
 
-    sys_write_debug("desktop: present submit failed\n");
+    sys_write_debug("desktop: present submit failed, falling back to direct present\n");
     desktop_reset_video_async_path();
-    desktop_note_present_failure(ticks);
-    return -1;
+    sys_present_full();
+    desktop_note_present_success();
+    return 0;
 }
 
 static uint32_t desktop_pump_async_service_events(void) {
@@ -9000,14 +8997,14 @@ void desktop_main(void) {
                     dirty = 1;
                     continue;
                 }
-                if (key == 'w' || key == 'W' || key == KEY_ARROW_UP) {
+                if (key == KEY_ARROW_UP) {
                     if (*scroll_ptr > 0) {
                         *scroll_ptr -= 1;
                         dirty = 1;
                     }
                     continue;
                 }
-                if (key == 's' || key == 'S' || key == KEY_ARROW_DOWN) {
+                if (key == KEY_ARROW_DOWN) {
                     if (*scroll_ptr < start_menu_scroll_limit_for_count(filtered_count)) {
                         *scroll_ptr += 1;
                         dirty = 1;
