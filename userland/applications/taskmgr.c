@@ -8,6 +8,7 @@ static const struct rect DEFAULT_TASKMGR_WINDOW = {30, 30, 580, 360};
 static const int TASKMGR_ROW_HEIGHT = 18;
 static const int TASKMGR_SCROLLBAR_W = 10;
 static const int TASKMGR_SCROLLBAR_GAP = 4;
+static const int TASKMGR_COLUMN_GAP = 4;
 static const int TASKMGR_TEXT_CHAR_W = 6;
 static const int TASKMGR_PERFORMANCE_CARD_H = 62;
 static const int TASKMGR_PERFORMANCE_GAP = 6;
@@ -1238,6 +1239,7 @@ static void taskmgr_draw_usage_meter(const struct rect *meter,
 
 static struct taskmgr_details_columns taskmgr_details_columns_for_width(int text_width) {
     struct taskmgr_details_columns columns;
+    int gap_count;
 
     memset(&columns, 0, sizeof(columns));
     if (text_width >= 240) {
@@ -1261,6 +1263,14 @@ static struct taskmgr_details_columns taskmgr_details_columns_for_width(int text
         columns.runtime_w = 30;
     }
 
+    gap_count = 3;
+    if (columns.density >= TASKMGR_DETAILS_DENSITY_MEDIUM) {
+        gap_count += 1;
+    }
+    if (columns.density >= TASKMGR_DETAILS_DENSITY_WIDE) {
+        gap_count += 2;
+    }
+
     columns.name_w = text_width;
     columns.name_w -= columns.pid_w;
     columns.name_w -= columns.state_w;
@@ -1272,7 +1282,8 @@ static struct taskmgr_details_columns taskmgr_details_columns_for_width(int text
         columns.name_w -= columns.cpu_w;
         columns.name_w -= columns.rest_w;
     }
-    columns.name_w -= 24;
+    columns.name_w -= gap_count * TASKMGR_COLUMN_GAP;
+    columns.name_w -= 12;
     if (columns.name_w < 36) {
         columns.name_w = 36;
     }
@@ -1524,6 +1535,7 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
     int scroll_px;
     int grid_rows;
     int y;
+    char status_fit[160];
 
     taskmgr_refresh_video_bench(tm, tm->last_refresh_ticks);
     taskmgr_refresh_audio_info(tm, tm->last_refresh_ticks);
@@ -2035,7 +2047,8 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
     if (total_rows > visible_rows) {
         str_append(status_text, "  wheel para rolar", (int)sizeof(status_text));
     }
-    ui_draw_status(&status, status_text);
+    taskmgr_copy_fit(status_fit, (int)sizeof(status_fit), status_text, status.w - 10);
+    ui_draw_status(&status, status_fit);
     taskmgr_draw_scrollbar(&list, total_rows, tm->performance_scroll_offset);
 }
 
@@ -2052,8 +2065,9 @@ static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
     int visible_rows = taskmgr_visible_rows_for_list(&list);
     int first_visible = 0;
     int last_visible = 0;
-    const int gap = 4;
+    const int gap = TASKMGR_COLUMN_GAP;
     int header_x;
+    char status_fit[160];
 
     taskmgr_draw_header(&content, theme, "Detalhes", "PIDs reais, prioridade, reinicios e estado");
     taskmgr_clamp_scroll_offset(&list, tm->task_count, &tm->details_scroll_offset);
@@ -2081,6 +2095,7 @@ static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
     }
     sys_text(header_x, header_row.y + 3, ui_color_muted(), "TEMPO");
 
+    clip_push(view.x, view.y, view.w, view.h);
     for (int i = tm->details_scroll_offset; i < tm->task_count; ++i) {
         int visible_index = i - tm->details_scroll_offset;
         struct rect row = taskmgr_details_row_rect(tm, tm->task_count, visible_index);
@@ -2169,6 +2184,7 @@ static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
             ui_draw_button(&kill, "Atual", UI_BUTTON_NORMAL, 0);
         }
     }
+    clip_pop();
 
     if (tm->selected_pid != 0u) {
         const struct task_snapshot_entry *selected = 0;
@@ -2212,7 +2228,8 @@ static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {
     if (tm->task_count == 0) {
         sys_text(list.x + 6, list.y + 4, ui_color_muted(), "Sem tarefas visiveis no snapshot atual.");
     }
-    ui_draw_status(&status, status_text);
+    taskmgr_copy_fit(status_fit, (int)sizeof(status_fit), status_text, status.w - 10);
+    ui_draw_status(&status, status_fit);
     taskmgr_draw_scrollbar(&list, tm->task_count, tm->details_scroll_offset);
 }
 

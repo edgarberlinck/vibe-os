@@ -37,7 +37,6 @@ static volatile uint8_t g_kernel_kbd_shift = 0u;
 static volatile uint8_t g_kernel_kbd_ctrl = 0u;
 static volatile uint8_t g_kernel_kbd_extended = 0u;
 static volatile uint8_t g_kernel_kbd_ready = 0u;
-static volatile uint32_t g_kernel_kbd_irq_trace_budget = 24u;
 static const keymap_t* g_current_keymap = &keymap_us;
 
 static int ps2_wait_write_timeout(void) {
@@ -309,15 +308,6 @@ void kernel_keyboard_irq_handler(void) {
     }
 
     scancode = inb(PS2_DATA_PORT);
-    if (g_kernel_kbd_irq_trace_budget > 0u) {
-        g_kernel_kbd_irq_trace_budget -= 1u;
-        kernel_debug_printf("kbd: irq scancode=%d ext=%d ctrl=%d shift=%d ready=%d\n",
-                            (int)scancode,
-                            (int)g_kernel_kbd_extended,
-                            (int)g_kernel_kbd_ctrl,
-                            (int)g_kernel_kbd_shift,
-                            (int)g_kernel_kbd_ready);
-    }
     kernel_keyboard_process_scancode(scancode);
     kernel_irq_complete(1);
 }

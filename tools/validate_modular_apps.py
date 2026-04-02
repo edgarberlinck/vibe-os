@@ -937,7 +937,11 @@ def run_command(session: QemuSession, command: str, timeout: float = 6.0, pause:
     if command_marker is None:
         command_marker = command.split(" ", 1)[0] if command else ""
     session.type_text(command, pause=pause, use_hmp=use_hmp)
-    session.send_key("ret", pause=0.15)
+    if use_hmp:
+        time.sleep(0.10)
+        session.send_shortcut("ret", pause=0.20)
+    else:
+        session.send_key("ret", pause=0.15)
     if command_marker:
         session.wait_for_log(f"shell: command {command_marker}", timeout=timeout)
 
@@ -957,15 +961,15 @@ def scenario_terminal_runtime(session: QemuSession) -> None:
 
 
 def scenario_phase_e_writeback_shell(session: QemuSession) -> None:
-    touch_path = f"/tmp/phase-e-writeback-{time.time_ns()}"
+    touch_path = "/tmp/phasee.tmp"
     touch_start = len(session.read_log())
-    run_command(session, f"touch {touch_path}", timeout=6.0, pause=0.20, use_hmp=True)
+    run_command(session, f"touch {touch_path}", timeout=10.0, pause=0.12)
     wait_for_all_since(session,
                        ["shell: command touch", "shell: ready"],
                        timeout=4.0,
                        start_offset=touch_start)
     session.wait_for_log("fs: writeback start", timeout=12.0)
-    run_command(session, "cc /hello.c", timeout=8.0, marker="", pause=0.20, use_hmp=True)
+    run_command(session, "cc /hello.c", timeout=10.0, marker="", pause=0.12)
     session.wait_for_all(
         [
             "busybox: external ok sectorc",
@@ -1783,12 +1787,15 @@ def run_scenario_once(qemu_binary: str, image_path: Path, memory_mb: int, scenar
             if rescue_shell:
                 time.sleep(0.6)
             if scenario.command:
+                command_timeout = 6.0
+                if rescue_shell:
+                    command_timeout = max(10.0, 2.0 + (0.20 * (len(scenario.command) + 1)))
                 run_command(session,
                             scenario.command,
-                            timeout=6.0,
-                            pause=0.20 if rescue_shell else 0.12,
+                            timeout=command_timeout,
+                            pause=0.12,
                             marker=scenario.command_marker,
-                            use_hmp=rescue_shell)
+                            use_hmp=False)
             if scenario.action:
                 scenario.action(session)
             else:

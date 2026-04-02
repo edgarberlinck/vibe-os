@@ -835,12 +835,12 @@ static const struct mk_audio_backend_ops g_audio_backend_uaudio = {
     mk_audio_backend_uaudio_stop,
     mk_audio_backend_uaudio_write
 };
-static const struct mk_audio_backend_ops g_audio_backend_compat = {
+static const struct mk_audio_backend_ops __attribute__((unused)) g_audio_backend_compat = {
     mk_audio_backend_compat_start,
     mk_audio_backend_compat_stop,
     mk_audio_backend_compat_write
 };
-static const struct mk_audio_backend_ops g_audio_backend_azalia = {
+static const struct mk_audio_backend_ops __attribute__((unused)) g_audio_backend_azalia = {
     mk_audio_backend_azalia_start,
     mk_audio_backend_azalia_stop,
     mk_audio_backend_azalia_write
@@ -1960,7 +1960,7 @@ static int mk_audio_is_auich_device(uint16_t vendor_id, uint16_t device_id) {
 }
 */
 
-static int mk_audio_auich_prefers_native_mmio(uint16_t vendor_id, uint16_t device_id) {
+static __attribute__((unused)) int mk_audio_auich_prefers_native_mmio(uint16_t vendor_id, uint16_t device_id) {
     if (vendor_id != PCI_VENDOR_INTEL) {
         return 0;
     }
@@ -1976,7 +1976,7 @@ static int mk_audio_auich_prefers_native_mmio(uint16_t vendor_id, uint16_t devic
     }
 }
 
-static int mk_audio_auich_quirk_ignore_codecready(uint16_t vendor_id, uint16_t device_id) {
+static __attribute__((unused)) int mk_audio_auich_quirk_ignore_codecready(uint16_t vendor_id, uint16_t device_id) {
     if (vendor_id != PCI_VENDOR_INTEL) {
         return 0;
     }
@@ -2088,7 +2088,7 @@ static int mk_audio_compat_reset_codec(void) {
     return -1;
 }
 
-static void mk_audio_compat_apply_device_quirks(void) {
+static __attribute__((unused)) void mk_audio_compat_apply_device_quirks(void) {
     if (!g_audio_state.compat_ready) {
         return;
     }
@@ -2134,7 +2134,7 @@ static uint16_t mk_audio_encode_record_source(uint8_t input_default) {
     return (uint16_t)(source | (source << 8));
 }
 
-static void mk_audio_compat_sync_codec_caps(void) {
+static __attribute__((unused)) void mk_audio_compat_sync_codec_caps(void) {
     uint16_t caps = 0u;
 
     if (!g_audio_state.compat_codec_ready) {
@@ -4327,7 +4327,7 @@ static void mk_audio_compat_update_input_progress(void) {
     }
 }
 
-static void mk_audio_compat_irq_handler(void) {
+static __attribute__((unused)) void mk_audio_compat_irq_handler(void) {
     uint16_t status;
     uint16_t input_status;
 
@@ -4486,7 +4486,7 @@ static int mk_audio_compat_start_output_if_needed(void) {
     return 0;
 }
 
-static const char *mk_audio_auich_family_name(uint16_t device_id) {
+static __attribute__((unused)) const char *mk_audio_auich_family_name(uint16_t device_id) {
     switch (device_id) {
     case PCI_PRODUCT_INTEL_82801AA_ACA:
         return "ich-aa";
@@ -4551,7 +4551,7 @@ static const char *mk_audio_auich_family_name(uint16_t device_id) {
     }
 }
 
-static const char *mk_audio_ac97_vendor_name(uint16_t vendor_id) {
+static __attribute__((unused)) const char *mk_audio_ac97_vendor_name(uint16_t vendor_id) {
     switch (vendor_id) {
     case PCI_VENDOR_INTEL:
         return "intel-ac97";
@@ -4572,7 +4572,7 @@ static const char *mk_audio_ac97_vendor_name(uint16_t vendor_id) {
     }
 }
 
-static const char *mk_audio_hda_vendor_name(uint16_t vendor_id) {
+static __attribute__((unused)) const char *mk_audio_hda_vendor_name(uint16_t vendor_id) {
     switch (vendor_id) {
     case PCI_VENDOR_INTEL:
         return "intel-hda";
@@ -4631,7 +4631,7 @@ static void mk_audio_format_pci_location(char *dst,
     dst[pos] = '\0';
 }
 
-static void mk_audio_enable_pci_device(const struct kernel_pci_device_info *pci) {
+static __attribute__((unused)) void mk_audio_enable_pci_device(const struct kernel_pci_device_info *pci) {
     uint32_t command_status;
 
     if (pci == 0) {
@@ -4710,7 +4710,7 @@ static int mk_audio_azalia_has_usable_playback_path(void) {
     return 0;
 }
 
-static void mk_audio_configure_azalia_pci(const struct kernel_pci_device_info *pci) {
+static __attribute__((unused)) void mk_audio_configure_azalia_pci(const struct kernel_pci_device_info *pci) {
     uint32_t config;
     uint8_t reg;
 
@@ -5354,7 +5354,7 @@ static void mk_audio_select_compat_backend(const struct kernel_pci_device_info *
 }
 #endif
 
-static int mk_audio_azalia_reset_controller(void) {
+static __attribute__((unused)) int mk_audio_azalia_reset_controller(void) {
     uint32_t control;
 
     if (g_audio_state.azalia_base == 0u) {
@@ -5451,7 +5451,7 @@ static int mk_audio_azalia_select_output_stream_from(uint8_t start_regindex) {
     return 0;
 }
 
-static int mk_audio_azalia_select_output_stream(void) {
+static __attribute__((unused)) int mk_audio_azalia_select_output_stream(void) {
     return mk_audio_azalia_select_output_stream_from(0u);
 }
 
@@ -9697,177 +9697,16 @@ void mk_audio_service_init(void) {
     mk_audio_select_soft_backend();
     mk_audio_refresh_usb_attach_snapshot();
     kernel_debug_puts("audio: service init enter\n");
-    
-    // FORÇAR USO DO BACKEND SOFT PARA EVITAR PROBLEMAS COM HARDWARE
-    // Comente a seção abaixo para evitar detecção de hardware problemático
-    /*
-    if (mk_audio_try_azalia_backends() != 0 &&
-        mk_audio_try_compat_backends() != 0) {
-        int hardware_detected = mk_audio_probe_any_hardware_backend();
 
-        if (mk_audio_probe_azalia_backend(&detected_pci) == 0) {
-            mk_audio_select_azalia_backend(&detected_pci);
-        } else if (mk_audio_probe_compat_backend(&detected_pci) == 0) {
-            mk_audio_select_compat_backend(&detected_pci);
-        }
-        if (!mk_audio_backend_current_is_usable()) {
-            if (g_audio_state.usb_audio_attached_ready &&
-                kernel_usb_audio_playback_supported() == 0) {
-                mk_audio_select_uaudio_backend();
-            }
-        }
-        if (!mk_audio_backend_current_is_usable()) {
-            if (kernel_timer_pc_speaker_available()) {
-                char usb_audio_fallback[MAX_AUDIO_DEV_LEN];
-                char previous_device_config[MAX_AUDIO_DEV_LEN];
-
-                memset(previous_device_config, 0, sizeof(previous_device_config));
-                mk_audio_copy_limited(previous_device_config,
-                                      g_audio_state.info.device.config,
-                                      sizeof(previous_device_config));
-                mk_audio_select_pcspkr_backend();
-                if (hardware_detected > 0) {
-                    if (strcmp(previous_device_config, "hda-no-audio-fg") == 0) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-hda-no-audio-fg",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (strcmp(previous_device_config, "hda-no-usable-output") == 0) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-hda-no-usable-output",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-no-usable-hw-backend",
-                                              MAX_AUDIO_DEV_LEN);
-                    }
-                } else {
-                    if (g_audio_state.usb_audio_attached_ready) {
-                        if (kernel_usb_audio_playback_supported() != 0) {
-                            memset(usb_audio_fallback, 0, sizeof(usb_audio_fallback));
-                            mk_audio_build_usb_audio_reason(usb_audio_fallback,
-                                                            sizeof(usb_audio_fallback),
-                                                            "pcspkr-fallback-usb-audio-",
-                                                            g_audio_state.usb_audio_transport_kind,
-                                                            "-unsupported");
-                            mk_audio_copy_limited(g_audio_state.info.device.config,
-                                                  usb_audio_fallback,
-                                                  MAX_AUDIO_DEV_LEN);
-                        } else {
-                            mk_audio_copy_limited(g_audio_state.info.device.config,
-                                                  "pcspkr-fallback-usb-audio-attached",
-                                                  MAX_AUDIO_DEV_LEN);
-                        }
-                    } else if (g_audio_state.usb_audio_attach_ready) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-audio-attach-ready",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_audio_probe_configured_ready_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-configured-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_audio_class_probe_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-audio-class-detected",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_audio_probe_descriptor_ready_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-descriptor-read-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_audio_probe_exec_ready_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-probe-exec-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_audio_probe_dispatch_ready_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-probe-dispatch-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_audio_probe_snapshot_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-probe-queue-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_audio_probe_target_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-descriptor-probe-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_control_path_ready_count() != 0u &&
-                        kernel_usb_host_audio_candidate_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-control-path-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_control_ready_count() != 0u &&
-                        kernel_usb_host_audio_candidate_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-control-ready-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_control_ready_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-control-ready",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_needs_companion_count() != 0u &&
-                               kernel_usb_device_companion_present_count() != 0u &&
-                               kernel_usb_host_audio_candidate_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-companion-available-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_handoff_ready_count() != 0u &&
-                               kernel_usb_host_audio_candidate_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-handoff-ready-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_needs_companion_count() != 0u &&
-                               kernel_usb_host_audio_candidate_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-needs-companion-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_ready_for_enum_count() != 0u &&
-                        kernel_usb_host_audio_candidate_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-enum-ready-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_host_audio_candidate_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-audio-candidate",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_device_ready_for_enum_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-enum-ready",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_host_connected_super_speed_port_count() != 0u ||
-                               kernel_usb_host_connected_high_speed_port_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-av-candidate",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_host_root_device_count() != 0u ||
-                               kernel_usb_host_connected_port_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-device-present",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else if (kernel_usb_host_controller_count() != 0u) {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-usb-host-present",
-                                              MAX_AUDIO_DEV_LEN);
-                    } else {
-                        mk_audio_copy_limited(g_audio_state.info.device.config,
-                                              "pcspkr-fallback-no-pci-audio",
-                                              MAX_AUDIO_DEV_LEN);
-                    }
-                }
-                kernel_debug_puts("audio: no usable hardware backend, using pcspkr fallback\n");
-            } else {
-                mk_audio_select_soft_backend();
-                if (hardware_detected > 0) {
-                    mk_audio_set_softmix_reason("no-usable-hw-backend");
-                } else {
-                    mk_audio_set_softmix_reason("no-pci-audio");
-                }
-                kernel_debug_puts("audio: no usable hardware backend, staying on softmix\n");
-            }
-        }
+    if (kernel_timer_pc_speaker_available()) {
+        mk_audio_select_pcspkr_backend();
+        kernel_debug_puts("audio: using pcspkr fallback backend\n");
+    } else {
+        mk_audio_select_soft_backend();
+        mk_audio_set_softmix_reason("forced-soft-backend");
+        kernel_debug_puts("audio: using forced soft backend to avoid hardware issues\n");
     }
-    */
-    // FIM DA SEÇÃO COMENTADA
     
-    kernel_debug_puts("audio: using forced soft backend to avoid hardware issues\n");
     mk_audio_refresh_topology_snapshot();
     mk_audio_debug_backend_state("audio: service init exit backend=");
 

@@ -31,7 +31,7 @@ userland/applications/desktop.o: userland/applications/desktop.c \
  headers/userland/applications/include/games/doom.h \
  headers/userland/applications/include/games/craft.h \
  headers/userland/modules/include/image.h \
- headers/kernel/microkernel/video.h userland/lua/include/stdio.h
+ headers/kernel/microkernel/video.h
 
 headers/userland/modules/include/ui.h:
 
@@ -114,5 +114,3 @@ headers/userland/applications/include/games/craft.h:
 headers/userland/modules/include/image.h:
 
 headers/kernel/microkernel/video.h:
-
-userland/lua/include/stdio.h:
