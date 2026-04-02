@@ -38,6 +38,21 @@ static void audioplayer_set_status(struct audioplayer_state *player, const char 
     str_copy_limited(player->status, text ? text : "", (int)sizeof(player->status));
 }
 
+static int audioplayer_launch_async_path(const char *path) {
+    char *argv[4] = {"audiosvc", "play-asset", (char *)path, 0};
+
+    if (path == 0 || path[0] == '\0') {
+        return -1;
+    }
+    if (str_eq(path, "/assets/vibe_os_boot.wav")) {
+        return sys_launch_builtin_user(USERLAND_BUILTIN_BOOT_AUDIO) > 0 ? 0 : -1;
+    }
+    if (str_eq(path, "/assets/vibe_os_desktop.wav")) {
+        return sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP_AUDIO) > 0 ? 0 : -1;
+    }
+    return sys_launch_app_argv(3, argv) > 0 ? 0 : -1;
+}
+
 static struct rect audioplayer_body_rect(const struct audioplayer_state *player) {
     struct rect r = {player->window.x + 4, player->window.y + 18, player->window.w - 8, player->window.h - 22};
     return r;
@@ -92,19 +107,12 @@ static int audioplayer_play_current(struct audioplayer_state *player) {
         return -1;
     }
 
-    /* sys_audio_play_asset is fire-and-forget, always succeeds */
-    (void)sys_audio_play_asset(player->path);
-    audioplayer_set_status(player, "Playback iniciado");
-
-    /* Also launch audiosvc for actual playback */
-    char *argv[4] = {"audiosvc", "play-asset", player->path, 0};
-    if (sys_launch_app_argv(3, argv) > 0) {
+    if (audioplayer_launch_async_path(player->path) == 0) {
         audioplayer_set_status(player, "Playback em segundo plano");
         return 0;
     }
-
-    audioplayer_set_status(player, "Playback iniciado (direct)");
-    return 0;
+    audioplayer_set_status(player, "Falha ao iniciar playback");
+    return -1;
 }
 
 void audioplayer_init_state(struct audioplayer_state *player) {

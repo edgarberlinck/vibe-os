@@ -1,4 +1,7 @@
 # Plano Consolidado de Finalizacao do VibeOS
+
+Este e um plano ativo de execucao. Ele complementa a documentacao tecnica em `docs/` e o backlog arquitetural de longo prazo em [guidelines/MICROKERNEL_MIGRATION.md](guidelines/MICROKERNEL_MIGRATION.md).
+
 Data da consolidacao: 2026-03-31
 
 Este arquivo agora lista apenas o que realmente falta fazer.

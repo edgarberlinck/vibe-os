@@ -226,7 +226,7 @@ static int audio_should_use_kernel_async(const char *tag) {
     return audio_is_desktop_async_tag(tag);
 }
 
-static int audio_backend_kind(void) {
+int audio_backend_kind(void) {
     struct audio_status status;
 
     if (sys_audio_get_status(&status) != 0) {
@@ -243,8 +243,7 @@ int audio_desktop_startup_wav_allowed(void) {
         return 0;
     }
 
-    return backend_kind != AUDIO_BACKEND_PCSPKR &&
-           backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO;
+    return backend_kind != AUDIO_BACKEND_PCSPKR;
 }
 
 static int audio_wait_for_playback_idle(uint32_t expected_ticks) {
@@ -582,13 +581,6 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
     if (playback->use_kernel_async && sys_audio_event_subscribe() == 0) {
         playback->audio_event_subscription = 1;
         audio_async_drain_events(playback);
-    }
-
-    if (playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
-        (tag != 0 && (str_eq(tag, "desktop-session") || str_eq(tag, "desktop")))) {
-        audio_set_last_playback_error("deferred");
-        audio_debug_line("audio: defer wav ", tag, "\n");
-        return 0;
     }
 
     if (sys_audio_set_params(params) != 0) {

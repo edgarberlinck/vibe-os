@@ -299,6 +299,8 @@ static struct network_profile g_network_profiles[DESKTOP_NETWORK_PROFILE_MAX];
 static char g_network_auto_ssid[MK_NETWORK_SSID_MAX + 1];
 static uint32_t g_sound_applet_last_sync_ticks = 0u;
 static uint32_t g_network_applet_last_sync_ticks = 0u;
+static uint32_t g_sound_applet_last_export_ticks = 0u;
+static uint32_t g_network_applet_last_export_ticks = 0u;
 static uint32_t g_network_autoconnect_last_attempt_ticks = 0u;
 static int g_desktop_audio_event_subscription = 0;
 static int g_desktop_network_event_subscription = 0;
@@ -342,10 +344,6 @@ static void desktop_note_present_success(void) {
         g_desktop_visual_ready = 1;
         sys_write_debug("desktop: visual ready\n");
     }
-}
-
-static void desktop_note_present_failure(uint32_t ticks) {
-    g_desktop_present_retry_tick = ticks + DESKTOP_PRESENT_RETRY_TICKS;
 }
 
 static void desktop_note_present_backpressure(uint32_t ticks) {
@@ -591,9 +589,9 @@ static const uint8_t g_color_palette_256[] = {
     240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255
 };
 
-#define PANEL_APPLET_POPUP_W 212
-#define PANEL_SOUND_POPUP_H 156
-#define PANEL_NETWORK_POPUP_H 248
+#define PANEL_APPLET_POPUP_W 236
+#define PANEL_SOUND_POPUP_H 182
+#define PANEL_NETWORK_POPUP_H 286
 
 #define TASKBAR_HEIGHT 22
 #define WINDOW_MIN_W 400
@@ -624,6 +622,7 @@ enum {
     START_MENU_SCROLLBAR_W = 10
 };
 static const uint32_t APPLET_BACKEND_REFRESH_TICKS = 100u;
+static const uint32_t APPLET_EXPORT_REFRESH_TICKS = 20u;
 static const uint32_t APPLET_AUTOCONNECT_RETRY_TICKS = 300u;
 static const uint32_t DESKTOP_STARTUP_TASK_GATE_TICKS = 50u;
 enum {
@@ -5555,82 +5554,82 @@ static struct rect network_applet_popup_rect(void) {
 }
 
 static struct rect sound_output_row_rect(const struct rect *popup, int index) {
-    struct rect r = {popup->x + 8, popup->y + 26 + (index * 18), popup->w - 16, 16};
+    struct rect r = {popup->x + 16, popup->y + 48 + (index * 18), popup->w - 32, 16};
     return r;
 }
 
 static struct rect sound_input_row_rect(const struct rect *popup, int index) {
-    struct rect r = {popup->x + 8, popup->y + 90 + (index * 18), popup->w - 16, 16};
+    struct rect r = {popup->x + 16, popup->y + 122 + (index * 18), popup->w - 32, 16};
     return r;
 }
 
 static struct rect sound_output_slider_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 86, popup->y + 63, popup->w - 118, 10};
+    struct rect r = {popup->x + 64, popup->y + 84, popup->w - 118, 10};
     return r;
 }
 
 static struct rect sound_input_slider_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 86, popup->y + 127, popup->w - 118, 10};
+    struct rect r = {popup->x + 64, popup->y + 158, popup->w - 118, 10};
     return r;
 }
 
 static struct rect sound_output_mute_rect(const struct rect *popup) {
-    struct rect r = {popup->x + popup->w - 42, popup->y + 58, 30, 18};
+    struct rect r = {popup->x + popup->w - 50, popup->y + 79, 34, 18};
     return r;
 }
 
 static struct rect sound_input_mute_rect(const struct rect *popup) {
-    struct rect r = {popup->x + popup->w - 42, popup->y + 122, 30, 18};
+    struct rect r = {popup->x + popup->w - 50, popup->y + 153, 34, 18};
     return r;
 }
 
 static struct rect network_status_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 8, popup->y + 24, popup->w - 16, 18};
+    struct rect r = {popup->x + 16, popup->y + 36, popup->w - 32, 18};
     return r;
 }
 
 static struct rect network_row_rect(const struct rect *popup, int index) {
-    struct rect r = {popup->x + 8, popup->y + 70 + (index * 22), popup->w - 16, 18};
+    struct rect r = {popup->x + 16, popup->y + 88 + (index * 22), popup->w - 32, 18};
     return r;
 }
 
 static struct rect network_saved_row_rect(const struct rect *popup, int index) {
-    struct rect r = {popup->x + 8, popup->y + 152 + (index * 18), popup->w - 16, 16};
+    struct rect r = {popup->x + 16, popup->y + 176 + (index * 18), popup->w - 32, 16};
     return r;
 }
 
 static struct rect network_password_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 8, popup->y + 194, popup->w - 16, 18};
+    struct rect r = {popup->x + 16, popup->y + 234, popup->w - 32, 18};
     return r;
 }
 
 static struct rect network_auto_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 8, popup->y + 172, 68, 16};
+    struct rect r = {popup->x + 16, popup->y + 198, 82, 16};
     return r;
 }
 
 static struct rect network_forget_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 84, popup->y + 172, 84, 16};
+    struct rect r = {popup->x + 104, popup->y + 198, 96, 16};
     return r;
 }
 
 static struct rect network_ethernet_connect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 8, popup->y + 192, 84, 16};
+    struct rect r = {popup->x + 16, popup->y + 258, 92, 16};
     return r;
 }
 
 static struct rect network_ethernet_disconnect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 100, popup->y + 192, 84, 16};
+    struct rect r = {popup->x + 114, popup->y + 258, 92, 16};
     return r;
 }
 
 static struct rect network_connect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 8, popup->y + popup->h - 28, 92, 18};
+    struct rect r = {popup->x + 16, popup->y + popup->h - 28, 92, 18};
     return r;
 }
 
 static struct rect network_disconnect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + popup->w - 100, popup->y + popup->h - 28, 92, 18};
+    struct rect r = {popup->x + popup->w - 108, popup->y + popup->h - 28, 92, 18};
     return r;
 }
 
@@ -5751,7 +5750,6 @@ static void sound_applet_sync_backend(int force) {
     }
     g_sound_applet_last_sync_ticks = now;
     (void)sound_applet_load_runtime_state();
-    sound_applet_export_service_state();
 }
 
 static void sound_applet_save_settings(void) {
@@ -5780,6 +5778,13 @@ static void sound_applet_save_settings(void) {
 
 static void sound_applet_export_service_state(void) {
     char *export_argv[3];
+    uint32_t now = sys_ticks();
+
+    if (g_sound_applet_last_export_ticks != 0u &&
+        (uint32_t)(now - g_sound_applet_last_export_ticks) < APPLET_EXPORT_REFRESH_TICKS) {
+        return;
+    }
+    g_sound_applet_last_export_ticks = now;
 
     export_argv[0] = "audiosvc";
     export_argv[1] = "export-state";
@@ -6250,7 +6255,14 @@ static int network_applet_disconnect_interface(const char *fallback_if) {
 
 static void network_applet_export_service_state(void) {
     char *export_argv[3];
+    uint32_t now = sys_ticks();
 
+    if (g_network_applet_last_export_ticks != 0u &&
+        (uint32_t)(now - g_network_applet_last_export_ticks) < APPLET_EXPORT_REFRESH_TICKS) {
+        return;
+    }
+
+    g_network_applet_last_export_ticks = now;
     export_argv[0] = "netmgrd";
     export_argv[1] = "export-state";
     export_argv[2] = 0;
@@ -6401,7 +6413,6 @@ static void network_applet_sync_backend(int force) {
         memset(&g_network_applet_cache.status, 0, sizeof(g_network_applet_cache.status));
         g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
     }
-    network_applet_export_service_state();
 }
 
 static int desktop_service_event_affects_layout(const struct mk_service_event *event) {
@@ -6517,10 +6528,11 @@ static int desktop_submit_present_full(uint32_t ticks) {
         return 0;
     }
 
-    sys_write_debug("desktop: present submit failed\n");
+    sys_write_debug("desktop: present submit failed, falling back to direct present\n");
     desktop_reset_video_async_path();
-    desktop_note_present_failure(ticks);
-    return -1;
+    sys_present_full();
+    desktop_note_present_success();
+    return 0;
 }
 
 static uint32_t desktop_pump_async_service_events(void) {
@@ -6792,6 +6804,67 @@ static void draw_network_applet_icon(const struct rect *button, uint8_t color) {
     sys_rect(base_x + 5, base_y + 2, 1, 4, color);
 }
 
+static void desktop_draw_applet_popup(const struct rect *popup,
+                                      const char *title,
+                                      const char *subtitle) {
+    const struct desktop_theme *theme = ui_theme_get();
+    struct rect inner = {popup->x + 2, popup->y + 2, popup->w - 4, popup->h - 4};
+    struct rect header = {popup->x + 8, popup->y + 8, popup->w - 16, 22};
+
+    ui_draw_surface(popup, ui_color_panel());
+    ui_draw_inset(&inner, ui_color_window_bg());
+    sys_rect(header.x, header.y, header.w, header.h, theme->window);
+    sys_rect(header.x, header.y + header.h + 2, header.w, 1, ui_color_muted());
+    sys_text(header.x + 8, header.y + 4, theme->text, title);
+    if (subtitle != 0 && subtitle[0] != '\0') {
+        sys_text(header.x + header.w - 82, header.y + 4, ui_color_muted(), subtitle);
+    }
+}
+
+static void desktop_draw_applet_card(const struct rect *card, const char *title) {
+    ui_draw_inset(card, ui_color_window_bg());
+    if (title != 0 && title[0] != '\0') {
+        sys_text(card->x + 8, card->y + 6, ui_color_muted(), title);
+    }
+}
+
+static void desktop_draw_slider_track(const struct rect *track,
+                                      int value,
+                                      uint8_t fill,
+                                      uint8_t knob) {
+    int filled;
+    struct rect knob_rect;
+
+    if (track == 0) {
+        return;
+    }
+    ui_draw_inset(track, ui_color_window_bg());
+    if (track->w <= 4) {
+        return;
+    }
+    filled = ((track->w - 4) * value) / 100;
+    if (filled < 0) {
+        filled = 0;
+    }
+    if (filled > track->w - 4) {
+        filled = track->w - 4;
+    }
+    if (filled > 0) {
+        sys_rect(track->x + 2, track->y + 2, filled, track->h - 4, fill);
+    }
+    knob_rect.x = track->x + 2 + filled - 3;
+    if (knob_rect.x < track->x + 1) {
+        knob_rect.x = track->x + 1;
+    }
+    if (knob_rect.x > track->x + track->w - 7) {
+        knob_rect.x = track->x + track->w - 7;
+    }
+    knob_rect.y = track->y - 2;
+    knob_rect.w = 6;
+    knob_rect.h = track->h + 4;
+    sys_rect(knob_rect.x, knob_rect.y, knob_rect.w, knob_rect.h, knob);
+}
+
 static void draw_sound_applet(const struct mouse_state *mouse) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect button = ui_taskbar_sound_applet_rect();
@@ -6805,19 +6878,17 @@ static void draw_sound_applet(const struct mouse_state *mouse) {
 
     if (g_sound_applet.popup_open) {
         struct rect popup = sound_applet_popup_rect();
+        struct rect output_card = {popup.x + 10, popup.y + 36, popup.w - 20, 64};
+        struct rect input_card = {popup.x + 10, popup.y + 110, popup.w - 20, 62};
         struct rect out_slider = sound_output_slider_rect(&popup);
         struct rect in_slider = sound_input_slider_rect(&popup);
         struct rect out_mute = sound_output_mute_rect(&popup);
         struct rect in_mute = sound_input_mute_rect(&popup);
-        struct rect out_knob = {out_slider.x + ((out_slider.w * g_sound_applet.output_volume) / 100) - 2,
-                                out_slider.y - 2, 4, out_slider.h + 4};
-        struct rect in_knob = {in_slider.x + ((in_slider.w * g_sound_applet.input_volume) / 100) - 2,
-                               in_slider.y - 2, 4, in_slider.h + 4};
+        struct rect mode = {popup.x + popup.w - 76, popup.y + 10, 58, 16};
 
-        sound_applet_sync_backend(0);
-        ui_draw_surface(&popup, ui_color_window_bg());
-        sys_text(popup.x + 8, popup.y + 8, theme->text, "Som");
-        sys_text(popup.x + 8, popup.y + 16, theme->text, "Saidas");
+        desktop_draw_applet_popup(&popup, "Som", "widget");
+        ui_draw_status(&mode, g_sound_applet.output_muted ? "mute" : "live");
+        desktop_draw_applet_card(&output_card, "Saidas");
         for (int i = 0; i < g_sound_applet.output_count; ++i) {
             struct rect row = sound_output_row_rect(&popup, i);
             ui_draw_button(&row,
@@ -6825,19 +6896,14 @@ static void draw_sound_applet(const struct mouse_state *mouse) {
                            i == g_sound_applet.selected_output ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                            point_in_rect(&row, mouse->x, mouse->y));
         }
-        sys_text(popup.x + 8, popup.y + 62, theme->text, "Vol");
-        sys_rect(out_slider.x, out_slider.y, out_slider.w, out_slider.h, ui_color_muted());
-        sys_rect(out_slider.x, out_slider.y,
-                 (out_slider.w * g_sound_applet.output_volume) / 100,
-                 out_slider.h,
-                 theme->window);
-        sys_rect(out_knob.x, out_knob.y, out_knob.w, out_knob.h, theme->text);
+        sys_text(popup.x + 16, popup.y + 80, ui_color_muted(), "VOL");
+        desktop_draw_slider_track(&out_slider, g_sound_applet.output_volume, theme->window, theme->text);
         ui_draw_button(&out_mute,
                        g_sound_applet.output_muted ? "On" : "Off",
                        g_sound_applet.output_muted ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                        point_in_rect(&out_mute, mouse->x, mouse->y));
 
-        sys_text(popup.x + 8, popup.y + 80, theme->text, "Entradas");
+        desktop_draw_applet_card(&input_card, "Entradas");
         if (g_sound_applet.input_count > 0) {
             for (int i = 0; i < g_sound_applet.input_count; ++i) {
                 struct rect row = sound_input_row_rect(&popup, i);
@@ -6846,22 +6912,19 @@ static void draw_sound_applet(const struct mouse_state *mouse) {
                                i == g_sound_applet.selected_input ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                                point_in_rect(&row, mouse->x, mouse->y));
             }
-            sys_text(popup.x + 8,
-                     popup.y + 126,
-                     theme->text,
+            sys_text(input_card.x + 8,
+                     input_card.y + 24,
+                     ui_color_muted(),
                      sound_applet_input_label(g_sound_applet.selected_input));
-            sys_rect(in_slider.x, in_slider.y, in_slider.w, in_slider.h, ui_color_muted());
-            sys_rect(in_slider.x, in_slider.y,
-                     (in_slider.w * g_sound_applet.input_volume) / 100,
-                     in_slider.h,
-                     theme->window);
-            sys_rect(in_knob.x, in_knob.y, in_knob.w, in_knob.h, theme->text);
+            sys_text(popup.x + 16, popup.y + 154, ui_color_muted(), "GAIN");
+            desktop_draw_slider_track(&in_slider, g_sound_applet.input_volume, theme->window, theme->text);
             ui_draw_button(&in_mute,
                            g_sound_applet.input_muted ? "On" : "Off",
                            g_sound_applet.input_muted ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                            point_in_rect(&in_mute, mouse->x, mouse->y));
         } else {
-            sys_text(popup.x + 8, popup.y + 98, ui_color_muted(), "Sem captura neste backend");
+            sys_text(input_card.x + 8, input_card.y + 24, ui_color_muted(), "Sem captura neste backend");
+            sys_text(input_card.x + 8, input_card.y + 38, ui_color_muted(), "Conecte um backend com entrada.");
         }
     }
 }
@@ -6879,6 +6942,9 @@ static void draw_network_applet(const struct mouse_state *mouse) {
 
     if (g_network_applet.popup_open) {
         struct rect popup = network_applet_popup_rect();
+        struct rect wifi_card = {popup.x + 10, popup.y + 74, popup.w - 20, 86};
+        struct rect saved_card = {popup.x + 10, popup.y + 164, popup.w - 20, 58};
+        struct rect security_card = {popup.x + 10, popup.y + 224, popup.w - 20, 32};
         struct rect status = network_status_rect(&popup);
         struct rect auto_button = network_auto_rect(&popup);
         struct rect forget_button = network_forget_rect(&popup);
@@ -6891,9 +6957,14 @@ static void draw_network_applet(const struct mouse_state *mouse) {
         struct network_profile *selected_profile = network_applet_selected_profile();
         int saved_count = network_profile_count();
         char password_text[48] = "";
+        char summary[32] = "";
 
-        network_applet_sync_backend(0);
-        ui_draw_surface(&popup, ui_color_window_bg());
+        desktop_draw_applet_popup(&popup, "Rede", "widget");
+        str_copy_limited(summary,
+                         g_network_applet.state == NETWORK_APPLET_CONNECTED ? "estavel" :
+                         (g_network_applet.state == NETWORK_APPLET_CONNECTING ? "aguarde" : "offline"),
+                         (int)sizeof(summary));
+        ui_draw_status(&(struct rect){popup.x + popup.w - 76, popup.y + 10, 58, 16}, summary);
         ui_draw_status(&status, network_applet_status_text());
         if (g_network_applet_cache.status_valid) {
             char line[64] = "";
@@ -6908,7 +6979,7 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                        g_network_applet_cache.status.gateway[0] != '\0' ?
                        g_network_applet_cache.status.gateway : "-",
                        (int)sizeof(line));
-            sys_text(popup.x + 8, popup.y + 46, ui_color_muted(), line);
+            sys_text(popup.x + 16, popup.y + 56, ui_color_muted(), line);
 
             line[0] = '\0';
             str_copy_limited(line, "DNS ", (int)sizeof(line));
@@ -6916,10 +6987,10 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                        g_network_applet_cache.status.dns_server[0] != '\0' ?
                        g_network_applet_cache.status.dns_server : "-",
                        (int)sizeof(line));
-            sys_text(popup.x + 8, popup.y + 56, ui_color_muted(), line);
+            sys_text(popup.x + 16, popup.y + 66, ui_color_muted(), line);
         }
 
-        sys_text(popup.x + 8, popup.y + 60, theme->text, "Redes Wi-Fi");
+        desktop_draw_applet_card(&wifi_card, "Redes Wi-Fi");
         for (int i = 0; i < g_network_applet_cache.scan_count && i < 3; ++i) {
             struct rect row = network_row_rect(&popup, i);
             char label[48] = "";
@@ -6938,9 +7009,9 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                            point_in_rect(&row, mouse->x, mouse->y));
         }
 
-        sys_text(popup.x + 8, popup.y + 136, theme->text, "Redes salvas");
+        desktop_draw_applet_card(&saved_card, "Perfis");
         if (saved_count == 0) {
-            sys_text(popup.x + 8, popup.y + 146, ui_color_muted(), "nenhum perfil salvo");
+            sys_text(saved_card.x + 8, saved_card.y + 24, ui_color_muted(), "nenhum perfil salvo");
         } else {
             for (int i = 0; i < saved_count && i < 2; ++i) {
                 struct network_profile *profile = network_profile_at_visible_index(i);
@@ -6974,7 +7045,20 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                        selected_profile != 0 ? UI_BUTTON_DANGER : UI_BUTTON_NORMAL,
                        point_in_rect(&forget_button, mouse->x, mouse->y));
 
-        sys_text(popup.x + 8, popup.y + 186, theme->text, "Ethernet");
+        desktop_draw_applet_card(&security_card, "Senha Wi-Fi");
+        ui_draw_inset(&password, ui_color_window_bg());
+        for (int i = 0; i < g_network_applet.password_len && i < 30; ++i) {
+            password_text[i] = '*';
+        }
+        password_text[g_network_applet.password_len] = '\0';
+        sys_text(password.x + 4, password.y + 5, theme->text,
+                 g_network_applet.password_len > 0 ? password_text :
+                 (selected != 0 && selected->security != MK_NETWORK_SECURITY_OPEN ?
+                  (selected_profile != 0 ? "senha salva" : "digite a senha") : "rede aberta"));
+        sys_text(security_card.x + 8, security_card.y + 20, ui_color_muted(),
+                 selected != 0 && selected->security == MK_NETWORK_SECURITY_OPEN ? "sem autenticacao" : "PSK / WPA");
+
+        sys_text(popup.x + 16, popup.y + 258, theme->text, "Ethernet");
         ui_draw_button(&ethernet_connect_button,
                        "Subir link",
                        g_network_applet_cache.status_valid &&
@@ -6991,17 +7075,6 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                            ? UI_BUTTON_DANGER
                            : UI_BUTTON_NORMAL,
                        point_in_rect(&ethernet_disconnect_button, mouse->x, mouse->y));
-
-        sys_text(popup.x + 8, popup.y + 206, theme->text, "Senha");
-        ui_draw_inset(&password, ui_color_window_bg());
-        for (int i = 0; i < g_network_applet.password_len && i < 30; ++i) {
-            password_text[i] = '*';
-        }
-        password_text[g_network_applet.password_len] = '\0';
-        sys_text(password.x + 4, password.y + 5, theme->text,
-                 g_network_applet.password_len > 0 ? password_text :
-                 (selected != 0 && selected->security != MK_NETWORK_SECURITY_OPEN ?
-                  (selected_profile != 0 ? "senha salva" : "digite a senha") : "rede aberta"));
         if (g_network_applet.password_focus) {
             sys_rect(password.x + password.w - 8, password.y + 4, 2, 10, theme->text);
         }
@@ -8924,14 +8997,14 @@ void desktop_main(void) {
                     dirty = 1;
                     continue;
                 }
-                if (key == 'w' || key == 'W' || key == KEY_ARROW_UP) {
+                if (key == KEY_ARROW_UP) {
                     if (*scroll_ptr > 0) {
                         *scroll_ptr -= 1;
                         dirty = 1;
                     }
                     continue;
                 }
-                if (key == 's' || key == 'S' || key == KEY_ARROW_DOWN) {
+                if (key == KEY_ARROW_DOWN) {
                     if (*scroll_ptr < start_menu_scroll_limit_for_count(filtered_count)) {
                         *scroll_ptr += 1;
                         dirty = 1;

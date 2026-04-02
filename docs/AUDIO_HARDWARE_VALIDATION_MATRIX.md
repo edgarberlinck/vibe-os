@@ -1,5 +1,7 @@
 # Matriz de Validacao de Hardware Real de Audio
 
+Esta matriz e um documento ativo de validacao. Para backlog arquitetural e ownership de audio, veja [guidelines/MICROKERNEL_MIGRATION.md](guidelines/MICROKERNEL_MIGRATION.md).
+
 Data base: 2026-03-26
 
 ## Objetivo

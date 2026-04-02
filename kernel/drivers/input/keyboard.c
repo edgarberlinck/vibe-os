@@ -33,11 +33,12 @@ static const keymap_t* g_available_keymaps[] = {
 };
 static const int g_num_available_keymaps = sizeof(g_available_keymaps) / sizeof(keymap_t*);
 
-static volatile uint8_t g_kernel_kbd_shift = 0u;
-static volatile uint8_t g_kernel_kbd_ctrl = 0u;
+static volatile uint8_t g_kernel_kbd_shift_left = 0u;
+static volatile uint8_t g_kernel_kbd_shift_right = 0u;
+static volatile uint8_t g_kernel_kbd_ctrl_left = 0u;
+static volatile uint8_t g_kernel_kbd_ctrl_right = 0u;
 static volatile uint8_t g_kernel_kbd_extended = 0u;
 static volatile uint8_t g_kernel_kbd_ready = 0u;
-static volatile uint32_t g_kernel_kbd_irq_trace_budget = 24u;
 static const keymap_t* g_current_keymap = &keymap_us;
 
 static int ps2_wait_write_timeout(void) {
@@ -246,31 +247,44 @@ static void kernel_keyboard_process_scancode(uint8_t scancode) {
             else if (scancode == 0x4Bu) key = KEY_ARROW_LEFT;
             else if (scancode == 0x4Du) key = KEY_ARROW_RIGHT;
             else if (scancode == 0x53u) key = KEY_DELETE;
+            else if (scancode == 0x1Du) {
+                g_kernel_kbd_ctrl_right = 1u;
+            }
 
             if (key != 0u) {
                 kbd_push_key(key);
             }
+        } else if (scancode == 0x9Du) {
+            g_kernel_kbd_ctrl_right = 0u;
         }
         return;
     }
 
-    if (scancode == 0x2Au || scancode == 0x36u) {
-        g_kernel_kbd_shift = 1u;
+    if (scancode == 0x2Au) {
+        g_kernel_kbd_shift_left = 1u;
+        return;
+    }
+    if (scancode == 0x36u) {
+        g_kernel_kbd_shift_right = 1u;
         return;
     }
 
     if (scancode == 0x1Du) {
-        g_kernel_kbd_ctrl = 1u;
+        g_kernel_kbd_ctrl_left = 1u;
         return;
     }
 
-    if (scancode == 0xAAu || scancode == 0xB6u) {
-        g_kernel_kbd_shift = 0u;
+    if (scancode == 0xAAu) {
+        g_kernel_kbd_shift_left = 0u;
+        return;
+    }
+    if (scancode == 0xB6u) {
+        g_kernel_kbd_shift_right = 0u;
         return;
     }
 
     if (scancode == 0x9Du) {
-        g_kernel_kbd_ctrl = 0u;
+        g_kernel_kbd_ctrl_left = 0u;
         return;
     }
 
@@ -283,7 +297,9 @@ static void kernel_keyboard_process_scancode(uint8_t scancode) {
     }
 
     {
-        int key = kernel_keyboard_translate_set1_scancode(scancode, 0u, g_kernel_kbd_shift, g_kernel_kbd_ctrl);
+        int shift = g_kernel_kbd_shift_left || g_kernel_kbd_shift_right;
+        int ctrl = g_kernel_kbd_ctrl_left || g_kernel_kbd_ctrl_right;
+        int key = kernel_keyboard_translate_set1_scancode(scancode, 0u, (uint8_t)shift, (uint8_t)ctrl);
         if (key != 0) {
             kbd_push_key((uint16_t)key);
         }
@@ -309,15 +325,6 @@ void kernel_keyboard_irq_handler(void) {
     }
 
     scancode = inb(PS2_DATA_PORT);
-    if (g_kernel_kbd_irq_trace_budget > 0u) {
-        g_kernel_kbd_irq_trace_budget -= 1u;
-        kernel_debug_printf("kbd: irq scancode=%d ext=%d ctrl=%d shift=%d ready=%d\n",
-                            (int)scancode,
-                            (int)g_kernel_kbd_extended,
-                            (int)g_kernel_kbd_ctrl,
-                            (int)g_kernel_kbd_shift,
-                            (int)g_kernel_kbd_ready);
-    }
     kernel_keyboard_process_scancode(scancode);
     kernel_irq_complete(1);
 }
@@ -337,8 +344,10 @@ void kernel_keyboard_poll(void) {
 void kernel_keyboard_init(void) {
     uint8_t config;
 
-    g_kernel_kbd_shift = 0u;
-    g_kernel_kbd_ctrl = 0u;
+    g_kernel_kbd_shift_left = 0u;
+    g_kernel_kbd_shift_right = 0u;
+    g_kernel_kbd_ctrl_left = 0u;
+    g_kernel_kbd_ctrl_right = 0u;
     g_kernel_kbd_extended = 0u;
     g_kernel_kbd_ready = 0u;
     kernel_input_event_init();
