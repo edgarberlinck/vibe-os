@@ -922,7 +922,7 @@ static struct rect wifi_taskbar_button_rect(void) {
 }
 
 static struct rect wifi_panel_rect(void) {
-    int h = 90 + (g_wifi.scan_count * 22);
+    int h = (90 + (g_wifi.scan_count * 22)) * 5 / 2;  /* 2.5x larger */
     struct rect r;
 
     if (g_wifi.show_password_prompt) {
@@ -932,11 +932,11 @@ static struct rect wifi_panel_rect(void) {
         h += 88;
     }
 
-    if (h < 120) {
-        h = 120;
+    if (h < 300) {
+        h = 300;  /* 120 * 2.5 */
     }
-    if (h > 340) {
-        h = 340;
+    if (h > 850) {
+        h = 850;  /* 340 * 2.5 */
     }
 
     r.w = 246;
@@ -948,28 +948,29 @@ static struct rect wifi_panel_rect(void) {
 
 static struct rect wifi_panel_scan_button_rect(void) {
     struct rect panel = wifi_panel_rect();
-    struct rect r = {panel.x + panel.w - 60, panel.y + 8, 52, 14};
+    struct rect r = {panel.x + panel.w - 60, panel.y + panel.h - 32, 52, 14};
 
     return r;
 }
 
 static struct rect wifi_panel_manual_button_rect(void) {
     struct rect panel = wifi_panel_rect();
-    struct rect r = {panel.x + panel.w - 130, panel.y + 8, 62, 14};
+    struct rect r = {panel.x + panel.w - 130, panel.y + panel.h - 32, 62, 14};
 
     return r;
 }
 
 static struct rect wifi_panel_network_row_rect(int index) {
     struct rect panel = wifi_panel_rect();
-    struct rect r = {panel.x + 8, panel.y + 44 + (index * 22), panel.w - 16, 18};
+    /* Start rows at y+62, with 2.5x larger spacing */
+    struct rect r = {panel.x + 8, panel.y + 155 + (index * 55), panel.w - 16, 18};
 
     return r;
 }
 
 static struct rect wifi_password_input_rect(void) {
     struct rect panel = wifi_panel_rect();
-    int base_y = panel.y + 50 + (g_wifi.scan_count * 22);
+    int base_y = panel.y + 125 + (g_wifi.scan_count * 55);  /* 2.5x larger spacing */
     struct rect r = {panel.x + 8, base_y, panel.w - 16, 16};
 
     return r;
@@ -991,7 +992,7 @@ static struct rect wifi_password_cancel_rect(void) {
 
 static struct rect wifi_manual_ssid_rect(void) {
     struct rect panel = wifi_panel_rect();
-    int base_y = panel.y + 50 + (g_wifi.scan_count * 22);
+    int base_y = panel.y + 125 + (g_wifi.scan_count * 55);  /* 2.5x larger spacing */
     struct rect r = {panel.x + 8, base_y, panel.w - 16, 16};
 
     return r;
