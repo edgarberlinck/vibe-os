@@ -62,6 +62,16 @@ static struct doom_state g_doom[MAX_DOOM];
 static int g_doom_used[MAX_DOOM];
 static struct craft_state g_craft[MAX_CRAFT];
 static int g_craft_used[MAX_CRAFT];
+struct browser_state {
+    struct rect window;
+    int editing_url;
+    int url_len;
+    char url[80];
+    char status[64];
+    char page_text[2048];
+};
+static struct browser_state g_browser[MAX_BROWSERS];
+static int g_browser_used[MAX_BROWSERS];
 struct personalize_state {
     struct rect window;
     enum theme_slot selected_slot;
@@ -119,7 +129,7 @@ enum {
     FMENU_COUNT
 };
 enum {
-    START_MENU_ENTRY_COUNT = 60,
+    START_MENU_ENTRY_COUNT = 61,
     START_MENU_SEARCH_MAX = 24,
     START_MENU_SCROLLBAR_W = 10
 };
@@ -294,6 +304,7 @@ struct start_menu_entry {
 
 static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT] = {
     {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS, 0},
+    {"Browser", "Internet", APP_BROWSER, START_MENU_TAB_APPS, 0},
     {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS, 0},
     {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS, 0},
     {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS, 0},
@@ -355,6 +366,246 @@ static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT
     {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES, 0}
 };
 
+static struct rect browser_body_rect(const struct browser_state *state) {
+    struct rect body = {state->window.x + 6, state->window.y + 20, state->window.w - 12, state->window.h - 26};
+
+    return body;
+}
+
+static struct rect browser_toolbar_rect(const struct browser_state *state) {
+    struct rect body = browser_body_rect(state);
+    struct rect toolbar = {body.x + 8, body.y + 8, body.w - 16, 18};
+
+    return toolbar;
+}
+
+static struct rect browser_url_rect(const struct browser_state *state) {
+    struct rect toolbar = browser_toolbar_rect(state);
+    struct rect url = {toolbar.x + 2, toolbar.y + 1, toolbar.w - 66, toolbar.h - 2};
+
+    return url;
+}
+
+static struct rect browser_go_rect(const struct browser_state *state) {
+    struct rect toolbar = browser_toolbar_rect(state);
+    struct rect go = {toolbar.x + toolbar.w - 60, toolbar.y + 1, 58, toolbar.h - 2};
+
+    return go;
+}
+
+static struct rect browser_content_rect(const struct browser_state *state) {
+    struct rect body = browser_body_rect(state);
+    struct rect content = {body.x + 8, body.y + 34, body.w - 16, body.h - 56};
+
+    return content;
+}
+
+static int browser_text_ends_with(const char *text, const char *suffix) {
+    int text_len;
+    int suffix_len;
+
+    if (text == 0 || suffix == 0) {
+        return 0;
+    }
+
+    text_len = str_len(text);
+    suffix_len = str_len(suffix);
+    if (suffix_len <= 0 || suffix_len > text_len) {
+        return 0;
+    }
+
+    return str_eq(text + text_len - suffix_len, suffix);
+}
+
+static void browser_strip_basic_html(const char *src, char *dst, int max_len) {
+    int in_tag = 0;
+    int out = 0;
+
+    if (src == 0 || dst == 0 || max_len <= 0) {
+        return;
+    }
+
+    for (int i = 0; src[i] != '\0' && out < max_len - 1; ++i) {
+        char ch = src[i];
+
+        if (ch == '<') {
+            in_tag = 1;
+            continue;
+        }
+        if (ch == '>') {
+            in_tag = 0;
+            continue;
+        }
+        if (in_tag) {
+            continue;
+        }
+        if (ch == '\r') {
+            continue;
+        }
+        dst[out++] = ch;
+    }
+
+    dst[out] = '\0';
+}
+
+static void browser_set_about_page(struct browser_state *state) {
+    str_copy_limited(state->status, "Pagina local", (int)sizeof(state->status));
+    str_copy_limited(state->page_text,
+                     "Vibe Browser MVP\n\n"
+                     "Suporta por enquanto:\n"
+                     "- about:vibe\n"
+                     "- file:///caminho\n"
+                     "- /caminho direto no FS\n\n"
+                     "Dica: tente /README.md",
+                     (int)sizeof(state->page_text));
+}
+
+static void browser_load_page(struct browser_state *state) {
+    char path[80];
+    int node;
+
+    if (state == 0) {
+        return;
+    }
+
+    if (str_eq(state->url, "about:vibe") || str_eq(state->url, "about:blank")) {
+        browser_set_about_page(state);
+        return;
+    }
+
+    path[0] = '\0';
+    if (str_eq(state->url, "") || str_eq(state->url, "about:")) {
+        browser_set_about_page(state);
+        return;
+    }
+
+    if (state->url[0] == '/' ) {
+        str_copy_limited(path, state->url, (int)sizeof(path));
+    } else if (state->url[0] == 'f' && state->url[1] == 'i' && state->url[2] == 'l' &&
+               state->url[3] == 'e' && state->url[4] == ':' && state->url[5] == '/' &&
+               state->url[6] == '/') {
+        str_copy_limited(path, state->url + 7, (int)sizeof(path));
+        if (path[0] != '/') {
+            char tmp[80];
+
+            tmp[0] = '\0';
+            str_append(tmp, "/", (int)sizeof(tmp));
+            str_append(tmp, path, (int)sizeof(tmp));
+            str_copy_limited(path, tmp, (int)sizeof(path));
+        }
+    } else {
+        str_copy_limited(state->status,
+                         "Sem HTTP ainda: use file:/// ou /caminho",
+                         (int)sizeof(state->status));
+        str_copy_limited(state->page_text,
+                         "Este MVP ainda nao implementa rede HTTP.\n"
+                         "Abra arquivos locais do sistema.",
+                         (int)sizeof(state->page_text));
+        return;
+    }
+
+    node = fs_resolve(path);
+    if (node < 0 || !g_fs_nodes[node].used) {
+        str_copy_limited(state->status, "Arquivo nao encontrado", (int)sizeof(state->status));
+        str_copy_limited(state->page_text, "404 local: caminho invalido", (int)sizeof(state->page_text));
+        return;
+    }
+    if (g_fs_nodes[node].is_dir) {
+        str_copy_limited(state->status, "Diretorio nao suportado", (int)sizeof(state->status));
+        str_copy_limited(state->page_text, "Selecione um arquivo, nao uma pasta.", (int)sizeof(state->page_text));
+        return;
+    }
+    if (g_fs_nodes[node].size <= 0) {
+        str_copy_limited(state->status, "Arquivo vazio", (int)sizeof(state->status));
+        str_copy_limited(state->page_text, "(arquivo vazio)", (int)sizeof(state->page_text));
+        return;
+    }
+
+    if (browser_text_ends_with(path, ".html") || browser_text_ends_with(path, ".htm")) {
+        browser_strip_basic_html(g_fs_nodes[node].data,
+                                 state->page_text,
+                                 (int)sizeof(state->page_text));
+        str_copy_limited(state->status, "HTML local (texto simples)", (int)sizeof(state->status));
+    } else {
+        str_copy_limited(state->page_text, g_fs_nodes[node].data, (int)sizeof(state->page_text));
+        str_copy_limited(state->status, "Arquivo local carregado", (int)sizeof(state->status));
+    }
+}
+
+static void draw_browser_text_block(const struct rect *content, const char *text, uint8_t color) {
+    int x = content->x + 6;
+    int y = content->y + 8;
+    int max_x = content->x + content->w - 10;
+    int max_y = content->y + content->h - 10;
+    int chars_per_line = (max_x - x) / 6;
+    char line[100];
+    int line_len = 0;
+
+    if (chars_per_line < 8) {
+        chars_per_line = 8;
+    }
+
+    for (int i = 0; text[i] != '\0'; ++i) {
+        char ch = text[i];
+
+        if (ch == '\r') {
+            continue;
+        }
+        if (ch == '\n' || line_len >= chars_per_line) {
+            line[line_len] = '\0';
+            sys_text(x, y, color, line);
+            y += 10;
+            line_len = 0;
+            if (y > max_y) {
+                break;
+            }
+            if (ch == '\n') {
+                continue;
+            }
+        }
+        if (line_len < (int)sizeof(line) - 1) {
+            line[line_len++] = ch;
+        }
+    }
+
+    if (line_len > 0 && y <= max_y) {
+        line[line_len] = '\0';
+        sys_text(x, y, color, line);
+    }
+}
+
+static void draw_browser_window(struct browser_state *state,
+                                int active,
+                                int min_hover,
+                                int max_hover,
+                                int close_hover,
+                                const struct mouse_state *mouse) {
+    struct rect body = browser_body_rect(state);
+    struct rect toolbar = browser_toolbar_rect(state);
+    struct rect url = browser_url_rect(state);
+    struct rect go = browser_go_rect(state);
+    struct rect content = browser_content_rect(state);
+
+    draw_window_frame(&state->window, "Browser", active, min_hover, max_hover, close_hover);
+    ui_draw_surface(&body, ui_color_window_bg());
+    ui_draw_surface(&toolbar, ui_color_panel());
+    ui_draw_inset(&url, ui_color_window_bg());
+    ui_draw_button(&go, "Ir", UI_BUTTON_PRIMARY, point_in_rect(&go, mouse->x, mouse->y));
+    sys_text(url.x + 4, url.y + 4, ui_theme_get()->text, state->url);
+    if (state->editing_url) {
+        int cx = url.x + 4 + (state->url_len * 6);
+
+        if (cx > url.x + url.w - 4) {
+            cx = url.x + url.w - 4;
+        }
+        sys_rect(cx, url.y + 3, 1, url.h - 6, ui_theme_get()->text);
+    }
+
+    ui_draw_inset(&content, ui_color_window_bg());
+    draw_browser_text_block(&content, state->page_text, ui_theme_get()->text);
+    sys_text(content.x + 4, content.y + content.h - 12, ui_theme_get()->text, state->status);
+}
+
 static void sync_window_instance_rect(int widx);
 static int alloc_window(enum app_type type);
 static int find_window_by_type(enum app_type type);
@@ -404,6 +655,7 @@ static int window_instance_valid(enum app_type type, int instance) {
     case APP_TASKMANAGER: return instance >= 0 && instance < MAX_TASKMGRS;
     case APP_CALCULATOR: return instance >= 0 && instance < MAX_CALCULATORS;
     case APP_IMAGEVIEWER: return instance >= 0 && instance < MAX_IMAGEVIEWERS;
+    case APP_BROWSER: return instance >= 0 && instance < MAX_BROWSERS;
     case APP_SKETCHPAD: return instance >= 0 && instance < MAX_SKETCHPADS;
     case APP_SNAKE: return instance >= 0 && instance < MAX_SNAKES;
     case APP_TETRIS: return instance >= 0 && instance < MAX_TETRIS;
@@ -440,6 +692,7 @@ static int sanitize_windows(int *focused) {
     int flap_birb_used[MAX_FLAP_BIRB] = {0};
     int doom_used[MAX_DOOM] = {0};
     int craft_used[MAX_CRAFT] = {0};
+    int browser_used[MAX_BROWSERS] = {0};
     int pers_used = 0;
     int trash_used = 0;
     int changed = 0;
@@ -534,6 +787,10 @@ static int sanitize_windows(int *focused) {
             duplicate = craft_used[g_windows[i].instance];
             craft_used[g_windows[i].instance] = 1;
             break;
+        case APP_BROWSER:
+            duplicate = browser_used[g_windows[i].instance];
+            browser_used[g_windows[i].instance] = 1;
+            break;
         case APP_PERSONALIZE:
             duplicate = pers_used;
             pers_used = 1;
@@ -575,6 +832,7 @@ static int sanitize_windows(int *focused) {
     for (int i = 0; i < MAX_FLAP_BIRB; ++i) g_flap_birb_used[i] = flap_birb_used[i];
     for (int i = 0; i < MAX_DOOM; ++i) g_doom_used[i] = doom_used[i];
     for (int i = 0; i < MAX_CRAFT; ++i) g_craft_used[i] = craft_used[i];
+    for (int i = 0; i < MAX_BROWSERS; ++i) g_browser_used[i] = browser_used[i];
     g_pers_used = pers_used;
     g_trash_used = trash_used;
 
@@ -2309,6 +2567,9 @@ static void sync_window_instance_rect(int widx) {
     case APP_CRAFT:
         g_craft[g_windows[widx].instance].window = g_windows[widx].rect;
         break;
+    case APP_BROWSER:
+        g_browser[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
     case APP_PERSONALIZE:
         g_pers.window = g_windows[widx].rect;
         break;
@@ -2402,6 +2663,29 @@ static int alloc_window(enum app_type type) {
                 if (idx < 0) return -1;
                 instance = idx;
                 rect = g_imageviewers[idx].window;
+            } break;
+            case APP_BROWSER: {
+                int idx = -1;
+
+                for (int j = 0; j < MAX_BROWSERS; ++j) {
+                    if (!g_browser_used[j]) {
+                        idx = j;
+                        g_browser_used[j] = 1;
+                        break;
+                    }
+                }
+                if (idx < 0) return -1;
+                instance = idx;
+                g_browser[idx].window = (struct rect){40, 34, 640, 420};
+                g_browser[idx].editing_url = 0;
+                str_copy_limited(g_browser[idx].url,
+                                 "about:vibe",
+                                 (int)sizeof(g_browser[idx].url));
+                g_browser[idx].url_len = str_len(g_browser[idx].url);
+                g_browser[idx].status[0] = '\0';
+                g_browser[idx].page_text[0] = '\0';
+                browser_load_page(&g_browser[idx]);
+                rect = g_browser[idx].window;
             } break;
             case APP_SKETCHPAD: {
                 int idx = alloc_sketch();
@@ -2579,6 +2863,7 @@ static void free_window(int widx) {
         imageviewer_shutdown_state(&g_imageviewers[w->instance]);
         g_imageviewer_used[w->instance] = 0;
         break;
+    case APP_BROWSER: g_browser_used[w->instance] = 0; break;
     case APP_SKETCHPAD: g_sketch_used[w->instance] = 0; break;
     case APP_SNAKE: g_snake_used[w->instance] = 0; break;
     case APP_TETRIS: g_tetris_used[w->instance] = 0; break;
@@ -3465,6 +3750,7 @@ void desktop_main(void) {
     for (int i = 0; i < MAX_FLAP_BIRB; ++i) g_flap_birb_used[i] = 0;
     for (int i = 0; i < MAX_DOOM; ++i) g_doom_used[i] = 0;
     for (int i = 0; i < MAX_CRAFT; ++i) g_craft_used[i] = 0;
+    for (int i = 0; i < MAX_BROWSERS; ++i) g_browser_used[i] = 0;
     g_clipboard_node = -1;
 
     dirty |= desktop_process_pending_launches(&focused);
@@ -4141,11 +4427,21 @@ void desktop_main(void) {
                 dirty = 1;
             } else {
                 struct rect files_icon = ui_desktop_files_icon_rect();
+                struct rect browser_icon = ui_desktop_browser_icon_rect();
                 struct rect craft_icon = ui_desktop_craft_icon_rect();
                 struct rect trash_icon = ui_desktop_trash_icon_rect();
 
                 if (point_in_rect(&files_icon, click_x, click_y)) {
                     if (open_window_or_focus_existing(APP_FILEMANAGER, &focused) >= 0) {
+                        dirty = 1;
+                    }
+                    menu_open = 0;
+                    context_open = 0;
+                    fm_context_open = 0;
+                    app_context.open = 0;
+                    handled = 1;
+                } else if (point_in_rect(&browser_icon, click_x, click_y)) {
+                    if (open_window_or_focus_existing(APP_BROWSER, &focused) >= 0) {
                         dirty = 1;
                     }
                     menu_open = 0;
@@ -4438,6 +4734,21 @@ void desktop_main(void) {
                             if (imageviewer_handle_click(&g_imageviewers[g_windows[hit_window].instance],
                                                          click_x, click_y)) {
                                 dirty = 1;
+                            }
+                        } else if (type == APP_BROWSER) {
+                            struct browser_state *browser = &g_browser[g_windows[hit_window].instance];
+                            struct rect url = browser_url_rect(browser);
+                            struct rect go = browser_go_rect(browser);
+
+                            if (point_in_rect(&url, click_x, click_y)) {
+                                browser->editing_url = 1;
+                                dirty = 1;
+                            } else if (point_in_rect(&go, click_x, click_y)) {
+                                browser->editing_url = 0;
+                                browser_load_page(browser);
+                                dirty = 1;
+                            } else {
+                                browser->editing_url = 0;
                             }
                         } else if (type == APP_TASKMANAGER) {
                             struct taskmgr_action action =
@@ -4844,6 +5155,36 @@ void desktop_main(void) {
                     editor_insert_char(ed, (char)key);
                     dirty = 1;
                 }
+            } else if (g_windows[focused].type == APP_BROWSER) {
+                struct browser_state *browser = &g_browser[g_windows[focused].instance];
+
+                if (key == 27) {
+                    browser->editing_url = 0;
+                    dirty = 1;
+                    continue;
+                }
+                if (key == '\n' || key == '\r') {
+                    browser->editing_url = 0;
+                    browser_load_page(browser);
+                    dirty = 1;
+                    continue;
+                }
+                if ((key == '\b' || key == 127) && browser->editing_url) {
+                    if (browser->url_len > 0) {
+                        browser->url_len -= 1;
+                        browser->url[browser->url_len] = '\0';
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key >= 32 && key <= 126 && browser->editing_url) {
+                    if (browser->url_len < (int)sizeof(browser->url) - 1) {
+                        browser->url[browser->url_len++] = (char)key;
+                        browser->url[browser->url_len] = '\0';
+                        dirty = 1;
+                    }
+                    continue;
+                }
             } else if (g_windows[focused].type == APP_CALCULATOR) {
                 struct calculator_state *calc = &g_calcs[g_windows[focused].instance];
 
@@ -4972,6 +5313,10 @@ void desktop_main(void) {
                 case APP_IMAGEVIEWER:
                     imageviewer_draw_window(&g_imageviewers[g_windows[i].instance], active,
                                             min_hover, max_hover, close_hover);
+                    break;
+                case APP_BROWSER:
+                    draw_browser_window(&g_browser[g_windows[i].instance], active,
+                                        min_hover, max_hover, close_hover, &mouse);
                     break;
                 case APP_SKETCHPAD:
                     sketchpad_draw_window(&g_sketches[g_windows[i].instance], active,

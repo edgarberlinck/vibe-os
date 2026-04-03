@@ -624,13 +624,18 @@ struct rect ui_desktop_files_icon_rect(void) {
     return r;
 }
 
-struct rect ui_desktop_craft_icon_rect(void) {
+struct rect ui_desktop_browser_icon_rect(void) {
     struct rect r = {(int)SCREEN_WIDTH - 110, 116, 84, 86};
     return r;
 }
 
-struct rect ui_desktop_trash_icon_rect(void) {
+struct rect ui_desktop_craft_icon_rect(void) {
     struct rect r = {(int)SCREEN_WIDTH - 110, 212, 84, 86};
+    return r;
+}
+
+struct rect ui_desktop_trash_icon_rect(void) {
+    struct rect r = {(int)SCREEN_WIDTH - 110, 308, 84, 86};
     return r;
 }
 
@@ -760,6 +765,7 @@ static const char *app_caption(enum app_type type) {
     case APP_DOOM: return "DOOM";
     case APP_CRAFT: return "Craft";
     case APP_IMAGEVIEWER: return "Imagens";
+    case APP_BROWSER: return "Browser";
     case APP_PERSONALIZE: return "Tema";
     case APP_TRASH: return "Lixeira";
     default: return "App";
@@ -836,22 +842,31 @@ void draw_desktop(const struct mouse_state *mouse,
     {
         struct rect banner = {18, 18, 154, 20};
         struct rect files_icon = ui_desktop_files_icon_rect();
+        struct rect browser_icon = ui_desktop_browser_icon_rect();
         struct rect craft_icon = ui_desktop_craft_icon_rect();
         struct rect trash_icon = ui_desktop_trash_icon_rect();
         struct rect files_plate = {files_icon.x + 16, files_icon.y + 10, 52, 40};
+        struct rect browser_plate = {browser_icon.x + 16, browser_icon.y + 10, 52, 40};
+        struct rect browser_top = {browser_plate.x + 4, browser_plate.y + 4, browser_plate.w - 8, 6};
+        struct rect browser_view = {browser_plate.x + 4, browser_plate.y + 12, browser_plate.w - 8, browser_plate.h - 16};
         struct rect craft_plate = {craft_icon.x + 16, craft_icon.y + 10, 52, 40};
         struct rect trash_plate = {trash_icon.x + 16, trash_icon.y + 10, 52, 40};
         struct rect trash_lid = {trash_plate.x + 12, trash_plate.y + 6, trash_plate.w - 24, 4};
         struct rect trash_body = {trash_plate.x + 10, trash_plate.y + 12, trash_plate.w - 20, trash_plate.h - 18};
         int files_hover = point_in_rect(&files_icon, mouse->x, mouse->y);
+        int browser_hover = point_in_rect(&browser_icon, mouse->x, mouse->y);
         int craft_hover = point_in_rect(&craft_icon, mouse->x, mouse->y);
         int trash_hover = point_in_rect(&trash_icon, mouse->x, mouse->y);
 
         ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
         ui_draw_button(&files_icon, "", files_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, files_hover);
+        ui_draw_button(&browser_icon, "", browser_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, browser_hover);
         ui_draw_button(&craft_icon, "", craft_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, craft_hover);
         ui_draw_button(&trash_icon, "", trash_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, trash_hover);
         ui_draw_surface(&files_plate, g_theme.window);
+        ui_draw_surface(&browser_plate, g_theme.window_bg);
+        sys_rect(browser_top.x, browser_top.y, browser_top.w, browser_top.h, g_theme.menu_button);
+        sys_rect(browser_view.x, browser_view.y, browser_view.w, browser_view.h, g_theme.window);
         ui_draw_surface(&craft_plate, g_theme.menu_button_inactive);
         ui_draw_surface(&trash_plate, g_theme.window_bg);
         sys_rect(trash_lid.x, trash_lid.y, trash_lid.w, trash_lid.h, g_theme.window);
@@ -860,6 +875,7 @@ void draw_desktop(const struct mouse_state *mouse,
         sys_rect(trash_body.x + 11, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
         sys_rect(trash_body.x + 17, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
         sys_text(files_icon.x + 24, files_icon.y + 60, g_theme.text, "Arquivos");
+        sys_text(browser_icon.x + 25, browser_icon.y + 60, g_theme.text, "Browser");
         sys_text(craft_icon.x + 30, craft_icon.y + 60, g_theme.text, "Craft");
         sys_text(trash_icon.x + 26, trash_icon.y + 60, g_theme.text, "Lixeira");
     }
