@@ -32,6 +32,11 @@ const char *getprogname(void) {
     return g_progname;
 }
 
+#ifdef __APPLE__
+#undef strlcpy
+#undef strlcat
+#endif
+
 size_t strlcpy(char *dst, const char *src, size_t size) {
     size_t src_len = src ? strlen(src) : 0u;
 

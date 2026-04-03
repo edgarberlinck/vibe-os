@@ -528,11 +528,7 @@ LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-mu
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
 
-ifeq ($(UNAME_S),Linux)
 LIBGCC_A := $(shell $(CC) -m32 $(CPU_ARCH_CFLAGS) -print-libgcc-file-name 2>/dev/null)
-else
-LIBGCC_A :=
-endif
 
 HELLO_APP_BUILD_DIR := $(BUILD_DIR)/lang/hello
 HELLO_APP_OBJS := \
@@ -1377,6 +1373,26 @@ run-headless-usb-debug: $(IMAGE)
 				-usb \
 				-device usb-storage,drive=usbdisk,bootindex=0 \
 				-boot menu=off -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-headless-virtio-net-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -m $(QEMU_MEMORY_MB) \
+			-drive $(QEMU_IMAGE_OPTS) \
+			-netdev user,id=net0 \
+			-device virtio-net-pci,netdev=net0 \
+			-boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) \
+				-drive $(QEMU_IMAGE_OPTS) \
+				-netdev user,id=net0 \
+				-device virtio-net-pci,netdev=net0 \
+				-boot c -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \

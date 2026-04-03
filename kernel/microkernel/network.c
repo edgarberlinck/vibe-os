@@ -4,6 +4,8 @@
 #include <kernel/microkernel/service.h>
 #include <kernel/scheduler.h>
 #include <kernel/userland_service.h>
+#include <kernel/drivers/network/virtio_net.h>
+#include <kernel/drivers/network/wifi_pci.h>
 
 static struct mk_message g_last_network_request;
 static struct mk_message g_last_network_reply;
@@ -44,19 +46,44 @@ static int mk_network_reply_result(struct mk_message *reply, int value) {
 
 static int mk_network_reply_info(struct mk_message *reply) {
     struct mk_network_info info;
+    int has_l2   = kernel_virtio_net_present();
+    int has_wifi = kernel_wifi_pci_present();
+    const char *wifi_chip = kernel_wifi_pci_chip_name();
 
     memset(&info, 0, sizeof(info));
     info.flags = MK_NETWORK_CAPS_QUERY_ONLY |
                  MK_NETWORK_CAPS_BSD_SOCKET_ABI |
                  MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING;
+    if (has_l2) {
+        info.flags |= MK_NETWORK_CAPS_L2_DEVICE_PRESENT;
+    }
+    if (has_wifi) {
+        info.flags |= MK_NETWORK_CAPS_WIFI_PRESENT;
+    }
     info.supported_families = MK_NETWORK_FAMILY_UNIX |
                               MK_NETWORK_FAMILY_INET |
                               MK_NETWORK_FAMILY_INET6;
     info.supported_socket_types = MK_NETWORK_SOCKET_STREAM |
                                   MK_NETWORK_SOCKET_DGRAM;
     info.max_sockets = 0u;
-    info.max_packet_size = 0u;
+    info.max_packet_size = has_l2 ? kernel_virtio_net_mtu() : 0u;
+    if (has_wifi) {
+        info.wifi_vendor_id = kernel_wifi_pci_vendor_id();
+        info.wifi_device_id = kernel_wifi_pci_device_id();
+        if (wifi_chip != 0) {
+            memcpy(info.wifi_chip_name, wifi_chip, sizeof(info.wifi_chip_name));
+            info.wifi_chip_name[sizeof(info.wifi_chip_name) - 1u] = '\0';
+        }
+    }
     return mk_message_set_payload(reply, &info, sizeof(info));
+}
+
+static int mk_network_reply_wifi_scan(struct mk_message *reply) {
+    struct mk_network_wifi_scan_result result;
+
+    memset(&result, 0, sizeof(result));
+    result.count = 0u;
+    return mk_message_set_payload(reply, &result, sizeof(result));
 }
 
 static int mk_network_local_handler(const struct mk_message *request,
@@ -79,6 +106,15 @@ static int mk_network_local_handler(const struct mk_message *request,
             return -1;
         }
         if (mk_network_reply_info(reply) != 0) {
+            return -1;
+        }
+        g_last_network_reply = *reply;
+        return 0;
+    case MK_MSG_NET_WIFI_SCAN:
+        if (request->payload_size != 0u) {
+            return -1;
+        }
+        if (mk_network_reply_wifi_scan(reply) != 0) {
             return -1;
         }
         g_last_network_reply = *reply;
@@ -152,6 +188,27 @@ int mk_network_service_get_info(struct mk_network_info *info) {
         return -1;
     }
     memcpy(info, reply.payload, sizeof(*info));
+    return 0;
+}
+
+int mk_network_service_wifi_scan(struct mk_network_wifi_scan_result *result) {
+    struct mk_message request;
+    struct mk_message reply;
+
+    if (result == 0) {
+        return -1;
+    }
+
+    if (mk_network_prepare_request(&request, MK_MSG_NET_WIFI_SCAN, 0, 0u) != 0) {
+        return -1;
+    }
+    if (mk_service_request(MK_SERVICE_NETWORK, &request, &reply) != 0) {
+        return -1;
+    }
+    if (reply.payload_size != sizeof(*result)) {
+        return -1;
+    }
+    memcpy(result, reply.payload, sizeof(*result));
     return 0;
 }
 

@@ -68,11 +68,7 @@ INCLUDES := -I. -Icompat/include -Ilang/include -Iapplications/ported/include -I
 LDFLAGS := -m elf_i386 -T linker/app.ld -nostdlib -N --allow-multiple-definition
 
 UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
-ifeq ($(UNAME_S),Linux)
 LIBGCC_A := $(shell $(CC) -m32 $(CPU_ARCH_CFLAGS) -print-libgcc-file-name 2>/dev/null)
-else
-LIBGCC_A :=
-endif
 
 # Ported app SDK
 APP_ENTRY := lang/sdk/app_entry.c

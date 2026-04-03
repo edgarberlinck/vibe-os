@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <stdint.h>
 #include <include/userland_api.h>
+#include <kernel/microkernel/network.h>
 
 struct mk_message;
 
@@ -52,6 +53,8 @@ int sys_keyboard_get_available_layouts(char *buffer, int size);
 int sys_service_receive(struct mk_message *message);
 int sys_service_send(const struct mk_message *message);
 int sys_service_backend(const struct mk_message *request, struct mk_message *reply);
+int sys_net_get_info(struct mk_network_info *info);
+int sys_net_wifi_scan(struct mk_network_wifi_scan_result *result);
 void sys_shutdown(void);
 
 #endif // SYSCALLS_H

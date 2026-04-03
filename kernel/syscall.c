@@ -414,6 +414,25 @@ static uint32_t sys_service_backend(uint32_t request_ptr, uint32_t reply_ptr, ui
         (struct mk_message *)(uintptr_t)reply_ptr);
 }
 
+static uint32_t sys_net_get_info(uint32_t info_ptr, uint32_t b, uint32_t c,
+                                 uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (info_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_get_info((struct mk_network_info *)(uintptr_t)info_ptr);
+}
+
+static uint32_t sys_net_wifi_scan(uint32_t result_ptr, uint32_t b, uint32_t c,
+                                  uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (result_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_wifi_scan(
+        (struct mk_network_wifi_scan_result *)(uintptr_t)result_ptr);
+}
+
 static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, uint32_t max_entries,
                                   uint32_t d, uint32_t e) {
     struct task_snapshot_summary *summary;
@@ -528,6 +547,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SERVICE_RECV] = sys_service_receive;
     syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
     syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
+    syscall_table[SYSCALL_NET_GETINFO] = sys_net_get_info;
+    syscall_table[SYSCALL_NET_WIFI_SCAN] = sys_net_wifi_scan;
     syscall_table[SYSCALL_TASK_SNAPSHOT] = sys_task_snapshot;
     syscall_table[SYSCALL_TASK_TERMINATE] = sys_task_terminate;
 }
