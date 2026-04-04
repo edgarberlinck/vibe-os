@@ -1,7 +1,7 @@
 BITS 16
 ORG 0
 
-%define AP_DEBUG_STAGE_ADDR 0x6FF0
+%define AP_DEBUG_STAGE_ADDR 0x7FF0
 
 start:
     cli

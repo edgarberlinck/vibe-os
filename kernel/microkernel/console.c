@@ -9,9 +9,7 @@
 #include <kernel/userland_service.h>
 
 static uint32_t mk_console_current_pid(void) {
-    process_t *current = scheduler_current();
-
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return scheduler_current_pid();
 }
 
 static int mk_console_share_transfer(uint32_t transfer_id, uint32_t permissions) {
@@ -162,7 +160,7 @@ void mk_console_service_init(void) {
                                  "console",
                                  mk_console_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_console_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |

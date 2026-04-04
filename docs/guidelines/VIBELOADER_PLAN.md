@@ -2,6 +2,12 @@
 
 Data da auditoria: 2026-03-24
 
+## Status real atual
+
+- `VibeLoader` deve ser tratado como funcionalmente fechado para o plano principal do projeto.
+- Pendencias historicas deste arquivo passam a ser backlog opcional/documental, nao bloqueio de entrega do sistema.
+- O foco de finalizacao do VibeOS agora fica em compatibilidade de drivers/apps, rede/audio, video nativo, validacao e UX.
+
 ## Objetivo
 
 Evoluir o boot atual do vibeOS para um bootloader com identidade propria, chamado `VibeLoader`, inspirado na combinacao de simplicidade previsivel do LILO com a experiencia de menu e configuracao do GRUB. No mesmo ciclo, consolidar a pipeline de imagens do desktop para que o `mdesktop` aceite `png` como wallpaper, use `assets/wallpaper.png` como fundo padrao e permita escolher uma imagem real do filesystem pelo menu `Personalizar`.

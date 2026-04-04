@@ -9,9 +9,13 @@
 #include <sys/stat.h>
 
 static uint32_t mk_fs_current_pid(void) {
+    return scheduler_current_pid();
+}
+
+static int mk_fs_current_process_is_service_worker(void) {
     process_t *current = scheduler_current();
 
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return current != 0 && current->service_type == MK_SERVICE_FILESYSTEM;
 }
 
 static int mk_fs_share_transfer(uint32_t transfer_id, uint32_t permissions) {
@@ -212,7 +216,7 @@ void mk_filesystem_service_init(void) {
                                  "filesystem",
                                  mk_fs_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_filesystem_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |
@@ -228,6 +232,9 @@ int mk_filesystem_service_open(const char *path, int flags) {
 
     if (path == 0) {
         return -1;
+    }
+    if (mk_fs_current_process_is_service_worker()) {
+        return open(path, flags);
     }
     path_length = (uint32_t)strlen(path);
     if (mk_transfer_create(mk_fs_current_pid(), path_length + 1u, &transfer_id) != 0) {
@@ -268,6 +275,15 @@ static int mk_fs_stat_request_common(uint32_t type,
 
     if (buf == 0) {
         return -1;
+    }
+    if (mk_fs_current_process_is_service_worker()) {
+        if (type == MK_MSG_FS_STAT) {
+            if (path == 0) {
+                return -1;
+            }
+            return stat(path, buf);
+        }
+        return fstat(fd, buf);
     }
     if (mk_transfer_create(mk_fs_current_pid(), sizeof(*buf), &stat_transfer_id) != 0) {
         return -1;
@@ -344,7 +360,13 @@ int mk_filesystem_service_read(int fd, void *buf, uint32_t count) {
     uint32_t transfer_id;
     int rc;
 
-    if (buf == 0 || count == 0u) {
+    if (buf == 0) {
+        return -1;
+    }
+    if (mk_fs_current_process_is_service_worker()) {
+        return read(fd, buf, count);
+    }
+    if (count == 0u) {
         return -1;
     }
     if (mk_transfer_create(mk_fs_current_pid(), count, &transfer_id) != 0) {
@@ -381,7 +403,13 @@ int mk_filesystem_service_write(int fd, const void *buf, uint32_t count) {
     struct mk_fs_io_request payload;
     uint32_t transfer_id;
 
-    if (buf == 0 || count == 0u) {
+    if (buf == 0) {
+        return -1;
+    }
+    if (mk_fs_current_process_is_service_worker()) {
+        return write(fd, buf, count);
+    }
+    if (count == 0u) {
         return -1;
     }
     if (mk_transfer_create(mk_fs_current_pid(), count, &transfer_id) != 0) {
@@ -416,6 +444,10 @@ int mk_filesystem_service_close(int fd) {
     struct mk_message reply;
     struct mk_fs_close_request payload;
 
+    if (mk_fs_current_process_is_service_worker()) {
+        return close(fd);
+    }
+
     payload.fd = fd;
     if (mk_fs_prepare_request(&request, MK_MSG_FS_CLOSE, &payload, sizeof(payload)) != 0) {
         return -1;
@@ -430,6 +462,10 @@ off_t mk_filesystem_service_lseek(int fd, off_t offset, int whence) {
     struct mk_message request;
     struct mk_message reply;
     struct mk_fs_seek_request payload;
+
+    if (mk_fs_current_process_is_service_worker()) {
+        return lseek(fd, offset, whence);
+    }
 
     payload.fd = fd;
     payload.offset = (int32_t)offset;

@@ -13,6 +13,14 @@ enum image_scale_mode {
     IMAGE_SCALE_STRETCH = 2
 };
 
+struct image_palette_cache_entry {
+    uint32_t key;
+    uint8_t value;
+    uint8_t used;
+};
+
+#define IMAGE_PALETTE_CACHE_SIZE 1024u
+
 static int image_name_has_extension(const char *name, const char *ext) {
     int name_len;
     int ext_len;
@@ -56,14 +64,64 @@ static uint8_t image_nearest_palette(uint8_t r, uint8_t g, uint8_t b) {
     return best;
 }
 
-static int image_decode_png_to_palette_internal(const uint8_t *data, int size,
-                                                uint8_t *out_pixels, int out_stride,
-                                                int target_w_limit, int target_h_limit,
-                                                int *out_w, int *out_h,
-                                                enum image_scale_mode mode) {
-    unsigned char *rgba = 0;
+static uint8_t image_cached_nearest_palette(struct image_palette_cache_entry *cache,
+                                            uint8_t r, uint8_t g, uint8_t b) {
+    uint32_t key = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    unsigned slot = ((key * 2654435761u) >> 22) & (IMAGE_PALETTE_CACHE_SIZE - 1u);
+
+    if (cache[slot].used && cache[slot].key == key) {
+        return cache[slot].value;
+    }
+
+    cache[slot].key = key;
+    cache[slot].value = image_nearest_palette(r, g, b);
+    cache[slot].used = 1u;
+    return cache[slot].value;
+}
+
+static uint16_t image_png_read_sample(const unsigned char *row, unsigned x, unsigned bitdepth) {
+    if (bitdepth == 16u) {
+        unsigned offset = x * 2u;
+        return (uint16_t)(((uint16_t)row[offset] << 8) | (uint16_t)row[offset + 1u]);
+    }
+    if (bitdepth == 8u) {
+        return row[x];
+    }
+
+    {
+        unsigned mask = (1u << bitdepth) - 1u;
+        unsigned bit_index = x * bitdepth;
+        unsigned byte_index = bit_index >> 3;
+        unsigned shift = 8u - bitdepth - (bit_index & 7u);
+        return (uint16_t)((row[byte_index] >> shift) & mask);
+    }
+}
+
+static uint8_t image_png_expand_sample(uint16_t sample, unsigned bitdepth) {
+    if (bitdepth == 16u) {
+        return (uint8_t)(sample >> 8);
+    }
+    if (bitdepth == 8u) {
+        return (uint8_t)sample;
+    }
+    return (uint8_t)((sample * 255u) / ((1u << bitdepth) - 1u));
+}
+
+static int image_png_decode_direct_to_palette(const uint8_t *data, int size,
+                                              uint8_t *out_pixels, int out_stride,
+                                              int target_w_limit, int target_h_limit,
+                                              int *out_w, int *out_h,
+                                              enum image_scale_mode mode) {
+    LodePNGState state;
+    unsigned char *raw = 0;
+    struct image_palette_cache_entry palette_cache[IMAGE_PALETTE_CACHE_SIZE] = {{0u, 0u, 0u}};
+    uint8_t palette_index_map[256];
+    uint8_t palette_index_valid[256] = {0u};
     unsigned width = 0;
     unsigned height = 0;
+    unsigned error;
+    unsigned bitdepth;
+    LodePNGColorType colortype;
     int target_w;
     int target_h;
     unsigned sample_w;
@@ -71,19 +129,24 @@ static int image_decode_png_to_palette_internal(const uint8_t *data, int size,
     unsigned sample_x0;
     unsigned sample_y0;
 
-    if (lodepng_decode32(&rgba, &width, &height, data, (size_t)size) != 0 || !rgba) {
-        return -1;
-    }
-    if (width == 0u || height == 0u) {
-        free(rgba);
+    lodepng_state_init(&state);
+    state.decoder.color_convert = 0u;
+    error = lodepng_decode(&raw, &width, &height, &state, data, (size_t)size);
+    if (error != 0u || !raw || width == 0u || height == 0u) {
+        free(raw);
+        lodepng_state_cleanup(&state);
         return -1;
     }
 
+    bitdepth = state.info_png.color.bitdepth;
+    colortype = state.info_png.color.colortype;
     target_w = (int)width;
     target_h = (int)height;
+
     if (mode != IMAGE_SCALE_FIT) {
         if (target_w_limit <= 0 || target_h_limit <= 0) {
-            free(rgba);
+            free(raw);
+            lodepng_state_cleanup(&state);
             return -1;
         }
         target_w = target_w_limit;
@@ -127,20 +190,122 @@ static int image_decode_png_to_palette_internal(const uint8_t *data, int size,
 
         for (int x = 0; x < target_w; ++x) {
             unsigned src_x = sample_x0 + (((unsigned)x * sample_w) / (unsigned)target_w);
-            const unsigned char *px = rgba + ((((size_t)src_y * width) + src_x) * 4u);
-            uint8_t a = px[3];
-            uint8_t r = (uint8_t)(((unsigned)px[0] * a) / 255u);
-            uint8_t g = (uint8_t)(((unsigned)px[1] * a) / 255u);
-            uint8_t b = (uint8_t)(((unsigned)px[2] * a) / 255u);
+            uint8_t r = 0u;
+            uint8_t g = 0u;
+            uint8_t b = 0u;
+            uint8_t a = 255u;
 
-            out_pixels[y * out_stride + x] = image_nearest_palette(r, g, b);
+            switch (colortype) {
+            case LCT_PALETTE: {
+                uint16_t index = image_png_read_sample(raw + (src_y * ((width * bitdepth + 7u) / 8u)),
+                                                       src_x,
+                                                       bitdepth);
+                const unsigned char *palette = state.info_png.color.palette;
+                if (index >= state.info_png.color.palettesize || !palette) {
+                    free(raw);
+                    lodepng_state_cleanup(&state);
+                    return -1;
+                }
+                r = palette[index * 4u + 0u];
+                g = palette[index * 4u + 1u];
+                b = palette[index * 4u + 2u];
+                a = palette[index * 4u + 3u];
+                if (a == 255u && palette_index_valid[index]) {
+                    out_pixels[y * out_stride + x] = palette_index_map[index];
+                    continue;
+                }
+                break;
+            }
+            case LCT_GREY: {
+                const unsigned char *row = raw + (src_y * ((width * bitdepth + 7u) / 8u));
+                uint16_t sample = image_png_read_sample(row, src_x, bitdepth);
+                r = g = b = image_png_expand_sample(sample, bitdepth);
+                if (state.info_png.color.key_defined && sample == state.info_png.color.key_r) {
+                    a = 0u;
+                }
+                break;
+            }
+            case LCT_RGB: {
+                const unsigned char *px = raw + ((src_y * width + src_x) * (bitdepth == 16u ? 6u : 3u));
+                uint16_t rs = bitdepth == 16u ? (uint16_t)(((uint16_t)px[0] << 8) | px[1]) : px[0];
+                uint16_t gs = bitdepth == 16u ? (uint16_t)(((uint16_t)px[2] << 8) | px[3]) : px[1];
+                uint16_t bs = bitdepth == 16u ? (uint16_t)(((uint16_t)px[4] << 8) | px[5]) : px[2];
+                r = image_png_expand_sample(rs, bitdepth);
+                g = image_png_expand_sample(gs, bitdepth);
+                b = image_png_expand_sample(bs, bitdepth);
+                if (state.info_png.color.key_defined &&
+                    rs == state.info_png.color.key_r &&
+                    gs == state.info_png.color.key_g &&
+                    bs == state.info_png.color.key_b) {
+                    a = 0u;
+                }
+                break;
+            }
+            case LCT_GREY_ALPHA: {
+                const unsigned char *px = raw + ((src_y * width + src_x) * (bitdepth == 16u ? 4u : 2u));
+                uint16_t gs = bitdepth == 16u ? (uint16_t)(((uint16_t)px[0] << 8) | px[1]) : px[0];
+                uint16_t as = bitdepth == 16u ? (uint16_t)(((uint16_t)px[2] << 8) | px[3]) : px[1];
+                r = g = b = image_png_expand_sample(gs, bitdepth);
+                a = image_png_expand_sample(as, bitdepth);
+                break;
+            }
+            case LCT_RGBA: {
+                const unsigned char *px = raw + ((src_y * width + src_x) * (bitdepth == 16u ? 8u : 4u));
+                uint16_t rs = bitdepth == 16u ? (uint16_t)(((uint16_t)px[0] << 8) | px[1]) : px[0];
+                uint16_t gs = bitdepth == 16u ? (uint16_t)(((uint16_t)px[2] << 8) | px[3]) : px[1];
+                uint16_t bs = bitdepth == 16u ? (uint16_t)(((uint16_t)px[4] << 8) | px[5]) : px[2];
+                uint16_t as = bitdepth == 16u ? (uint16_t)(((uint16_t)px[6] << 8) | px[7]) : px[3];
+                r = image_png_expand_sample(rs, bitdepth);
+                g = image_png_expand_sample(gs, bitdepth);
+                b = image_png_expand_sample(bs, bitdepth);
+                a = image_png_expand_sample(as, bitdepth);
+                break;
+            }
+            default:
+                free(raw);
+                lodepng_state_cleanup(&state);
+                return -1;
+            }
+
+            if (a != 255u) {
+                r = (uint8_t)(((unsigned)r * a) / 255u);
+                g = (uint8_t)(((unsigned)g * a) / 255u);
+                b = (uint8_t)(((unsigned)b * a) / 255u);
+            }
+            out_pixels[y * out_stride + x] = image_cached_nearest_palette(palette_cache, r, g, b);
+            if (colortype == LCT_PALETTE && a == 255u) {
+                uint16_t index = image_png_read_sample(raw + (src_y * ((width * bitdepth + 7u) / 8u)),
+                                                       src_x,
+                                                       bitdepth);
+                if (index < 256u) {
+                    palette_index_map[index] = out_pixels[y * out_stride + x];
+                    palette_index_valid[index] = 1u;
+                }
+            }
         }
     }
 
-    free(rgba);
+    free(raw);
+    lodepng_state_cleanup(&state);
     *out_w = target_w;
     *out_h = target_h;
     return 0;
+}
+
+static int image_decode_png_to_palette_internal(const uint8_t *data, int size,
+                                                uint8_t *out_pixels, int out_stride,
+                                                int target_w_limit, int target_h_limit,
+                                                int *out_w, int *out_h,
+                                                enum image_scale_mode mode) {
+    return image_png_decode_direct_to_palette(data,
+                                              size,
+                                              out_pixels,
+                                              out_stride,
+                                              target_w_limit,
+                                              target_h_limit,
+                                              out_w,
+                                              out_h,
+                                              mode);
 }
 
 static int image_decode_png_to_palette(const uint8_t *data, int size,
@@ -347,7 +512,6 @@ int image_decode_node_to_palette_stretch(int node,
         free(buffer);
         return -1;
     }
-
     rc = image_decode_to_palette_stretch(buffer, bytes_read, out_pixels, out_stride, target_w, target_h, out_w, out_h);
     free(buffer);
     return rc;

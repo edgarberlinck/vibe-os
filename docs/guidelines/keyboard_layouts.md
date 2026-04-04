@@ -322,4 +322,4 @@ Checklist incremental:
 - [x] `loadkeys -help` e `--help`
 - [x] alvos `make full`, `make img`, `make imb`
 - [x] correção de freeze por `sys_sleep/hlt` (IRQ0 + saída imediata no logout)
-- [ ] validação em hardware real (ThinkPad T400) após correções
+- [x] validação em hardware real (ThinkPad T400) após correções

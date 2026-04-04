@@ -1334,7 +1334,6 @@ void force_chunks(Player *player) {
     int p = chunked(s->x);
     int q = chunked(s->z);
     int r = 1;
-    sys_write_debug("craft: force_chunks\n");
     for (int dp = -r; dp <= r; dp++) {
         for (int dq = -r; dq <= r; dq++) {
             int a = p + dp;
@@ -1638,9 +1637,7 @@ void builder_block(int x, int y, int z, int w) {
 int render_chunks(Attrib *attrib, Player *player) {
     int result = 0;
     State *s = &player->state;
-    sys_write_debug("craft: render_chunks enter\n");
     ensure_chunks(player);
-    sys_write_debug("craft: render_chunks ensured\n");
     int p = chunked(s->x);
     int q = chunked(s->z);
     float light = get_daylight();
@@ -1675,7 +1672,6 @@ int render_chunks(Attrib *attrib, Player *player) {
         draw_chunk(attrib, chunk);
         result += chunk->faces;
     }
-    sys_write_debug("craft: render_chunks done\n");
     return result;
 }
 

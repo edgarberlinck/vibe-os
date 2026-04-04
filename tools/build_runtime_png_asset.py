@@ -16,7 +16,10 @@ def build_runtime_png(input_path: Path, output_path: Path, width: int, height: i
         fitted = ImageOps.fit(rgb, (width, height), method=RESAMPLING.LANCZOS, centering=(0.5, 0.5))
         quantized = fitted.quantize(colors=256, method=QUANTIZE.MEDIANCUT, dither=DITHER.FLOYDSTEINBERG)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        quantized.save(output_path, format="PNG", optimize=True)
+        if output_path.suffix.lower() == ".bmp":
+            quantized.save(output_path, format="BMP")
+        else:
+            quantized.save(output_path, format="PNG", optimize=True)
 
 
 def main() -> int:

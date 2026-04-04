@@ -1,0 +1,18 @@
+Description: Fixes FTBFS after running autoreconf
+ Symptom: ./configure bails out as follows:
+ error: conditional "am__fastdepCXX" was never defined.
+Author: Axel Beckert <abe@debian.org>
+Forwarded: no
+
+--- a/configure.in
++++ b/configure.in
+@@ -22,8 +22,8 @@
+ 
+ dnl Checks for programs.
+ AC_PROG_CC
++AC_PROG_CXX
+ 
+-dnl AC_PROG_CXX
+ dnl AC_PROG_AWK
+ dnl AM_PROG_LEX
+ dnl AC_PROG_YACC

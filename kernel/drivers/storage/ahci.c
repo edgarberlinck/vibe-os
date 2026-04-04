@@ -1,20 +1,16 @@
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/pci/pci.h>
 #include <kernel/drivers/storage/ahci.h>
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/storage/block_device.h>
 #include <kernel/hal/io.h>
 #include <kernel/kernel_string.h>
+#include <kernel/lock.h>
 #include <stdint.h>
-
-#define PCI_CONFIG_ADDRESS 0xCF8u
-#define PCI_CONFIG_DATA 0xCFCu
 
 #define PCI_CLASS_MASS_STORAGE 0x01u
 #define PCI_SUBCLASS_SATA 0x06u
 #define PCI_PROGIF_AHCI 0x01u
-
-#define PCI_COMMAND_MEMORY_SPACE 0x0002u
-#define PCI_COMMAND_BUS_MASTER 0x0004u
 
 #define AHCI_MAX_PORTS 32u
 #define AHCI_HBA_GHC_AE (1u << 31)
@@ -36,6 +32,7 @@
 #define AHCI_PORT_TFD_BSY 0x80u
 
 #define AHCI_PORT_IS_TFES (1u << 30)
+#define AHCI_PORT_SCTL_DET_INIT 0x01u
 
 #define AHCI_FIS_TYPE_REG_H2D 0x27u
 
@@ -44,6 +41,7 @@
 #define ATA_CMD_WRITE_DMA_EXT 0x35u
 
 #define AHCI_TIMEOUT 1000000u
+#define AHCI_COMMAND_RETRIES 3u
 
 struct ahci_port_regs {
     uint32_t clb;
@@ -128,30 +126,7 @@ static uint8_t g_ahci_cmd_lists[AHCI_MAX_PORTS][1024] __attribute__((aligned(102
 static uint8_t g_ahci_rfis[AHCI_MAX_PORTS][256] __attribute__((aligned(256)));
 static struct ahci_cmd_table g_ahci_cmd_tables[AHCI_MAX_PORTS] __attribute__((aligned(128)));
 static uint8_t g_ahci_dma_buffers[AHCI_MAX_PORTS][KERNEL_PERSIST_SECTOR_SIZE] __attribute__((aligned(2)));
-
-static uint32_t pci_config_read_u32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t offset) {
-    uint32_t address = 0x80000000u
-                     | ((uint32_t)bus << 16)
-                     | ((uint32_t)slot << 11)
-                     | ((uint32_t)function << 8)
-                     | ((uint32_t)offset & 0xFCu);
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
-}
-
-static void pci_config_write_u32(uint8_t bus,
-                                 uint8_t slot,
-                                 uint8_t function,
-                                 uint8_t offset,
-                                 uint32_t value) {
-    uint32_t address = 0x80000000u
-                     | ((uint32_t)bus << 16)
-                     | ((uint32_t)slot << 11)
-                     | ((uint32_t)function << 8)
-                     | ((uint32_t)offset & 0xFCu);
-    outl(PCI_CONFIG_ADDRESS, address);
-    outl(PCI_CONFIG_DATA, value);
-}
+static spinlock_t g_ahci_lock;
 
 static int ahci_find_controller(uint8_t *bus_out,
                                 uint8_t *slot_out,
@@ -160,16 +135,16 @@ static int ahci_find_controller(uint8_t *bus_out,
     for (uint32_t bus = 0; bus < 256u; ++bus) {
         for (uint32_t slot = 0; slot < 32u; ++slot) {
             uint32_t functions = 1u;
-            uint32_t header = pci_config_read_u32((uint8_t)bus, (uint8_t)slot, 0u, 0x0Cu);
+            uint32_t header = kernel_pci_config_read_u32((uint8_t)bus, (uint8_t)slot, 0u, 0x0Cu);
             if (((header >> 16) & 0x80u) != 0u) {
                 functions = 8u;
             }
 
             for (uint32_t function = 0; function < functions; ++function) {
-                uint32_t vendor_device = pci_config_read_u32((uint8_t)bus,
-                                                             (uint8_t)slot,
-                                                             (uint8_t)function,
-                                                             0x00u);
+                uint32_t vendor_device = kernel_pci_config_read_u32((uint8_t)bus,
+                                                                    (uint8_t)slot,
+                                                                    (uint8_t)function,
+                                                                    0x00u);
                 uint32_t class_reg;
                 uint32_t bar5;
                 uint8_t class_code;
@@ -181,10 +156,10 @@ static int ahci_find_controller(uint8_t *bus_out,
                     continue;
                 }
 
-                class_reg = pci_config_read_u32((uint8_t)bus,
-                                                (uint8_t)slot,
-                                                (uint8_t)function,
-                                                0x08u);
+                class_reg = kernel_pci_config_read_u32((uint8_t)bus,
+                                                       (uint8_t)slot,
+                                                       (uint8_t)function,
+                                                       0x08u);
                 class_code = (uint8_t)(class_reg >> 24);
                 subclass = (uint8_t)((class_reg >> 16) & 0xFFu);
                 prog_if = (uint8_t)((class_reg >> 8) & 0xFFu);
@@ -194,10 +169,10 @@ static int ahci_find_controller(uint8_t *bus_out,
                     continue;
                 }
 
-                bar5 = pci_config_read_u32((uint8_t)bus,
-                                           (uint8_t)slot,
-                                           (uint8_t)function,
-                                           0x24u);
+                bar5 = kernel_pci_config_read_u32((uint8_t)bus,
+                                                  (uint8_t)slot,
+                                                  (uint8_t)function,
+                                                  0x24u);
                 if ((bar5 & 0x1u) != 0u) {
                     continue;
                 }
@@ -219,15 +194,15 @@ static int ahci_find_controller(uint8_t *bus_out,
 }
 
 static void ahci_enable_pci_controller(uint8_t bus, uint8_t slot, uint8_t function) {
-    uint32_t command_status = pci_config_read_u32(bus, slot, function, 0x04u);
+    uint32_t command_status = kernel_pci_config_read_u32(bus, slot, function, 0x04u);
     uint32_t command = command_status & 0xFFFFu;
 
     command |= PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER;
-    pci_config_write_u32(bus,
-                         slot,
-                         function,
-                         0x04u,
-                         (command_status & 0xFFFF0000u) | command);
+    kernel_pci_config_write_u32(bus,
+                                slot,
+                                function,
+                                0x04u,
+                                (command_status & 0xFFFF0000u) | command);
 }
 
 static int ahci_port_wait_idle(volatile struct ahci_port_regs *regs) {
@@ -291,11 +266,45 @@ static int ahci_port_prepare(struct kernel_ahci_port *port) {
     port->regs->clbu = 0u;
     port->regs->fb = (uint32_t)rfis;
     port->regs->fbu = 0u;
+    port->regs->ci = 0u;
     port->regs->is = 0xFFFFFFFFu;
     port->regs->ie = 0u;
     port->regs->serr = 0xFFFFFFFFu;
 
     return ahci_port_start(port->regs);
+}
+
+static void ahci_port_link_wait(struct kernel_ahci_port *port) {
+    for (uint32_t i = 0; i < 4096u; ++i) {
+        uint32_t ssts = port->regs->ssts;
+        if ((ssts & AHCI_PORT_SSTS_DET_MASK) == AHCI_PORT_SSTS_DET_PRESENT &&
+            (ssts & AHCI_PORT_SSTS_IPM_MASK) == AHCI_PORT_SSTS_IPM_ACTIVE) {
+            break;
+        }
+        io_wait();
+    }
+}
+
+static int ahci_port_recover(struct kernel_ahci_port *port) {
+    uint32_t sctl;
+
+    if (port == 0 || port->regs == 0) {
+        return -1;
+    }
+
+    (void)ahci_port_stop(port->regs);
+    port->regs->is = 0xFFFFFFFFu;
+    port->regs->serr = 0xFFFFFFFFu;
+
+    sctl = port->regs->sctl & ~AHCI_PORT_SSTS_DET_MASK;
+    port->regs->sctl = sctl | AHCI_PORT_SCTL_DET_INIT;
+    for (uint32_t i = 0; i < 256u; ++i) {
+        io_wait();
+    }
+    port->regs->sctl = sctl;
+    ahci_port_link_wait(port);
+
+    return ahci_port_prepare(port);
 }
 
 static int ahci_port_present(uint32_t implemented_ports, uint32_t port_index) {
@@ -330,62 +339,81 @@ static int ahci_port_issue(struct kernel_ahci_port *port,
     struct ahci_cmd_table *table;
     struct ahci_fis_reg_h2d *fis;
     uint32_t slot_mask = 1u;
+    uint32_t flags;
 
     if (port == 0 || port->regs == 0 || sector_count == 0u) {
         return -1;
     }
-    if ((port->regs->ci & slot_mask) != 0u || (port->regs->sact & slot_mask) != 0u) {
-        return -1;
-    }
-    if (ahci_port_wait_idle(port->regs) != 0) {
+    if (sector_count != 1u) {
         return -1;
     }
 
-    header = (struct ahci_cmd_header *)&g_ahci_cmd_lists[port->port_index][0];
-    table = &g_ahci_cmd_tables[port->port_index];
-    memset(header, 0, sizeof(struct ahci_cmd_header));
-    memset(table, 0, sizeof(*table));
-
-    header->flags0 = (uint8_t)(sizeof(struct ahci_fis_reg_h2d) / sizeof(uint32_t));
-    if (write) {
-        header->flags0 |= 0x40u;
-    }
-    header->prdtl = 1u;
-    header->ctba = (uint32_t)(uintptr_t)table;
-    header->ctbau = 0u;
-
-    table->prdt[0].dba = (uint32_t)(uintptr_t)&g_ahci_dma_buffers[port->port_index][0];
-    table->prdt[0].dbau = 0u;
-    table->prdt[0].dbc_i = (uint32_t)(KERNEL_PERSIST_SECTOR_SIZE - 1u) | (1u << 31);
-
-    fis = (struct ahci_fis_reg_h2d *)&table->cfis[0];
-    memset(fis, 0, sizeof(*fis));
-    fis->fis_type = AHCI_FIS_TYPE_REG_H2D;
-    fis->pmport_c = 0x80u;
-    fis->command = command;
-    fis->device = 1u << 6;
-    fis->lba0 = (uint8_t)(lba & 0xFFu);
-    fis->lba1 = (uint8_t)((lba >> 8) & 0xFFu);
-    fis->lba2 = (uint8_t)((lba >> 16) & 0xFFu);
-    fis->lba3 = (uint8_t)((lba >> 24) & 0xFFu);
-    fis->lba4 = (uint8_t)((lba >> 32) & 0xFFu);
-    fis->lba5 = (uint8_t)((lba >> 40) & 0xFFu);
-    fis->countl = (uint8_t)(sector_count & 0xFFu);
-    fis->counth = (uint8_t)((sector_count >> 8) & 0xFFu);
-
-    port->regs->is = 0xFFFFFFFFu;
-    port->regs->ci = slot_mask;
-    for (uint32_t i = 0; i < AHCI_TIMEOUT; ++i) {
-        if ((port->regs->ci & slot_mask) == 0u) {
-            if ((port->regs->is & AHCI_PORT_IS_TFES) != 0u) {
-                return -1;
+    flags = spinlock_lock_irqsave(&g_ahci_lock);
+    for (uint32_t attempt = 0; attempt < AHCI_COMMAND_RETRIES; ++attempt) {
+        if ((port->regs->ci & slot_mask) != 0u || (port->regs->sact & slot_mask) != 0u) {
+            if (ahci_port_recover(port) != 0) {
+                continue;
             }
-            return 0;
         }
-        if ((port->regs->is & AHCI_PORT_IS_TFES) != 0u) {
-            return -1;
+        if (ahci_port_wait_idle(port->regs) != 0) {
+            if (ahci_port_recover(port) != 0) {
+                continue;
+            }
+        }
+
+        header = (struct ahci_cmd_header *)&g_ahci_cmd_lists[port->port_index][0];
+        table = &g_ahci_cmd_tables[port->port_index];
+        memset(header, 0, sizeof(struct ahci_cmd_header));
+        memset(table, 0, sizeof(*table));
+
+        header->flags0 = (uint8_t)(sizeof(struct ahci_fis_reg_h2d) / sizeof(uint32_t));
+        if (write) {
+            header->flags0 |= 0x40u;
+        }
+        header->prdtl = 1u;
+        header->ctba = (uint32_t)(uintptr_t)table;
+        header->ctbau = 0u;
+
+        table->prdt[0].dba = (uint32_t)(uintptr_t)&g_ahci_dma_buffers[port->port_index][0];
+        table->prdt[0].dbau = 0u;
+        table->prdt[0].dbc_i = (uint32_t)((sector_count * KERNEL_PERSIST_SECTOR_SIZE) - 1u) | (1u << 31);
+
+        fis = (struct ahci_fis_reg_h2d *)&table->cfis[0];
+        memset(fis, 0, sizeof(*fis));
+        fis->fis_type = AHCI_FIS_TYPE_REG_H2D;
+        fis->pmport_c = 0x80u;
+        fis->command = command;
+        fis->device = 1u << 6;
+        fis->lba0 = (uint8_t)(lba & 0xFFu);
+        fis->lba1 = (uint8_t)((lba >> 8) & 0xFFu);
+        fis->lba2 = (uint8_t)((lba >> 16) & 0xFFu);
+        fis->lba3 = (uint8_t)((lba >> 24) & 0xFFu);
+        fis->lba4 = (uint8_t)((lba >> 32) & 0xFFu);
+        fis->lba5 = (uint8_t)((lba >> 40) & 0xFFu);
+        fis->countl = (uint8_t)(sector_count & 0xFFu);
+        fis->counth = (uint8_t)((sector_count >> 8) & 0xFFu);
+
+        port->regs->is = 0xFFFFFFFFu;
+        port->regs->serr = 0xFFFFFFFFu;
+        port->regs->ci = slot_mask;
+        for (uint32_t i = 0; i < AHCI_TIMEOUT; ++i) {
+            if ((port->regs->ci & slot_mask) == 0u) {
+                if ((port->regs->is & AHCI_PORT_IS_TFES) == 0u) {
+                    spinlock_unlock_irqrestore(&g_ahci_lock, flags);
+                    return 0;
+                }
+                break;
+            }
+            if ((port->regs->is & AHCI_PORT_IS_TFES) != 0u) {
+                break;
+            }
+        }
+        if (ahci_port_recover(port) != 0) {
+            break;
         }
     }
+
+    spinlock_unlock_irqrestore(&g_ahci_lock, flags);
     return -1;
 }
 
@@ -462,6 +490,7 @@ int kernel_ahci_init(void) {
     memset(g_ahci_ports, 0, sizeof(g_ahci_ports));
     g_ahci_hba = 0;
     g_ahci_primary_port = 0;
+    spinlock_init(&g_ahci_lock);
 
     if (ahci_find_controller(&bus, &slot, &function, &abar) != 0) {
         return -1;

@@ -127,7 +127,7 @@ Estado atual validado:
 - [x] validar build principal do sistema
   - `make build/boot.img`
 
-- [ ] validar que o shell nao regrediu
+- [x] validar que o shell nao regrediu
   - comandos existentes continuam funcionando
 
 - [x] validar `java`

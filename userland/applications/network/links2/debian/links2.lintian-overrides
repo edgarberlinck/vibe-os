@@ -1,0 +1,25 @@
+# Translations
+links2: spelling-error-in-binary Ment Meant [usr/bin/links2]
+links2: spelling-error-in-binary Programm Program [usr/bin/links2]
+links2: spelling-error-in-binary adress address [usr/bin/links2]
+links2: spelling-error-in-binary loggin login [usr/bin/links2]
+links2: spelling-error-in-binary proces process [usr/bin/links2]
+links2: spelling-error-in-binary suport support [usr/bin/links2]
+links2: spelling-error-in-binary Ressources Resources [usr/bin/links2]
+links2: spelling-error-in-binary Autorisation Authorisation [usr/bin/links2]
+links2: spelling-error-in-binary coul could [usr/bin/links2]
+links2: spelling-error-in-binary meny many [usr/bin/links2]
+links2: spelling-error-in-binary Acces Access [usr/bin/links2]
+links2: spelling-error-in-binary recommand recommend [usr/bin/links2]
+links2: spelling-error-in-binary mor more [usr/bin/links2]
+links2: spelling-error-in-binary Warnig Warning [usr/bin/links2]
+links2: spelling-error-in-binary Buit Built [usr/bin/links2]
+links2: spelling-error-in-binary inaccesible inaccessible [usr/bin/links2]
+links2: spelling-error-in-binary requiere require [usr/bin/links2]
+
+# Part of a compiled in font
+links2: spelling-error-in-binary konW know [usr/bin/links2]
+
+# Part of the application, no documentation
+links2: package-contains-documentation-outside-usr-share-doc [usr/share/links2/calibration.html]
+links2: package-contains-documentation-outside-usr-share-doc [usr/share/links2/kalibrace.html]
