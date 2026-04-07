@@ -5727,25 +5727,6 @@ static struct rect network_forget_rect(const struct rect *popup) {
     return r;
 }
 
-static struct rect network_ethernet_connect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 16, popup->y + 258, 92, 16};
-    return r;
-}
-
-static struct rect network_ethernet_disconnect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 114, popup->y + 258, 92, 16};
-    return r;
-}
-
-static struct rect network_connect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 16, popup->y + popup->h - 28, 92, 18};
-    return r;
-}
-
-static struct rect network_disconnect_rect(const struct rect *popup) {
-    struct rect r = {popup->x + popup->w - 108, popup->y + popup->h - 28, 92, 18};
-    return r;
-}
 
 static int sound_slider_value_from_x(const struct rect *slider, int x) {
     int relative;
@@ -7471,11 +7452,7 @@ static void draw_network_applet(const struct mouse_state *mouse) {
         struct rect status = network_status_rect(&popup);
         struct rect auto_button = network_auto_rect(&popup);
         struct rect forget_button = network_forget_rect(&popup);
-        struct rect ethernet_connect_button = network_ethernet_connect_rect(&popup);
-        struct rect ethernet_disconnect_button = network_ethernet_disconnect_rect(&popup);
         struct rect password = network_password_rect(&popup);
-        struct rect connect_button = network_connect_rect(&popup);
-        struct rect disconnect_button = network_disconnect_rect(&popup);
         const struct mk_network_scan_info *selected = network_applet_selected_scan();
         struct network_profile *selected_profile = network_applet_selected_profile();
         int saved_count = network_profile_count();
@@ -7569,31 +7546,14 @@ static void draw_network_applet(const struct mouse_state *mouse) {
             sys_text(security_card.x + 8, security_card.y + 18, ui_color_muted(), "Sem senha necessaria");
         }
 
-        sys_text(popup.x + 16, popup.y + 258, theme->text, "Ethernet");
-        ui_draw_button(&ethernet_connect_button,
-                       "Subir link",
-                       g_network_applet_cache.status_valid &&
-                               g_network_applet_cache.status.link_state == MK_NETWORK_LINK_CONNECTED &&
-                               g_network_applet_cache.status.active_kind == MK_NETWORK_IF_ETHERNET
-                           ? UI_BUTTON_ACTIVE
-                           : UI_BUTTON_NORMAL,
-                       point_in_rect(&ethernet_connect_button, mouse->x, mouse->y));
-        ui_draw_button(&ethernet_disconnect_button,
-                       "Derrubar",
-                       g_network_applet_cache.status_valid &&
-                               g_network_applet_cache.status.active_if[0] != '\0' &&
-                               !str_eq(g_network_applet_cache.status.active_if, "wlan0")
-                           ? UI_BUTTON_DANGER
-                           : UI_BUTTON_NORMAL,
-                       point_in_rect(&ethernet_disconnect_button, mouse->x, mouse->y));
-        ui_draw_button(&connect_button,
-                       "Conectar",
-                       UI_BUTTON_PRIMARY,
-                       point_in_rect(&connect_button, mouse->x, mouse->y));
-        ui_draw_button(&disconnect_button,
-                       "Desconectar",
-                       UI_BUTTON_NORMAL,
-                       point_in_rect(&disconnect_button, mouse->x, mouse->y));
+        /* Scan button */
+        {
+            struct rect scan_button = {popup.x + popup.w - 76, popup.y + popup.h - 26, 66, 18};
+            ui_draw_button(&scan_button,
+                           "Scan",
+                           UI_BUTTON_PRIMARY,
+                           point_in_rect(&scan_button, mouse->x, mouse->y));
+        }
     }
 }
 
@@ -7704,11 +7664,7 @@ static int desktop_dispatch_applet_click(struct desktop_session_action_queue *qu
         struct rect popup = network_applet_popup_rect();
         struct rect auto_button = network_auto_rect(&popup);
         struct rect forget_button = network_forget_rect(&popup);
-        struct rect ethernet_connect_button = network_ethernet_connect_rect(&popup);
-        struct rect ethernet_disconnect_button = network_ethernet_disconnect_rect(&popup);
         struct rect password = network_password_rect(&popup);
-        struct rect connect_button = network_connect_rect(&popup);
-        struct rect disconnect_button = network_disconnect_rect(&popup);
         struct network_profile *selected_profile;
 
         g_network_applet.password_focus = point_in_rect(&password, click_x, click_y);
@@ -7717,10 +7673,24 @@ static int desktop_dispatch_applet_click(struct desktop_session_action_queue *qu
             if (point_in_rect(&row, click_x, click_y)) {
                 g_network_applet.selected_network = i;
                 if (g_network_applet_cache.scans[i].security == MK_NETWORK_SECURITY_OPEN) {
+                    /* Rede aberta - conecta imediatamente */
                     g_network_applet.password_len = 0;
                     g_network_applet.password[0] = '\0';
+                    if (network_applet_connect_selected() == 0) {
+                        /* Conectou com sucesso */
+                    }
                 } else {
+                    /* Rede com senha - tenta aplicar senha salva */
                     network_applet_apply_saved_password_for_selected();
+                    /* Se tem senha salva, conecta. Senão, espera usuário digitar */
+                    if (g_network_applet.password_len > 0) {
+                        if (network_applet_connect_selected() == 0) {
+                            /* Conectou com senha salva */
+                        }
+                    } else {
+                        /* Foca no campo de senha para usuário digitar */
+                        g_network_applet.password_focus = 1;
+                    }
                 }
                 if (g_network_applet_cache.scans[i].ssid[0] != '\0') {
                     str_copy_limited(g_network_applet.selected_saved_ssid,
@@ -7759,21 +7729,15 @@ static int desktop_dispatch_applet_click(struct desktop_session_action_queue *qu
             if (network_applet_forget_profile(selected_profile->ssid) == 0) {
                 *dirty = 1;
             }
-        } else if (point_in_rect(&ethernet_connect_button, click_x, click_y)) {
-            if (network_applet_connect_ethernet() == 0) {
-                *dirty = 1;
-            }
-        } else if (point_in_rect(&ethernet_disconnect_button, click_x, click_y)) {
-            if (network_applet_disconnect_interface("ethernet") == 0) {
-                *dirty = 1;
-            }
         }
-        if (point_in_rect(&connect_button, click_x, click_y)) {
-            if (network_applet_connect_selected() == 0) {
-                *dirty = 1;
-            }
-        } else if (point_in_rect(&disconnect_button, click_x, click_y)) {
-            if (network_applet_disconnect_interface("wlan0") == 0) {
+        
+        /* Scan button */
+        {
+            struct rect scan_button = {popup.x + popup.w - 76, popup.y + popup.h - 26, 66, 18};
+            if (point_in_rect(&scan_button, click_x, click_y)) {
+                /* Trigger network scan */
+                network_applet_invalidate_backend_cache();
+                network_applet_sync_backend(1);
                 *dirty = 1;
             }
         }
