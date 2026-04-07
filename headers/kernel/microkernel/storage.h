@@ -21,6 +21,10 @@ struct mk_storage_info {
     uint32_t partition_start_lba;
 };
 
+struct mk_storage_result {
+    int32_t value;
+};
+
 void mk_storage_service_init(void);
 int mk_storage_service_ready(void);
 int mk_storage_service_read_sectors(uint32_t lba, void *dst, uint32_t sector_count);

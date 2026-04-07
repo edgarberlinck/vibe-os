@@ -31,6 +31,8 @@
 #define ATA_SR_BSY 0x80u
 
 #define ATA_TIMEOUT 100000u
+#define ATA_CTRL_SRST 0x04u
+#define ATA_READ_RETRIES 3u
 #define ATA_WRITE_VERIFY_RETRIES 3u
 static int g_ata_ready = 0;
 static uint32_t g_ata_total_sectors = 0u;
@@ -45,6 +47,17 @@ static int ata_write_sector(uint32_t lba, const uint8_t *buf);
 static int ata_block_read(void *context, uint32_t lba, uint8_t *buf);
 static int ata_block_write(void *context, uint32_t lba, const uint8_t *buf);
 static int ata_disk_read(void *context, uint32_t lba, uint8_t *buf);
+static int ata_wait_not_busy(void);
+static void ata_delay_400ns(void);
+static void ata_settle_bus(void);
+
+static int ata_soft_reset_locked(void) {
+    outb(ATA_PRIMARY_CTRL, ATA_CTRL_SRST);
+    ata_delay_400ns();
+    outb(ATA_PRIMARY_CTRL, 0u);
+    ata_settle_bus();
+    return ata_wait_not_busy();
+}
 
 static int ata_wait_not_busy(void) {
     for (uint32_t i = 0; i < ATA_TIMEOUT; ++i) {
@@ -164,29 +177,40 @@ static int ata_read_sector_locked(uint32_t lba, uint8_t *buf) {
     if (buf == 0 || lba >= 0x10000000u) {
         return -1;
     }
-    if (ata_wait_not_busy() != 0) {
-        return -1;
+
+    for (uint32_t attempt = 0; attempt < ATA_READ_RETRIES; ++attempt) {
+        if (ata_wait_not_busy() != 0) {
+            (void)ata_soft_reset_locked();
+            continue;
+        }
+
+        ata_select_lba(lba);
+        outb(ATA_REG_FEATURES, 0u);
+        outb(ATA_REG_SECCOUNT0, 1u);
+        outb(ATA_REG_LBA0, (uint8_t)(lba & 0xFFu));
+        outb(ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFFu));
+        outb(ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFFu));
+        outb(ATA_REG_COMMAND, ATA_CMD_READ_PIO);
+        ata_delay_400ns();
+
+        if (ata_wait_data_ready() != 0) {
+            (void)ata_soft_reset_locked();
+            continue;
+        }
+
+        for (int i = 0; i < 256; ++i) {
+            uint16_t value = inw(ATA_REG_DATA);
+            buf[(i * 2) + 0] = (uint8_t)(value & 0xFFu);
+            buf[(i * 2) + 1] = (uint8_t)((value >> 8) & 0xFFu);
+        }
+        ata_delay_400ns();
+        if (ata_wait_command_done() == 0) {
+            return 0;
+        }
+        (void)ata_soft_reset_locked();
     }
 
-    ata_select_lba(lba);
-    outb(ATA_REG_FEATURES, 0u);
-    outb(ATA_REG_SECCOUNT0, 1u);
-    outb(ATA_REG_LBA0, (uint8_t)(lba & 0xFFu));
-    outb(ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFFu));
-    outb(ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFFu));
-    outb(ATA_REG_COMMAND, ATA_CMD_READ_PIO);
-    ata_delay_400ns();
-
-    if (ata_wait_data_ready() != 0) {
-        return -1;
-    }
-
-    for (int i = 0; i < 256; ++i) {
-        uint16_t value = inw(ATA_REG_DATA);
-        buf[(i * 2) + 0] = (uint8_t)(value & 0xFFu);
-        buf[(i * 2) + 1] = (uint8_t)((value >> 8) & 0xFFu);
-    }
-    return 0;
+    return -1;
 }
 
 static int ata_write_sector_locked(uint32_t lba, const uint8_t *buf) {
@@ -211,7 +235,8 @@ static int ata_write_sector_locked(uint32_t lba, const uint8_t *buf) {
         ata_delay_400ns();
 
         if (ata_wait_data_ready() != 0) {
-            return -1;
+            (void)ata_soft_reset_locked();
+            continue;
         }
 
         for (int i = 0; i < 256; ++i) {
@@ -221,22 +246,26 @@ static int ata_write_sector_locked(uint32_t lba, const uint8_t *buf) {
         }
         ata_delay_400ns();
         if (ata_wait_command_done() != 0) {
+            (void)ata_soft_reset_locked();
             continue;
         }
 
         outb(ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
         ata_delay_400ns();
         if (ata_wait_command_done() != 0) {
+            (void)ata_soft_reset_locked();
             continue;
         }
         ata_settle_bus();
         if (ata_read_sector_locked(lba, verify) != 0) {
+            (void)ata_soft_reset_locked();
             ata_settle_bus();
             continue;
         }
 
         for (int i = 0; i < 512; ++i) {
             if (verify[i] != buf[i]) {
+                (void)ata_soft_reset_locked();
                 ata_settle_bus();
                 goto retry;
             }

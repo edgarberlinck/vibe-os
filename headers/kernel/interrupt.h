@@ -5,18 +5,28 @@
 
 /* Basic IDT/PIC interface exposed to rest of kernel */
 
+typedef void (*kernel_irq_handler_t)(void);
+
 void kernel_idt_init(void);
 void kernel_pic_init(void);
 void kernel_irq_enable(void);
+void kernel_irq_mask(uint8_t irq_line);
+void kernel_irq_unmask(uint8_t irq_line);
+int kernel_irq_register_handler(uint8_t irq_line, kernel_irq_handler_t handler);
+void kernel_irq_dispatch(uint8_t irq_line);
 uint32_t kernel_irq_save(void);
 void kernel_irq_restore(uint32_t flags);
 void kernel_pic_send_eoi(uint8_t irq_line);
+void kernel_irq_complete(uint8_t irq_line);
 
 /* Exception handlers called by stubs */
 void divide_error_handler(void);
 void invalid_opcode_handler(uint32_t eip);
-void general_protection_handler(void);
-void page_fault_handler(void);
-void double_fault_handler(void);
+void invalid_tss_handler(uint32_t error_code, uint32_t eip);
+void segment_not_present_handler(uint32_t error_code, uint32_t eip);
+void stack_fault_handler(uint32_t error_code, uint32_t eip);
+void general_protection_handler(uint32_t error_code, uint32_t eip);
+void page_fault_handler(uint32_t error_code, uint32_t eip);
+void double_fault_handler(uint32_t error_code, uint32_t eip);
 
 #endif /* KERNEL_INTERRUPT_H */

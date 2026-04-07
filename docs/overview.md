@@ -1,5 +1,7 @@
 # Vibe OS Detailed Map
 
+For the docs directory layout and canonical file locations, see [README.md](README.md).
+
 This directory is the code-guided reference for how Vibe OS boots, initializes the kernel, exposes services, and finally reaches runnable applications.
 
 The current architecture is not a classic monolithic "load kernel, then exec ELF binaries from a mature VFS" design. The real flow is:

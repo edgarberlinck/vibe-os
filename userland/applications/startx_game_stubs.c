@@ -39,12 +39,13 @@ void craft_upstream_queue_key(int key) {
     (void)key;
 }
 
-void craft_upstream_set_mouse(int x, int y, int dx, int dy,
+void craft_upstream_set_mouse(int x, int y, int dx, int dy, int wheel,
                               uint8_t buttons, int focused, int inside) {
     (void)x;
     (void)y;
     (void)dx;
     (void)dy;
+    (void)wheel;
     (void)buttons;
     (void)focused;
     (void)inside;

@@ -152,11 +152,7 @@ static void craft_report_alloc_failure(const char *message) {
 }
 
 static void craft_gl_debug(const char *message) {
-    if (!message) {
-        return;
-    }
-    sys_write_debug(message);
-    sys_write_debug("\n");
+    (void)message;
 }
 
 static float craft_absf(float v) {
@@ -361,7 +357,7 @@ void craft_gl_blit_to(int x, int y) {
         return;
     }
     craft_make_rgb332_palette();
-    sys_gfx_blit8(g_framebuffer, g_fb_width, g_fb_height, x, y, 1);
+    sys_gfx_blit8_present(g_framebuffer, g_fb_width, g_fb_height, x, y, 1);
 }
 
 void craft_gl_shutdown_window(void) {

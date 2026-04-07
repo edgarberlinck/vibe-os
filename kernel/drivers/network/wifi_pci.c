@@ -149,3 +149,29 @@ uint16_t kernel_wifi_pci_device_id(void) {
 const char *kernel_wifi_pci_chip_name(void) {
     return g_chip_name;
 }
+
+int kernel_wifi_pci_is_wifi_device(uint16_t vendor_id, uint16_t device_id) {
+    return wifi_lookup_id(vendor_id, device_id) != 0;
+}
+
+void kernel_wifi_pci_get_chip_name(uint16_t vendor_id, uint16_t device_id,
+                                   char *buffer, uint32_t buffer_size) {
+    const struct wifi_pci_id *id;
+    uint32_t i;
+    
+    if (buffer == 0 || buffer_size == 0) {
+        return;
+    }
+    
+    id = wifi_lookup_id(vendor_id, device_id);
+    if (id == 0 || id->name == 0) {
+        buffer[0] = '\0';
+        return;
+    }
+    
+    /* Simple string copy with bounds check */
+    for (i = 0; i < buffer_size - 1 && id->name[i] != '\0'; ++i) {
+        buffer[i] = id->name[i];
+    }
+    buffer[i] = '\0';
+}

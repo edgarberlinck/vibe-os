@@ -91,21 +91,25 @@ uint8_t doom_port_map_color(uint8_t idx) {
 int doom_port_run_full(void) {
     static char arg0[] = "vibedoom";
     static char arg1[] = "-nomonsters";
-    static char *argv[] = {arg0, arg1, 0};
+    static char arg2[] = "-iwad";
+    static char arg3[] = "/DOOM/DOOM.WAD";
+    static char *argv[] = {arg0, arg1, arg2, arg3, 0};
 
     sys_write_debug("doom: port run begin\n");
+    (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_FULLSCREEN);
     g_quit = 0;
     g_code = 0;
     g_error[0] = '\0';
     for (int i = 0; i < 4; ++i) {
         g_debug_lines[i][0] = '\0';
     }
-    myargc = 2;
+    myargc = 4;
     myargv = argv;
     g_run_active = 1;
     if (setjmp(g_run_jmp) == 0) {
         D_DoomMain();
     }
     g_run_active = 0;
+    (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
     return g_code;
 }

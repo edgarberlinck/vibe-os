@@ -1,0 +1,836 @@
+links2 (2.29-2) unstable; urgency=medium
+
+  * Team upload, Debian namespace.
+
+  [ Pino Toscano ]
+  * Disable the DirectFB support, as DirectFB is in practice dead and no more
+    supported: (Closes: #1083042)
+    - drop the libdirectfb-dev build dependency
+    - replace the --with-fb configure flag with --without-fb when building the
+      graphical version
+    - since now there is no other graphical backend than X, the dependencies
+      are correct, and there is no need for package splits; hence
+      closes: #322995, #638383
+
+ -- Chris Hofstaedtler <zeha@debian.org>  Sun, 15 Dec 2024 23:00:36 +0100
+
+links2 (2.29-1) unstable; urgency=medium
+
+  * New upstream release 2.29.
+    + Add libavif-dev as build-dependency.
+    + Build text-only version without AVIF support.
+    + Refresh x-terminal-emulator-instead-of-xterm.diff.
+  * Replace some transitional build-dependencies:
+    + libfontconfig1-dev → libfontconfig-dev
+    + libfreetype6-dev → libfreetype-dev
+  * Declare compliance with Debian Policy 4.6.2. (No changes needed.)
+  * Drop lintian overrides for no more emitted warnings.
+  * Bump copyright years in debian/copyright. Thanks Lintian!
+  * Add another lintian override for very-long-line-length-in-source-file.
+
+ -- Axel Beckert <abe@debian.org>  Wed, 14 Jun 2023 13:12:17 +0200
+
+links2 (2.28-1) unstable; urgency=medium
+
+  * New minor updates upstream release 2.28.
+    + Disable cache when following redirects from consent.google.com.
+    + Fix a display glitch on framebuffer under some circumstances.
+    + Refresh patches where needed.
+  * Add lintian overrides for very-long-line-length-in-source-file
+    generated from sources and scripts included in the upstream sources as
+    well.
+
+ -- Axel Beckert <abe@debian.org>  Sun, 20 Nov 2022 22:20:05 +0100
+
+links2 (2.27-1) unstable; urgency=medium
+
+  * New minor updates upstream release 2.27.
+    + Updated Turkish translation.
+    + Allow the user to specify a numeric IPv6 address in the
+      dns-over-https box.
+  * Declare compliance with Debian Policy 4.6.1. (No changes needed.)
+  * Update lintian overrides to new format.
+  * Add some lintian overrides for obvious false positives of
+    very-long-line-length-in-source-file.
+
+ -- Axel Beckert <abe@debian.org>  Wed, 22 Jun 2022 03:42:48 +0200
+
+links2 (2.26-1) unstable; urgency=medium
+
+  * New feature (and bug fix) upstream release 2.26.
+    + Refresh patches as necessary.
+    + Add build-dependency on libwebp-dev and pkg-config.
+    + Disable WEBP support in text-only package "links".
+  * Update copyright years in debian/copyright. Thanks Lintian!
+
+ -- Axel Beckert <abe@debian.org>  Sun, 17 Apr 2022 23:36:42 +0200
+
+links2 (2.25-1) unstable; urgency=medium
+
+  * New upstream bug fix release 2.25.
+
+ -- Axel Beckert <abe@debian.org>  Mon, 11 Oct 2021 00:23:00 +0200
+
+links2 (2.24-1) unstable; urgency=medium
+
+  * New upstream release 2.24.
+    + Refresh patches as necessary.
+  * Declare compliance with Debian Policy 4.6.0. (No changes needed.)
+
+ -- Axel Beckert <abe@debian.org>  Fri, 17 Sep 2021 21:42:40 +0200
+
+links2 (2.23-1) unstable; urgency=medium
+
+  * New upstream release 2.23.
+    + Suggest mc for optional usage of Midnight Commander's cons.saver.
+    + Extend lintian overrides for some words in the Spanish translation.
+  * Bump debian/watch version to 4.
+  * Declare compliance with Debian Policy 4.5.1. (No changes needed.)
+
+ -- Axel Beckert <abe@debian.org>  Sun, 15 Aug 2021 15:20:56 +0200
+
+links2 (2.21-1) unstable; urgency=medium
+
+  * Import new upstream bugfix release 2.21.
+  * Update lintian overrides wrt. to updated spell checks.
+  * Declare compliance with Debian Policy 4.5.0. (No changes needed.)
+  * Bump debhelper compatibility level to 13.
+  * Declare x-terminal-emulator-instead-of-xterm.diff as debian-specific.
+  * List changelog in debian/upstream/metadata.
+  * Add lintian overrides for calibration files beinng reported by
+    package-contains-documentation-outside-usr-share-doc.
+
+ -- Axel Beckert <abe@debian.org>  Sun, 18 Oct 2020 10:01:12 +0200
+
+links2 (2.20.2-1) unstable; urgency=medium
+
+  * Import new upstream bugfix release 2.20.2.
+  * Declare compliance with Debian Policy 4.4.1. (No changes needed.)
+
+ -- Axel Beckert <abe@debian.org>  Tue, 01 Oct 2019 00:09:31 +0200
+
+links2 (2.20.1-1) unstable; urgency=medium
+
+  * Import new bugfix upstream release 2.20.1.
+    + Refresh patch x-terminal-emulator-instead-of-xterm.diff.
+
+ -- Axel Beckert <abe@debian.org>  Sun, 08 Sep 2019 18:20:56 +0200
+
+links2 (2.20-1) unstable; urgency=high
+
+  * Import new upstream release 2.20.
+    + Fixes tor-only security issue: real DNS request were leaked outside
+      the tor network if a displayed page contained <link
+      rel="dns-prefetch" href="http://…/">. Issue found by Shi Tian.
+    + Refresh x-terminal-emulator-instead-of-xterm.diff and
+      links2-instead-of-links.diff.
+    + Add build-dependency on libzstd-dev.
+  * Add more lintian overrides for compiled-in translations.
+
+ -- Axel Beckert <abe@debian.org>  Thu, 29 Aug 2019 00:12:14 +0200
+
+links2 (2.19-2) unstable; urgency=medium
+
+  * Upload to unstable again.
+  * Add a DEP12 upstream metadata file.
+  * Declare compliance with Debian Policy 4.4.0. (No changes needed.)
+  * Update some of the spelling-error-in-binary lintian overrides.
+
+ -- Axel Beckert <abe@debian.org>  Mon, 08 Jul 2019 01:26:26 +0200
+
+links2 (2.19-1) experimental; urgency=low
+
+  * Import new upstream release 2.19.
+    + Add build-dependencies on libfreetype6-dev and libfontconfig1-dev.
+    + Drop cherry-picked patch fix-crash-on-invalid-idn-url.patch.
+    + Add more lintian overrides for false-postives due to translations.
+  * Upload to experimental only during Buster freeze.
+
+ -- Axel Beckert <abe@debian.org>  Mon, 08 Apr 2019 21:58:25 +0200
+
+links2 (2.18-2) unstable; urgency=low
+
+  * Cherry-pick patch from upstream to fix crash on invalid IDN
+    URL. (Closes: #926674)
+
+ -- Axel Beckert <abe@debian.org>  Mon, 08 Apr 2019 21:28:08 +0200
+
+links2 (2.18-1) unstable; urgency=medium
+
+  * Import new upstream release 2.18.
+    + Refresh patches where necessary.
+  * Declare compliance with Debian Policy 4.3.0. (No changes needed.)
+  * Bump debhelper compatibility level to 12.
+    + Replace debian/compat with a versioned b-d on debhelper-compat.
+
+ -- Axel Beckert <abe@debian.org>  Wed, 23 Jan 2019 01:58:22 +0100
+
+links2 (2.17-1) unstable; urgency=medium
+
+  * Import upstream version 2.17.
+    + Refresh patches where necessary.
+  * Update lintian overrides for false positives due to translations.
+  * Declare compliance with Debian Policy 4.2.1. (No changes needed.)
+
+ -- Axel Beckert <abe@debian.org>  Sun, 30 Sep 2018 05:45:06 +0200
+
+links2 (2.16-1) unstable; urgency=low
+
+  * Declare compliance with Debian Policy 4.1.5. (No changes needed.)
+  * Import upstream version 2.16.
+    + Supports international domain names.
+    + Enable the newly supported lzip and brotli compression algorithms by
+      adding the according build-dependencies.
+    + Fixes CVE-2017-11114, drop according patch.
+    + Drop fix-typos.diff, applied upstream.
+    + Rewrite use-local-calibration-files.diff from scratch.
+    + Refresh remaining patches as necessary.
+    + Add debian/NEWS to make aware of the fact that Links 2 now ships its
+      own list of Certificate Authorities Root Certificates.
+    + Make sure all build-dependencies are found: Explicitly set
+      $PKG_CONFIG.
+  * Drop lintian overrides for no more emitted tags.
+  * Update copyright years in debian/copyright.
+  * Move packaging git repository to Salsa and update Vcs-* headers.
+  * Bump debhelper compatibility level to 11.
+    + Update versioned debhelper build-dependency accordingly.
+
+ -- Axel Beckert <abe@debian.org>  Tue, 10 Jul 2018 01:05:46 +0200
+
+links2 (2.14-5) unstable; urgency=low
+
+  * Set "Rules-Requires-Root: no".
+  * Remove trailing whitespace from ancient debian/changelog entry.
+  * Declare compliance with Debian Policy 4.1.1. (No changes needed.)
+  * Bump debhelper compatibility to 10
+    + Update versioned debhelper build-dependency
+    + Remove explicit build-dependency on autotools-dev
+    + Remove "--parallel --with autotools-dev" from debian/rules.
+    + Remove config.log again explicitly, now via debian/clean.
+    + Add patch against configure.in to fix FTBFS when running autoreconf.
+    + Use out-of-tree builds to cope with dh's new command state tracking.
+
+ -- Axel Beckert <abe@debian.org>  Sun, 12 Nov 2017 04:54:16 +0100
+
+links2 (2.14-4) unstable; urgency=medium
+
+  [ Helmut Grohne ]
+  * Mark links and links2 Multi-Arch: foreign. (Closes: #876249)
+
+  [ Axel Beckert ]
+  * Declare compliance with Debian Policy 4.1.0.
+
+ -- Axel Beckert <abe@debian.org>  Thu, 21 Sep 2017 01:00:36 +0200
+
+links2 (2.14-3) unstable; urgency=medium
+
+  [ Helmut Grohne ]
+  * Fix FTCBFS: Tell ancient configure about the correct CC. (Closes:
+    #861335)
+
+  [ Mikulas Patocka ]
+  * Fix read out of memory in case of corrupted UTF-8 data. (Closes:
+    #870299, CVE-2017-11114)
+
+  [ Axel Beckert ]
+  * Add lintian override for not misspelled French word "rouge".
+  * Declare compliance with Debian Policy 4.0.1.
+    + Switch debian copyright format declaration to HTTPS URL.
+    + Replace full text of MPL 2.0 with pointer to
+      /usr/share/common-licenses/MPL-2.0.
+
+ -- Axel Beckert <abe@debian.org>  Sun, 06 Aug 2017 16:45:50 +0200
+
+links2 (2.14-2) unstable; urgency=medium
+
+  * Recommend ca-certificates. Thanks Mikulas Patocka for the hint!
+  * Extend patch fix-typos.diff with more typos found by Lintian.
+  * Add lintian overrides for spelling-error-in-binary false
+    positives. ("Autorisation" is French for "Authorisation" and "konW" is
+    part of a compiled in font.)
+
+ -- Axel Beckert <abe@debian.org>  Mon, 09 Jan 2017 02:55:16 +0100
+
+links2 (2.14-1) unstable; urgency=low
+
+  [ Axel Beckert ]
+  * Import new upstream release
+    + Supports fourth and fifth mouse button in gpm and
+      framebuffer. (Addresses: #127319)
+    + Fixes crash when pressing Ctrl-G on a form field. (Closes: #842213)
+    + Refresh patches where necessary.
+
+  [ Pino Toscano ]
+  * Update links2.desktop: the 'Keywords' key is a list, so it must end
+    with the list separator (';'). (Closes: #812486)
+
+ -- Axel Beckert <abe@debian.org>  Wed, 07 Dec 2016 02:44:51 +0100
+
+links2 (2.13-1) unstable; urgency=medium
+
+  * New upstream release
+    + Supports OpenSSL 1.1.0. (Closes: #828422)
+    + Refresh patches where necessary.
+    + debian/copyright: Add MPL-2.0 for suffix/public_suffix_list.dat
+    + Remove no more needed lintian override of spelling-error-in-binary.
+  * Add patch to use packaged version of publicsuffix instead embedded
+    one. (It's updated more often than there's a new Links 2 release.)
+    + Add build-dependency on publicsuffix.
+    + Add a Built-Using header with the version of publicsuffix used for
+      building the binary packages since its data is compiled into them.
+
+ -- Axel Beckert <abe@debian.org>  Fri, 01 Jul 2016 19:19:06 +0200
+
+links2 (2.12-2) unstable; urgency=medium
+
+  * Enable all hardening flags.
+  * Remove no more needed spelling-error-in-binary lintian overrides.
+  * Add new spelling-error-in-binary lintian override for "NAm" (not found
+    in source, likely part of a symbol or such).
+  * Declare compliance with Debian Policy 3.9.8. (No changes needed.)
+  * Switch Vcs-Git header from git:// to https://.
+  * Override lintian warning about deprecated configure filename: Upstream
+    refused to rename configure.in to configure.ac.
+  * Add patch to fix typo in error message found by lintian.
+
+ -- Axel Beckert <abe@debian.org>  Fri, 06 May 2016 01:22:15 +0200
+
+links2 (2.12-1) unstable; urgency=medium
+
+  * New upstream release.
+    + Upload to unstable again.
+
+ -- Axel Beckert <abe@debian.org>  Thu, 24 Sep 2015 01:28:24 +0200
+
+links2 (2.11.1-1) experimental; urgency=low
+
+  * New upstream pre-release.
+    + Now supports SSL client certificates, even with encrypted key!
+    + Drop patch reproducible-build.diff, applied upstream.
+    + Drop patch links-client-certs.diff, feature implemented upstream.
+    + Refresh patch links2-instead-of-links.diff.
+
+ -- Axel Beckert <abe@debian.org>  Fri, 11 Sep 2015 01:52:16 +0200
+
+links2 (2.11-1) unstable; urgency=medium
+
+  * New upstream release.
+    + Remove patch verify-ssl-certs-510417.diff. Solved upstream in a
+      better way.
+    + Refresh the remaining patches were necessary. Thanks for Mikulas
+      Patocka for adapting links-client-certs.diff to match 2.11's SSL
+      certificate verification code.
+
+ -- Axel Beckert <abe@debian.org>  Thu, 03 Sep 2015 20:26:12 +0200
+
+links2 (2.10-2) unstable; urgency=medium
+
+  * Fix typo in patch description.
+  * Add patch for basic client certificate support by Enrico
+    Zini. (Closes: #797066) Thanks!
+
+ -- Axel Beckert <abe@debian.org>  Thu, 27 Aug 2015 22:42:23 +0200
+
+links2 (2.10-1) unstable; urgency=medium
+
+  * New upstream release
+    - Refresh patches where necessary.
+    - Add b-d on lib{event,rsvg2}-dev for new SVG and libevent support.
+    - Disable new SVG and libevent support in links package.
+  * Simplify debian/watch
+  * Make debian/rules more readable by adding backslashed line-breaks to
+    long shell commands.
+  * Add patch to remove unnecessary usage of __DATE__ and __TIME__ to make
+    bulld reproducible.
+
+ -- Axel Beckert <abe@debian.org>  Mon, 20 Jul 2015 22:25:37 +0200
+
+links2 (2.9-3) unstable; urgency=medium
+
+  * Upload to unstable again.
+
+ -- Axel Beckert <abe@debian.org>  Sun, 26 Apr 2015 02:35:40 +0200
+
+links2 (2.9-2) experimental; urgency=low
+
+  * Use -lpthread on all architectures (Closes: #774250)
+
+ -- Axel Beckert <abe@debian.org>  Wed, 31 Dec 2014 18:31:23 +0100
+
+links2 (2.9-1) experimental; urgency=low
+
+  * New upstream release
+    + Refresh patches where necessary
+    + Add -lpthread to LDFLAGS on Linux explicitly as configure missed it.
+  * Add "xterm | x-terminal-emulator" as Recommends to the links2 package
+    since "links2 -g" or "xlinks2" use x-terminal-emulator to spawn
+    external applications needing a terminal.
+  * Instead of using x-terminal-emulator unconditionally, use a wrapper
+    script which first checks a blacklist of terminal emulators known to
+    not behave properly on "-e" and use a fallback instead of them. Thanks
+    Mikulas Patocka!
+  * Declare compliance with Debian Policy 3.9.6. (No other changes needed.)
+  * Switch Vcs-Browser to https and cgit-based URL.
+  * Desktop file: Add keyword "lightweight".
+  * Convert debian/copyright to machine-readable DEP5 format.
+  * Add patch to use local instead of online copy of calibration.html
+  * Install calibration files into /usr/share/links2/ instead of
+    /usr/share/doc/links2/links_cal/.
+    + Fixes lintian warning
+      possible-documentation-but-no-doc-base-registration
+    + Ensures that no file under /usr/share/doc/ is required even for
+      optional features like color calibration.
+  * Reverse relevant effect links2 patch on the links package's man page
+    upon installation. (Closes: #602228) Also remove references to "-g"
+    and friends from links.1.
+
+ -- Axel Beckert <abe@debian.org>  Tue, 30 Dec 2014 18:58:30 +0100
+
+links2 (2.8-2) unstable; urgency=medium
+
+  * Build-depend on unversioned graphics format library (virtual) packages
+    only (Closes: #724921, #662420)
+  * Enable parallel building
+  * Add CVE id to previous changelog entry.
+  * Bump Standard-Version to 3.9.5 (no changes)
+
+ -- Axel Beckert <abe@debian.org>  Wed, 28 May 2014 00:54:58 +0200
+
+links2 (2.8-1) unstable; urgency=low
+
+  * New upstream release
+    + Refresh patches
+    + Fixes integer overflow in graphics mode (CVE-2013-6050)
+
+ -- Axel Beckert <abe@debian.org>  Thu, 26 Sep 2013 01:02:11 +0200
+
+links2 (2.7-2) unstable; urgency=low
+
+  * Drop svgalib support, it's going to be removed from Debian (Closes:
+    #710927, LP #234717; this also has impact on #638383)
+    + Remove README.Debian which covered svgalib's setuid need
+  * Bump debhelper compatibility to 9
+    + Update versioned debhelper build-dependency
+    + No more need to remove config.* manually
+  * Revamp debian/rules:
+    + Remove redundant dh_installchangelogs parameter
+    + Move dh_link parameters to debian/links2.links
+    + Remove no more used (and already commented) code
+    + Use dh_auto_{configure,build,install,clean} and dh_install + dh-exec
+    + Delete the no more needed debian/dirs and debian/links.dirs
+    + Use dh_installman instead of handling them manually
+    + Use dh_installdocs instead of manually copying the doc tree
+    + Finally switch to a dh7 style debian/rules files
+  * Install calibration docs into /usr/share/doc/links2/links_cal instead
+    of /usr/share/doc/links2/calibration/doc/links_cal
+  * Rename debian/{docs,menu} to debian/links2.{docs,menu} for unambiguity
+  * Bump Standards-Version to 3.9.4 (no changes)
+  * Apply wrap-and-sort
+
+ -- Axel Beckert <abe@debian.org>  Thu, 06 Jun 2013 00:55:55 +0200
+
+links2 (2.7-1) unstable; urgency=low
+
+  * New upstream release
+    + Supports HTTPS proxy (Closes: #591438)
+    + Supports IPv6 (drop IPv6 patch from Petr Pisar)
+    + Fixes memory leak in FTP support
+    + Fixes several rendering issues
+    + Drop fix-typos-in-manpage.diff, applied upstream.
+  * Refreshed updated the following patches:
+    + improve-message-of-dash-g-602227.diff
+    + links2-instead-of-links.diff
+    + x-terminal-emulator-instead-of-xterm.diff
+
+ -- Axel Beckert <abe@debian.org>  Tue, 26 Jun 2012 21:28:42 +0200
+
+links2 (2.6-2) unstable; urgency=low
+
+  * Enable hardening build flags so that they're really in
+    effect. (Closes: #654807) Thanks Simon Ruderich!
+
+ -- Axel Beckert <abe@debian.org>  Mon, 28 May 2012 18:07:29 +0200
+
+links2 (2.6-1) unstable; urgency=medium
+
+  * New upstream release
+    + Fixes several possibly remotely exploitable security issues (Closes:
+      #668227; set urgency=medium due to security bug fixes)
+    + Refresh the following patches:
+      - links2-instead-of-links.diff
+      - x-terminal-emulator-instead-of-xterm.diff
+      - fix-typos-in-manpage.diff
+      - improve-message-of-dash-g-602227.diff
+      - verify-ssl-certs-510417.diff
+    + Imported new ipv6.diff from patch upstream.
+    + Removed BUGS and TODO from debian/docs, they no more exists in upstream
+      tarball. Added AUTHORS instead.
+  * Enable hardened build flags (Closes: #654807) Thanks Moritz
+    Muehlenhoff!
+  * Enable bzip2 and lzma support by adding according build dependencies
+  * Replaced build-dependendy on libgpmg1-dev by libgpm-dev
+  * Replaced incomplete linux-only architecture list in build-dependency
+    with "linux-any"
+  * Broadened architecture constraints for the libsvga1-dev build-dependency
+    since svgalib has been ported to non-x86 architectures as well as to
+    kfreebsd.
+  * Updated lintian overrides for spelling error false positives in
+    translations.
+  * Bumped Standards-Version to 3.9.3 (no changes)
+
+ -- Axel Beckert <abe@debian.org>  Sat, 21 Apr 2012 09:47:46 +0200
+
+links2 (2.5-1) unstable; urgency=low
+
+  * New upstream release.
+    + Refreshed the following patches:
+      - links2-instead-of-links.diff
+      - x-terminal-emulator-instead-of-xterm.diff
+      - improve-message-of-dash-g-602227.diff
+    + Imported new ipv6.diff from patch upstream.
+  * Replace "dh_clean -k" by "dh_prep".
+
+ -- Axel Beckert <abe@debian.org>  Mon, 02 Jan 2012 18:23:23 +0100
+
+links2 (2.4-1) unstable; urgency=low
+
+  * New upstream release.
+    + Refreshed the following patches:
+      - links2-instead-of-links.diff
+      - x-terminal-emulator-instead-of-xterm.diff
+      - improve-message-of-dash-g-602227.diff
+      - fix-typos-in-manpage.diff
+    + Imported new ipv6.diff from patch upstream.
+  * Add description to fix-puerile-humor.diff
+
+ -- Axel Beckert <abe@debian.org>  Wed, 30 Nov 2011 01:19:46 +0100
+
+links2 (2.3-2) unstable; urgency=low
+
+  * Import new IPv6 patch from patch upstream. Fixes several
+    issues. (Closes: #645166)
+  * Fix misspelling of "Windows" in codepage list (LP: #649796)
+  * Add lintian overrides for spelling error false positives in
+    translations.
+  * Add patch to fix spelling and formatting issues lintian found in the
+    man page.
+  * Mention links2 in the description of links (Closes: #500768)
+
+ -- Axel Beckert <abe@debian.org>  Wed, 16 Nov 2011 03:50:41 +0100
+
+links2 (2.3-1) unstable; urgency=low
+
+  * New upstream release.
+    + Refreshed patches links2-instead-of-links.diff and ipv6.diff
+    + Fixes downloads of files larger than 4GB (Closes: #610418)
+  * Fix debian/watch so that upstream versions are sorted properly; add
+    and prefer bzip2 compressed upstream tarballs.
+  * Add missing bug number for IPv6 patch in the previous changelog entry.
+
+ -- Axel Beckert <abe@debian.org>  Thu, 18 Aug 2011 23:35:41 +0200
+
+links2 (2.3~pre2-1) unstable; urgency=low
+
+  * New upstream version.
+    + Supports more UTF-8 in text terminals, but still not all (See:
+      #589770 and #316261)
+    + Refreshed all patches.
+  * Fixed watch file (Closes: #591501)
+  * Use dh_autotools-dev_updateconfig and dh_autotools-dev_restoreconfig
+    to be able to make two identical builds in a row.
+    - Build-Depend on autotools-dev
+    - Remove config.{sub,guess} hunks from
+      debian/patches/patches-as-of-link2-2.2-1.diff
+  * Split remaining patches-as-of-link2-2.2-1.diff into
+    links2-instead-of-links.diff and
+    x-terminal-emulator-instead-of-xterm.diff
+  * Remove Gürkan from list of maintainers on his own request, become sole
+    maintainer
+  * Replace long-time obsolete alternative libpng3-dev build dependency by
+    the virtual package libpng-dev
+  * Replace libjpeg62-dev build dependency by libjpeg8-dev | libjpeg-dev
+    (Closes: #634144)
+  * Added Vcs-* headers for new git repository.
+  * Added Icon=links2 to links2.desktop (Closes: #627715)
+  * Added Brazilian Portuguese entries for links2.desktop. Thanks to
+    Sérgio Cipolla! (Closes: #633816)
+  * Added IPv6 patch from http://xpisar.wz.cz/links-ipv6/, slightly
+    modified and refreshed to fit 2.3pre2 release. (Closes: #632172)
+  * Add patch to improve error message when using -g option with links
+    instead of links2 (Closes: #602227)
+  * Add abort-on-upstream-changes and unapply-patches to
+    debian/source/local-options as source format 3.0 stubbornly does not
+    allow to put it into debian/source/options
+  * Fix lintian warning debian-rules-missing-recommended-target
+    (build-arch and build-indep)
+  * Bump Standards-Version to 3.9.2 (no changes necessary)
+  * Refer to the versionened, non-symlinked GPL in debian/copyright.
+  * Update Copyright years in debian/copyright.
+
+ -- Axel Beckert <abe@debian.org>  Wed, 20 Jul 2011 18:58:37 +0200
+
+links2 (2.3~pre1-1) unstable; urgency=low
+
+  [Gürkan Sengün]
+  * New upstream version.
+    + Supports UTF-8 (Closes: #544289)
+  * debian/rules: drop dh_desktop call.
+  * Bump debhelper version to 7.
+  * Added debian/watch file.
+
+  [Axel Beckert]
+  * Added myself to Uploaders
+  * Bumped Standards-Version to 3.9.0 (no changes)
+  * Move to Source Format "3.0 (quilt)"
+  * Apply patch by Mats Erik Andersson <mats.andersson@gisladisker.se>
+    abort if an SSL certificate doesn't validate and update it to fit to
+    2.3pre1 sources. (Closes: #510417)
+  * Added appropriate prerm and postinst scripts for links, too
+    (Closes: #556118, LP: #443391)
+
+ -- Axel Beckert <abe@debian.org>  Fri, 09 Jul 2010 17:08:56 +0200
+
+links2 (2.2-1) unstable; urgency=low
+
+  * New upstream version.
+  * Update debian/links2.desktop. (Closes: #488904)
+  * Bump standards version.
+
+ -- Gürkan Sengün <gurkan@phys.ethz.ch>  Mon, 04 Aug 2008 12:19:47 +0200
+
+links2 (2.1pre37-1.1) unstable; urgency=high
+
+  * Non-maintainer upload by the security team
+  * Make sure links cannot bypass the proxy, if it is configurered only
+    to use it in order to avoid leaking of sensitive information to
+    external programs, fix in session.c (Closes: #492744)
+    Fixes: CVE-2008-3329
+
+ -- Steffen Joeris <white@debian.org>  Sat, 02 Aug 2008 03:33:53 +0000
+
+links2 (2.1pre37-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Gürkan Sengün <gurkan@phys.ethz.ch>  Mon, 23 Jun 2008 12:57:39 +0200
+
+links2 (2.1pre36-1) unstable; urgency=low
+
+  * New upstream version.
+  * Fix config file name in manual page. (Closes: #471814)
+  * Fix some typos in manual page. (Closes: #461809)
+  * Remove bashism from debian/rules. (Closes: #478610)
+  * debian/control: Updated section.
+
+ -- Gürkan Sengün <gurkan@phys.ethz.ch>  Tue, 13 May 2008 11:17:09 +0200
+
+links2 (2.1pre35-1) unstable; urgency=low
+
+  * New upstream version.
+  * Updated my email address.
+
+ -- Gürkan Sengün <gurkan@phys.ethz.ch>  Mon, 05 May 2008 20:45:43 +0200
+
+links2 (2.1pre33-1) unstable; urgency=low
+
+  * New upstream version.
+  * Drop building the dummy links-ssl package.
+  * Update debian/copyright.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Sat, 09 Feb 2008 10:20:42 +0100
+
+links2 (2.1pre32-1) unstable; urgency=low
+
+  * New upstream version.
+  * Links now is built from this source as well. (Closes: #451744, #451087)
+  * debian/control: Bump standards version.
+  * debian/copyright: Reformatted.
+  * debian/rules: Add missing dh_desktop call.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Thu, 13 Dec 2007 11:03:56 +0100
+
+links2 (2.1pre31-1) unstable; urgency=low
+
+  * New upstream version.
+  * Applied patch for the xlinks2 wrapper to use exec, thanks Justin Pryzby.
+    (Closes: #428639)
+  * Added desktop file.
+  * Updated long description in debian/control. (Closes: #327382)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Tue, 30 Oct 2007 01:36:33 +0100
+
+links2 (2.1pre28-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Wed, 11 Apr 2007 21:17:10 +0200
+
+links2 (2.1pre27-1) unstable; urgency=low
+
+  * New upstream version.
+  * Bump standards version.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Wed, 11 Apr 2007 17:17:26 +0200
+
+links2 (2.1pre26-4) unstable; urgency=high
+
+  * Add another missing build depends to fix the X backend.
+    Thanks to Julien Cristau for the help.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Wed,  6 Dec 2006 14:52:09 +0100
+
+links2 (2.1pre26-3) unstable; urgency=high
+
+  * Add missing build depends to fix the X backend.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Wed,  6 Dec 2006 08:42:21 +0100
+
+links2 (2.1pre26-2) unstable; urgency=low
+
+  * Apply patch to fix finding of X header files. (Closes: #398642)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Fri,  1 Dec 2006 09:21:48 +0100
+
+links2 (2.1pre26-1) unstable; urgency=low
+
+  * New upstream version. Reenable smb:// support,
+    it got properly fixed by upstream.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Thu, 30 Nov 2006 09:47:56 +0100
+
+links2 (2.1pre25-2) unstable; urgency=high
+
+  * Disable smb:// support, fixes CVE-2006-5925.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Wed, 29 Nov 2006 09:58:31 +0100
+
+links2 (2.1pre25-1) unstable; urgency=medium
+
+  * New upstream version. (Closes: #398642)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Tue, 28 Nov 2006 08:03:35 +0100
+
+links2 (2.1pre24-1) unstable; urgency=low
+
+  * New upstream version. (Closes: #316261)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Mon, 13 Nov 2006 00:25:13 +0100
+
+links2 (2.1pre23-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Fri,  4 Aug 2006 10:17:51 +0200
+
+links2 (2.1pre22-1) unstable; urgency=low
+
+  * New upstream version.
+  * Bump standards version.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Tue, 30 May 2006 11:17:40 +0200
+
+links2 (2.1pre21-2) unstable; urgency=low
+
+  * Update debian/copyright. (Closes: #361772)
+  * Update build-depends for libdirectfb.
+  * Decrease update-alternatives points.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Fri, 21 Apr 2006 13:15:18 +0200
+
+links2 (2.1pre21-1) unstable; urgency=low
+
+  * New upstream version.
+    - Add libssl-dev to build depends. (Closes: #258301)
+  * Fixed URLs. (Closes: #359660)
+  * Rebuild (xlib transition), add libsdl1.2-dev to build
+    depends. (Closes: #351286)
+  * Removed type-handling from build-depends.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Sun,  2 Apr 2006 21:28:41 +0200
+
+links2 (2.1pre20-3) unstable; urgency=low
+
+  * Update build-depends. (closes: #346591)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Thu, 12 Jan 2006 10:16:23 +0100
+
+links2 (2.1pre20-2) unstable; urgency=low
+
+  * Applied patch to fix a rendering bug.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Tue, 27 Dec 2005 13:00:38 +0100
+
+links2 (2.1pre20-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Sat, 10 Dec 2005 16:57:42 +0100
+
+links2 (2.1pre19-1) unstable; urgency=low
+
+  * New upstream version.
+  * Use update-alternatives system. (closes: #334905)
+  * Added an xlinks2 wrapper. (closes: #261748)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Sun, 20 Nov 2005 14:25:00 +0100
+
+links2 (2.1pre18-2) unstable; urgency=low
+
+  * Fix build-depends. (Closes: #327494)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Thu, 15 Sep 2005 23:34:23 +0200
+
+links2 (2.1pre18-1) unstable; urgency=low
+
+  * New upstream version.
+  * Rebuild for the latest libdirectfb depends. (Closes: #326418)
+  * Bump standards version.
+  * Update build depends.
+  * Removed patch of #308470, since it's available for hurd-i386 now.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Sat,  3 Sep 2005 10:11:41 +0200
+
+links2 (2.1pre16-2) unstable; urgency=low
+
+  * Applied patch to fix FTBFS on hurd-i386. (Closes: #308470)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Tue, 10 May 2005 21:41:18 +0200
+
+links2 (2.1pre16-1) unstable; urgency=low
+
+  * New upstream version. (Closes: #267686)
+  * Fixed debian/copyright.
+  * Added support for libsvga1-dev (on i386 and amd64).
+  * Added libdirectfb-dev.
+  * Removed --without-svgalib from debian/rules.
+  * Updated debian/docs, added README.Debian about svgalib.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Mon, 24 Jan 2005 22:53:45 +0100
+
+links2 (2.1pre15-4) unstable; urgency=low
+
+  * Applied patch to fix FTBFS on kfreebsd-gnu. (Closes: #276592)
+  * Added www-browser provides.
+  * Added menu icon.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Sat, 22 Jan 2005 18:25:35 +0100
+
+links2 (2.1pre15-3) unstable; urgency=medium
+
+  * Updated for libtiff4-dev
+  * Changed config dir to (.)links2. (closes: #257887)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Sun,  1 Aug 2004 14:04:20 +0200
+
+links2 (2.1pre15-2) unstable; urgency=low
+
+  * Enable framebuffer support in debian/rules. (closes: #257378)
+  * Updated manual page. (closes: #257579)
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Wed,  7 Jul 2004 20:34:20 +0200
+
+links2 (2.1pre15-1) unstable; urgency=low
+
+  * Initial Release.
+
+ -- Gürkan Sengün <gurkan@linuks.mine.nu>  Tue,  4 May 2004 10:28:40 +0200

@@ -43,10 +43,68 @@ struct mp_processor_entry {
     uint32_t reserved1;
 } __attribute__((packed));
 
+struct acpi_rsdp1 {
+    char signature[8];
+    uint8_t checksum;
+    char oemid[6];
+    uint8_t revision;
+    uint32_t rsdt;
+} __attribute__((packed));
+
+struct acpi_rsdp {
+    struct acpi_rsdp1 first;
+    uint32_t length;
+    uint64_t xsdt;
+    uint8_t ext_checksum;
+    uint8_t reserved[3];
+} __attribute__((packed));
+
+struct acpi_table_header {
+    char signature[4];
+    uint32_t length;
+    uint8_t revision;
+    uint8_t checksum;
+    uint8_t oemid[6];
+    uint8_t oemtableid[8];
+    uint32_t oemrevision;
+    uint8_t aslcompilerid[4];
+    uint32_t aslcompilerrevision;
+} __attribute__((packed));
+
+struct acpi_madt {
+    struct acpi_table_header header;
+    uint32_t local_apic_address;
+    uint32_t flags;
+} __attribute__((packed));
+
+struct acpi_madt_lapic {
+    uint8_t type;
+    uint8_t length;
+    uint8_t acpi_processor_id;
+    uint8_t apic_id;
+    uint32_t flags;
+} __attribute__((packed));
+
+struct acpi_madt_x2apic {
+    uint8_t type;
+    uint8_t length;
+    uint16_t reserved;
+    uint32_t apic_id;
+    uint32_t flags;
+    uint32_t acpi_processor_uid;
+} __attribute__((packed));
+
+#define ACPI_MADT_TYPE_LAPIC 0u
+#define ACPI_MADT_TYPE_X2APIC 9u
+#define ACPI_MADT_ENABLED 0x00000001u
+
 static struct kernel_cpu_topology g_cpu_topology = {
-    1u, 0u, 0u, 0u, 1u, 1u, 0u, "unknown"
+    1u, 0u, 0u, 0u, 1u, 1u, 0u, 0u, 0u, 0u, 0u, 0u, "unknown"
 };
 static struct kernel_cpu_state g_cpu_states[32];
+static uint32_t g_cpu_has_pat = 0u;
+static uint32_t g_cpu_has_sse2 = 0u;
+static uint32_t g_cpu_sse_enabled = 0u;
 
 static int cpu_has_cpuid(void) {
     uint32_t before;
@@ -87,6 +145,32 @@ static void cpu_cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx
     if (edx) *edx = d;
 }
 
+static void cpu_try_enable_sse(void) {
+    uint32_t cr0;
+    uint32_t cr4;
+
+    if (!g_cpu_has_sse2) {
+        return;
+    }
+
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1u << 2); /* EM */
+    cr0 |= (1u << 1);  /* MP */
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1u << 9);  /* OSFXSR */
+    cr4 |= (1u << 10); /* OSXMMEXCPT */
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+
+    __asm__ volatile("fninit");
+    g_cpu_sse_enabled = 1u;
+}
+
+void kernel_cpu_enable_current_features(void) {
+    cpu_try_enable_sse();
+}
+
 static uint8_t cpu_checksum_ok(const void *ptr, size_t len) {
     const uint8_t *bytes = (const uint8_t *)ptr;
     uint8_t sum = 0u;
@@ -106,6 +190,15 @@ static uint16_t cpu_read_lowmem_u16(uint32_t addr) {
     return value;
 }
 
+static int cpu_signature_matches(const char *actual, const char *expected, size_t length) {
+    for (size_t i = 0; i < length; ++i) {
+        if (actual[i] != expected[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static const struct mp_floating_pointer *cpu_scan_mp_range(uintptr_t start, uintptr_t end) {
     for (uintptr_t addr = start; addr + sizeof(struct mp_floating_pointer) <= end; addr += 16u) {
         const struct mp_floating_pointer *mp = (const struct mp_floating_pointer *)addr;
@@ -123,6 +216,142 @@ static const struct mp_floating_pointer *cpu_scan_mp_range(uintptr_t start, uint
         }
     }
     return NULL;
+}
+
+static const struct acpi_rsdp1 *cpu_scan_rsdp_range(uintptr_t start, uintptr_t end) {
+    for (uintptr_t addr = start; addr + sizeof(struct acpi_rsdp1) <= end; addr += 16u) {
+        const struct acpi_rsdp1 *rsdp = (const struct acpi_rsdp1 *)addr;
+        if (!cpu_signature_matches(rsdp->signature, "RSD PTR ", 8u)) {
+            continue;
+        }
+        if (cpu_checksum_ok(rsdp, sizeof(struct acpi_rsdp1))) {
+            return rsdp;
+        }
+    }
+    return NULL;
+}
+
+static const struct acpi_rsdp *cpu_find_rsdp(void) {
+    uint16_t ebda_seg = cpu_read_lowmem_u16(0x40Eu);
+    uintptr_t ebda_addr = (uintptr_t)ebda_seg << 4;
+    const struct acpi_rsdp1 *rsdp1 = NULL;
+
+    if (ebda_addr >= 0x80000u && ebda_addr < 0xA0000u) {
+        rsdp1 = cpu_scan_rsdp_range(ebda_addr, ebda_addr + 1024u);
+    }
+    if (!rsdp1) {
+        rsdp1 = cpu_scan_rsdp_range(0xE0000u, 0x100000u);
+    }
+    if (!rsdp1) {
+        return NULL;
+    }
+
+    if (rsdp1->revision >= 2u) {
+        const struct acpi_rsdp *rsdp = (const struct acpi_rsdp *)rsdp1;
+        if (rsdp->length >= sizeof(struct acpi_rsdp1) &&
+            cpu_checksum_ok(rsdp, rsdp->length)) {
+            return rsdp;
+        }
+    }
+
+    return (const struct acpi_rsdp *)rsdp1;
+}
+
+static const struct acpi_table_header *cpu_acpi_table_header(uintptr_t physical_addr) {
+    if (physical_addr == 0u || physical_addr > 0xFFFFFFFFu) {
+        return NULL;
+    }
+    return (const struct acpi_table_header *)physical_addr;
+}
+
+static int cpu_acpi_table_valid(const struct acpi_table_header *header, const char *signature) {
+    if (!header) {
+        return 0;
+    }
+    if (!cpu_signature_matches(header->signature, signature, 4u)) {
+        return 0;
+    }
+    if (header->length < sizeof(struct acpi_table_header)) {
+        return 0;
+    }
+    return cpu_checksum_ok(header, header->length);
+}
+
+static const struct acpi_madt *cpu_find_acpi_madt(void) {
+    const struct acpi_rsdp *rsdp = cpu_find_rsdp();
+    const struct acpi_table_header *root_header = NULL;
+    uintptr_t entry_base = 0u;
+    uintptr_t entry_size = 0u;
+    uint32_t entry_count = 0u;
+
+    if (!rsdp) {
+        return NULL;
+    }
+
+    if (rsdp->first.revision >= 2u && rsdp->xsdt != 0u && rsdp->xsdt <= 0xFFFFFFFFu) {
+        root_header = cpu_acpi_table_header((uintptr_t)rsdp->xsdt);
+        if (!cpu_acpi_table_valid(root_header, "XSDT")) {
+            root_header = NULL;
+        } else {
+            entry_base = (uintptr_t)(root_header + 1);
+            entry_size = 8u;
+        }
+    }
+
+    if (!root_header && rsdp->first.rsdt != 0u) {
+        root_header = cpu_acpi_table_header((uintptr_t)rsdp->first.rsdt);
+        if (!cpu_acpi_table_valid(root_header, "RSDT")) {
+            root_header = NULL;
+        } else {
+            entry_base = (uintptr_t)(root_header + 1);
+            entry_size = 4u;
+        }
+    }
+
+    if (!root_header || entry_size == 0u || root_header->length < sizeof(struct acpi_table_header)) {
+        return NULL;
+    }
+
+    entry_count = (uint32_t)((root_header->length - sizeof(struct acpi_table_header)) / entry_size);
+    for (uint32_t i = 0; i < entry_count; ++i) {
+        uintptr_t table_addr;
+        const struct acpi_table_header *table;
+
+        if (entry_size == 8u) {
+            uint64_t addr64 = ((const uint64_t *)entry_base)[i];
+            if (addr64 == 0u || addr64 > 0xFFFFFFFFu) {
+                continue;
+            }
+            table_addr = (uintptr_t)addr64;
+        } else {
+            table_addr = (uintptr_t)((const uint32_t *)entry_base)[i];
+            if (table_addr == 0u) {
+                continue;
+            }
+        }
+
+        table = cpu_acpi_table_header(table_addr);
+        if (cpu_acpi_table_valid(table, "APIC")) {
+            return (const struct acpi_madt *)table;
+        }
+    }
+
+    return NULL;
+}
+
+static void cpu_promote_boot_cpu_to_index_zero(uint32_t cpu_count) {
+    for (uint32_t i = 0; i < cpu_count && i < 32u; ++i) {
+        if (g_cpu_states[i].is_boot_cpu) {
+            if (i != 0u) {
+                struct kernel_cpu_state tmp = g_cpu_states[0];
+                g_cpu_states[0] = g_cpu_states[i];
+                g_cpu_states[i] = tmp;
+                g_cpu_states[0].logical_index = 0u;
+                g_cpu_states[i].logical_index = i;
+            }
+            return;
+        }
+    }
 }
 
 static uint32_t cpu_detect_from_mp_table(uint32_t *boot_cpu_id_out) {
@@ -193,19 +422,92 @@ static uint32_t cpu_detect_from_mp_table(uint32_t *boot_cpu_id_out) {
         *boot_cpu_id_out = boot_cpu_id;
     }
     if (cpu_count > 1u) {
-        for (uint32_t i = 0; i < cpu_count && i < 32u; ++i) {
-            if (g_cpu_states[i].is_boot_cpu) {
-                if (i != 0u) {
-                    struct kernel_cpu_state tmp = g_cpu_states[0];
-                    g_cpu_states[0] = g_cpu_states[i];
-                    g_cpu_states[i] = tmp;
-                    g_cpu_states[0].logical_index = 0u;
-                    g_cpu_states[i].logical_index = i;
+        cpu_promote_boot_cpu_to_index_zero(cpu_count);
+    }
+    return cpu_count;
+}
+
+static uint32_t cpu_detect_from_acpi_madt(uint32_t *boot_cpu_id_out) {
+    const struct acpi_madt *madt = cpu_find_acpi_madt();
+    const uint8_t *ptr;
+    const uint8_t *end;
+    uint32_t cpu_count = 0u;
+    uint32_t boot_cpu_id = g_cpu_topology.boot_cpu_id;
+    int boot_cpu_found = 0;
+
+    if (!madt || madt->header.length < sizeof(struct acpi_madt)) {
+        return 0u;
+    }
+
+    ptr = (const uint8_t *)(madt + 1);
+    end = ((const uint8_t *)madt) + madt->header.length;
+    while (ptr + 2u <= end) {
+        uint8_t entry_type = ptr[0];
+        uint8_t entry_length = ptr[1];
+
+        if (entry_length < 2u || ptr + entry_length > end) {
+            return 0u;
+        }
+
+        if (entry_type == ACPI_MADT_TYPE_LAPIC && entry_length >= sizeof(struct acpi_madt_lapic)) {
+            const struct acpi_madt_lapic *lapic = (const struct acpi_madt_lapic *)ptr;
+            if ((lapic->flags & ACPI_MADT_ENABLED) != 0u) {
+                if (cpu_count < 32u) {
+                    g_cpu_states[cpu_count].logical_index = cpu_count;
+                    g_cpu_states[cpu_count].apic_id = lapic->apic_id;
+                    g_cpu_states[cpu_count].started = 0u;
+                    g_cpu_states[cpu_count].is_boot_cpu = (lapic->apic_id == boot_cpu_id) ? 1u : 0u;
                 }
-                break;
+                if (lapic->apic_id == boot_cpu_id) {
+                    boot_cpu_found = 1;
+                }
+                ++cpu_count;
+            }
+        } else if (entry_type == ACPI_MADT_TYPE_X2APIC && entry_length >= sizeof(struct acpi_madt_x2apic)) {
+            const struct acpi_madt_x2apic *x2apic = (const struct acpi_madt_x2apic *)ptr;
+            if ((x2apic->flags & ACPI_MADT_ENABLED) != 0u) {
+                if (x2apic->apic_id > 0xFFu) {
+                    kernel_debug_printf("cpu: ignoring x2apic id=%x beyond xAPIC destination mode\n",
+                                        (unsigned)x2apic->apic_id);
+                } else {
+                    if (cpu_count < 32u) {
+                        g_cpu_states[cpu_count].logical_index = cpu_count;
+                        g_cpu_states[cpu_count].apic_id = x2apic->apic_id;
+                        g_cpu_states[cpu_count].started = 0u;
+                        g_cpu_states[cpu_count].is_boot_cpu = (x2apic->apic_id == boot_cpu_id) ? 1u : 0u;
+                    }
+                    if (x2apic->apic_id == boot_cpu_id) {
+                        boot_cpu_found = 1;
+                    }
+                    ++cpu_count;
+                }
             }
         }
+
+        ptr += entry_length;
     }
+
+    if (cpu_count == 0u) {
+        return 0u;
+    }
+
+    if (!boot_cpu_found) {
+        boot_cpu_id = g_cpu_states[0].apic_id;
+        g_cpu_states[0].is_boot_cpu = 1u;
+    }
+
+    if (boot_cpu_id_out) {
+        *boot_cpu_id_out = boot_cpu_id;
+    }
+    if (cpu_count > 1u) {
+        cpu_promote_boot_cpu_to_index_zero(cpu_count);
+    }
+
+    kernel_debug_printf("cpu: ACPI MADT detected lapic=%x flags=%x cpus=%d bsp=%x\n",
+                        (unsigned)madt->local_apic_address,
+                        (unsigned)madt->flags,
+                        (int)cpu_count,
+                        (unsigned)boot_cpu_id);
     return cpu_count;
 }
 
@@ -223,7 +525,12 @@ void cpu_init(void) {
     g_cpu_topology.cpuid_supported = cpu_has_cpuid() ? 1u : 0u;
     g_cpu_topology.cpuid_logical_cpus = 1u;
     g_cpu_topology.cpuid_core_cpus = 1u;
+    g_cpu_topology.cpuid_family = 0u;
+    g_cpu_topology.cpuid_model = 0u;
+    g_cpu_topology.cpuid_stepping = 0u;
     g_cpu_topology.mp_table_present = 0u;
+    g_cpu_topology.acpi_madt_present = 0u;
+    g_cpu_topology.synthetic_apic_map = 0u;
     g_cpu_topology.vendor[0] = 'u';
     g_cpu_topology.vendor[1] = 'n';
     g_cpu_topology.vendor[2] = 'k';
@@ -247,9 +554,29 @@ void cpu_init(void) {
         g_cpu_topology.vendor[12] = '\0';
 
         if (eax >= 1u) {
+            uint32_t base_family;
+            uint32_t base_model;
+            uint32_t ext_family;
+            uint32_t ext_model;
+
             cpu_cpuid(1u, &eax, &ebx, &ecx, &edx);
             g_cpu_topology.apic_supported = ((edx & (1u << 9)) != 0u) ? 1u : 0u;
             g_cpu_topology.cpuid_logical_cpus = (ebx >> 16) & 0xFFu;
+            g_cpu_has_pat = ((edx >> 16) & 0x1u);
+            g_cpu_has_sse2 = ((edx >> 26) & 0x1u);
+            base_family = (eax >> 8) & 0xFu;
+            base_model = (eax >> 4) & 0xFu;
+            ext_family = (eax >> 20) & 0xFFu;
+            ext_model = (eax >> 16) & 0xFu;
+            g_cpu_topology.cpuid_stepping = eax & 0xFu;
+            g_cpu_topology.cpuid_family = base_family;
+            if (base_family == 0xFu) {
+                g_cpu_topology.cpuid_family += ext_family;
+            }
+            g_cpu_topology.cpuid_model = base_model;
+            if (base_family == 0x6u || base_family == 0xFu) {
+                g_cpu_topology.cpuid_model |= (ext_model << 4);
+            }
             if (g_cpu_topology.cpuid_logical_cpus == 0u) {
                 g_cpu_topology.cpuid_logical_cpus = 1u;
             }
@@ -275,13 +602,30 @@ void cpu_init(void) {
         }
     }
 
+    cpu_try_enable_sse();
+
     mp_cpu_count = cpu_detect_from_mp_table(&boot_cpu_id);
-    if (mp_cpu_count > 0u) {
+    if (mp_cpu_count > 1u) {
         g_cpu_topology.cpu_count = mp_cpu_count;
         g_cpu_topology.boot_cpu_id = boot_cpu_id;
         g_cpu_topology.mp_table_present = 1u;
-    } else if (g_cpu_topology.cpuid_core_cpus > 1u) {
-        g_cpu_topology.cpu_count = g_cpu_topology.cpuid_core_cpus;
+    } else {
+        uint32_t madt_cpu_count = cpu_detect_from_acpi_madt(&boot_cpu_id);
+        if (madt_cpu_count > 1u) {
+            g_cpu_topology.cpu_count = madt_cpu_count;
+            g_cpu_topology.boot_cpu_id = boot_cpu_id;
+            g_cpu_topology.acpi_madt_present = 1u;
+        } else if (g_cpu_topology.cpuid_core_cpus > 1u) {
+            g_cpu_topology.cpu_count = g_cpu_topology.cpuid_core_cpus;
+            if (g_cpu_topology.apic_supported) {
+                g_cpu_topology.synthetic_apic_map = 1u;
+            }
+            if (mp_cpu_count == 1u) {
+                kernel_debug_puts("cpu: MP table exposed only one processor entry; promoting CPUID logical topology for SMP bring-up\n");
+            } else {
+                kernel_debug_puts("cpu: no usable MP table/MADT; promoting CPUID logical topology for SMP bring-up\n");
+            }
+        }
     }
     if (g_cpu_topology.cpu_count > 32u) {
         g_cpu_topology.cpu_count = 32u;
@@ -291,24 +635,37 @@ void cpu_init(void) {
     g_cpu_states[0].is_boot_cpu = 1u;
     for (uint32_t i = 1; i < g_cpu_topology.cpu_count; ++i) {
         g_cpu_states[i].started = 0u;
-        g_cpu_states[i].apic_id = i;
         g_cpu_states[i].is_boot_cpu = 0u;
+        if (!g_cpu_topology.mp_table_present && !g_cpu_topology.acpi_madt_present) {
+            g_cpu_states[i].apic_id = i;
+        }
     }
 
-    kernel_debug_printf("cpu: vendor=%s cpuid=%d apic=%d logical=%d cores=%d detected=%d bsp=%d mp=%d\n",
+    kernel_debug_printf("cpu: vendor=%s cpuid=%d family=%d model=%d stepping=%d apic=%d logical=%d cores=%d detected=%d bsp=%d mp=%d madt=%d synth=%d\n",
                         g_cpu_topology.vendor,
                         (int)g_cpu_topology.cpuid_supported,
+                        (int)g_cpu_topology.cpuid_family,
+                        (int)g_cpu_topology.cpuid_model,
+                        (int)g_cpu_topology.cpuid_stepping,
                         (int)g_cpu_topology.apic_supported,
                         (int)g_cpu_topology.cpuid_logical_cpus,
                         (int)g_cpu_topology.cpuid_core_cpus,
                         (int)g_cpu_topology.cpu_count,
                         (int)g_cpu_topology.boot_cpu_id,
-                        (int)g_cpu_topology.mp_table_present);
-    if (g_cpu_topology.cpu_count > 1u && mp_cpu_count == 0u) {
-        kernel_debug_puts("cpu: multiple CPUs detected via CPUID, but no MP table was found; reporting topology while keeping BSP-only bring-up\n");
+                        (int)g_cpu_topology.mp_table_present,
+                        (int)g_cpu_topology.acpi_madt_present,
+                        (int)g_cpu_topology.synthetic_apic_map);
+    if (g_cpu_topology.cpu_count > 1u && g_cpu_topology.synthetic_apic_map) {
+        kernel_debug_puts("cpu: SMP bring-up will use a synthetic APIC-id map derived from CPUID logical topology\n");
+    } else if (g_cpu_topology.cpu_count > 1u && g_cpu_topology.acpi_madt_present) {
+        kernel_debug_puts("cpu: ACPI MADT detected; LAPIC/SMP bring-up allowed\n");
     } else if (g_cpu_topology.cpu_count > 1u) {
         kernel_debug_puts("cpu: MP table detected; LAPIC/SMP bring-up allowed\n");
     }
+    kernel_debug_printf("cpu: pat=%d sse2=%d sse=%d\n",
+                        (int)g_cpu_has_pat,
+                        (int)g_cpu_has_sse2,
+                        (int)g_cpu_sse_enabled);
 }
 
 void gdt_init(void) {
@@ -349,7 +706,9 @@ uint32_t kernel_cpu_index(void) {
 int kernel_cpu_is_smp_capable(void) {
     return g_cpu_topology.cpu_count > 1u &&
            g_cpu_topology.apic_supported &&
-           g_cpu_topology.mp_table_present;
+           (g_cpu_topology.mp_table_present ||
+            g_cpu_topology.acpi_madt_present ||
+            g_cpu_topology.synthetic_apic_map);
 }
 
 int kernel_cpu_mark_started(uint32_t apic_id) {
@@ -360,4 +719,16 @@ int kernel_cpu_mark_started(uint32_t apic_id) {
         }
     }
     return -1;
+}
+
+int kernel_cpu_has_pat(void) {
+    return g_cpu_has_pat != 0u;
+}
+
+int kernel_cpu_has_sse2(void) {
+    return g_cpu_has_sse2 != 0u;
+}
+
+int kernel_cpu_sse_enabled(void) {
+    return g_cpu_sse_enabled != 0u;
 }

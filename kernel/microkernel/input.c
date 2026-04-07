@@ -2,6 +2,7 @@
 #include <kernel/drivers/input/input.h>
 #include <kernel/kernel_string.h>
 #include <kernel/microkernel/input.h>
+#include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/microkernel/transfer.h>
@@ -9,40 +10,22 @@
 #include <kernel/userland_service.h>
 
 static uint32_t mk_input_current_pid(void) {
+    return scheduler_current_pid();
+}
+
+static int mk_input_current_process_is_service_worker(void) {
     process_t *current = scheduler_current();
 
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return current != 0 && current->service_type == MK_SERVICE_INPUT;
 }
 
 static int g_input_service_transport_degraded = 0;
 
+static int mk_input_current_allows_local_fallback(void) {
+    return 0;
+}
+
 static int mk_input_should_use_local_fallback(void) {
-    const struct mk_service_record *service = mk_service_find_by_type(MK_SERVICE_INPUT);
-
-    if (service == 0) {
-        return 1;
-    }
-    if (service->process == 0 || service->pid <= 0) {
-        return 1;
-    }
-
-    if (g_input_service_transport_degraded ||
-        service->transport_degraded != 0u ||
-        !mk_service_is_online(MK_SERVICE_INPUT)) {
-        if (mk_service_ensure(MK_SERVICE_INPUT) != 0) {
-            return 1;
-        }
-        service = mk_service_find_by_type(MK_SERVICE_INPUT);
-        if (service == 0 ||
-            service->process == 0 ||
-            service->pid <= 0 ||
-            service->transport_degraded != 0u ||
-            !mk_service_is_online(MK_SERVICE_INPUT)) {
-            return 1;
-        }
-        g_input_service_transport_degraded = 0;
-    }
-
     return 0;
 }
 
@@ -141,6 +124,56 @@ static int mk_input_decode_mouse(const struct mk_message *reply,
     return payload.value;
 }
 
+static int mk_input_reply_event(struct mk_message *reply,
+                                int value,
+                                const struct input_event *event) {
+    struct mk_input_event_reply payload;
+
+    payload.value = value;
+    memset(&payload.event, 0, sizeof(payload.event));
+    if (event != 0) {
+        payload.event = *event;
+    }
+    return mk_message_set_payload(reply, &payload, sizeof(payload));
+}
+
+static int mk_input_decode_event(const struct mk_message *reply,
+                                 struct input_event *event) {
+    struct mk_input_event_reply payload;
+
+    if (reply == 0 || event == 0 || reply->payload_size != sizeof(payload)) {
+        return -1;
+    }
+
+    memcpy(&payload, reply->payload, sizeof(payload));
+    *event = payload.event;
+    return payload.value;
+}
+
+static int mk_input_copy_kernel_buffer_request(uint32_t type, char *buffer, int size) {
+    if (buffer == 0 || size <= 0) {
+        return -1;
+    }
+
+    if (type == MK_MSG_INPUT_GET_LAYOUT) {
+        const char *name = kernel_keyboard_get_layout();
+        int length = (int)strlen(name);
+
+        if (size <= length) {
+            return 0;
+        }
+        memcpy(buffer, name, (size_t)length + 1u);
+        return length;
+    }
+
+    if (type == MK_MSG_INPUT_GET_AVAILABLE_LAYOUTS) {
+        kernel_keyboard_get_available_layouts(buffer, size);
+        return 0;
+    }
+
+    return -1;
+}
+
 static int mk_input_local_handler(const struct mk_message *request,
                                   struct mk_message *reply,
                                   void *context) {
@@ -154,34 +187,40 @@ static int mk_input_local_handler(const struct mk_message *request,
     reply->target_pid = request->source_pid;
 
     switch (request->type) {
-    case MK_MSG_INPUT_MOUSE_POLL: {
-        struct mouse_state state;
-        int x;
-        int y;
-        int dx;
-        int dy;
-        uint8_t buttons;
+    case MK_MSG_INPUT_EVENT: {
+        struct input_event event;
 
         if (request->payload_size != 0u) {
             return -1;
         }
-        if (!kernel_mouse_has_data()) {
+        if (!kernel_input_event_dequeue(&event)) {
+            return mk_input_reply_event(reply, 0, 0);
+        }
+        return mk_input_reply_event(reply, 1, &event);
+    }
+    case MK_MSG_INPUT_MOUSE_POLL: {
+        struct mouse_state state;
+
+        if (request->payload_size != 0u) {
+            return -1;
+        }
+        if (!kernel_input_mouse_event_dequeue(&state)) {
             return mk_input_reply_mouse(reply, 0, 0);
         }
-
-        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
-        state.x = x;
-        state.y = y;
-        state.dx = dx;
-        state.dy = dy;
-        state.buttons = buttons;
         return mk_input_reply_mouse(reply, 1, &state);
     }
     case MK_MSG_INPUT_KEY_READ:
         if (request->payload_size != 0u) {
             return -1;
         }
-        return mk_input_reply_result(reply, kernel_keyboard_read());
+        {
+            int key = 0;
+
+            if (kernel_input_key_event_dequeue(&key) != 0) {
+                return mk_input_reply_result(reply, key);
+            }
+        }
+        return mk_input_reply_result(reply, -1);
     case MK_MSG_INPUT_SET_LAYOUT: {
         const struct mk_input_layout_set_request *payload;
         char *name;
@@ -240,54 +279,84 @@ void mk_input_service_init(void) {
                                  "input",
                                  mk_input_local_handler,
                                  0,
-                                 userland_service_entry,
+                                 userland_input_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |
                                  MK_LAUNCH_FLAG_CRITICAL);
 }
 
+int mk_input_service_next_event(struct input_event *event) {
+    struct mk_message request;
+    struct mk_message reply;
+    int allow_local_fallback;
+
+    if (event == 0) {
+        return 0;
+    }
+    if (mk_input_current_process_is_service_worker()) {
+        return kernel_input_event_dequeue(event);
+    }
+    allow_local_fallback = mk_input_current_allows_local_fallback();
+    if ((allow_local_fallback && mk_input_should_use_local_fallback()) ||
+        mk_input_prepare_request(&request, MK_MSG_INPUT_EVENT, 0, 0u) != 0) {
+        g_input_service_transport_degraded = 1;
+        if (allow_local_fallback) {
+            return kernel_input_event_dequeue(event);
+        }
+        memset(event, 0, sizeof(*event));
+        return 0;
+    }
+    if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
+        g_input_service_transport_degraded = 1;
+        if (allow_local_fallback) {
+            return kernel_input_event_dequeue(event);
+        }
+        memset(event, 0, sizeof(*event));
+        return 0;
+    }
+    g_input_service_transport_degraded = 0;
+    return mk_input_decode_event(&reply, event);
+}
+
 int mk_input_service_poll_mouse(struct mouse_state *state) {
     struct mk_message request;
     struct mk_message reply;
+    int allow_local_fallback;
     int rc;
-    int x;
-    int y;
-    int dx;
-    int dy;
-    uint8_t buttons;
 
     if (state == 0) {
         return 0;
     }
-    if (mk_input_should_use_local_fallback() ||
+    if (mk_input_current_process_is_service_worker()) {
+        return kernel_input_mouse_event_dequeue(state);
+    }
+    allow_local_fallback = mk_input_current_allows_local_fallback();
+    if ((allow_local_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_MOUSE_POLL, 0, 0u) != 0) {
-        if (!kernel_mouse_has_data()) {
-            memset(state, 0, sizeof(*state));
-            return 0;
+        g_input_service_transport_degraded = 1;
+        if (allow_local_fallback) {
+            if (!kernel_input_mouse_event_dequeue(state)) {
+                memset(state, 0, sizeof(*state));
+                return 0;
+            }
+            return 1;
         }
-        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
-        state->x = x;
-        state->y = y;
-        state->dx = dx;
-        state->dy = dy;
-        state->buttons = buttons;
-        return 1;
+        memset(state, 0, sizeof(*state));
+        return 0;
     }
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
-        if (!kernel_mouse_has_data()) {
-            memset(state, 0, sizeof(*state));
-            return 0;
+        if (allow_local_fallback) {
+            if (!kernel_input_mouse_event_dequeue(state)) {
+                memset(state, 0, sizeof(*state));
+                return 0;
+            }
+            return 1;
         }
-        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
-        state->x = x;
-        state->y = y;
-        state->dx = dx;
-        state->dy = dy;
-        state->buttons = buttons;
-        return 1;
+        memset(state, 0, sizeof(*state));
+        return 0;
     }
     g_input_service_transport_degraded = 0;
     return mk_input_decode_mouse(&reply, state);
@@ -296,16 +365,33 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
 int mk_input_service_read_key(void) {
     struct mk_message request;
     struct mk_message reply;
+    int allow_local_fallback;
     int rc;
+    int key = -1;
 
-    if (mk_input_should_use_local_fallback() ||
+    if (mk_input_current_process_is_service_worker()) {
+        if (kernel_input_key_event_dequeue(&key) != 0) {
+            return key;
+        }
+        return -1;
+    }
+
+    allow_local_fallback = mk_input_current_allows_local_fallback();
+    if ((allow_local_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_KEY_READ, 0, 0u) != 0) {
-        return kernel_keyboard_read();
+        g_input_service_transport_degraded = 1;
+        if (allow_local_fallback && kernel_input_key_event_dequeue(&key) != 0) {
+            return key;
+        }
+        return -1;
     }
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
-        return kernel_keyboard_read();
+        if (allow_local_fallback && kernel_input_key_event_dequeue(&key) != 0) {
+            return key;
+        }
+        return -1;
     }
     g_input_service_transport_degraded = 0;
     return mk_input_decode_result(&reply);
@@ -317,9 +403,13 @@ int mk_input_service_set_layout(const char *name) {
     struct mk_input_layout_set_request payload;
     uint32_t transfer_id;
     uint32_t length;
+    int allow_local_fallback;
 
     if (name == 0) {
         return -1;
+    }
+    if (mk_input_current_process_is_service_worker()) {
+        return kernel_keyboard_set_layout(name);
     }
     length = (uint32_t)strlen(name);
     if (mk_transfer_create(mk_input_current_pid(), length + 1u, &transfer_id) != 0) {
@@ -336,15 +426,23 @@ int mk_input_service_set_layout(const char *name) {
 
     payload.name_length = length;
     payload.transfer_id = transfer_id;
-    if (mk_input_should_use_local_fallback() ||
+    allow_local_fallback = mk_input_current_allows_local_fallback();
+    if ((allow_local_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_SET_LAYOUT, &payload, sizeof(payload)) != 0) {
+        g_input_service_transport_degraded = 1;
         (void)mk_transfer_destroy(transfer_id);
-        return kernel_keyboard_set_layout(name);
+        if (allow_local_fallback) {
+            return kernel_keyboard_set_layout(name);
+        }
+        return -1;
     }
     if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
         g_input_service_transport_degraded = 1;
         (void)mk_transfer_destroy(transfer_id);
-        return kernel_keyboard_set_layout(name);
+        if (allow_local_fallback) {
+            return kernel_keyboard_set_layout(name);
+        }
+        return -1;
     }
     g_input_service_transport_degraded = 0;
     (void)mk_transfer_destroy(transfer_id);
@@ -356,10 +454,14 @@ static int mk_input_service_fill_buffer_request(uint32_t type, char *buffer, int
     struct mk_message reply;
     struct mk_input_transfer_request payload;
     uint32_t transfer_id;
+    int allow_local_fallback;
     int rc;
 
     if (buffer == 0 || size <= 0) {
         return -1;
+    }
+    if (mk_input_current_process_is_service_worker()) {
+        return mk_input_copy_kernel_buffer_request(type, buffer, size);
     }
     if (mk_transfer_create(mk_input_current_pid(), (uint32_t)size, &transfer_id) != 0) {
         return -1;
@@ -371,37 +473,23 @@ static int mk_input_service_fill_buffer_request(uint32_t type, char *buffer, int
 
     payload.buffer_size = (uint32_t)size;
     payload.transfer_id = transfer_id;
-    if (mk_input_should_use_local_fallback() ||
+    allow_local_fallback = mk_input_current_allows_local_fallback();
+    if ((allow_local_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, type, &payload, sizeof(payload)) != 0) {
+        g_input_service_transport_degraded = 1;
         (void)mk_transfer_destroy(transfer_id);
-        if (type == MK_MSG_INPUT_GET_LAYOUT) {
-            const char *name = kernel_keyboard_get_layout();
-            int length = (int)strlen(name);
-
-            if (size <= length) {
-                return 0;
-            }
-            memcpy(buffer, name, (size_t)length + 1u);
-            return length;
+        if (allow_local_fallback) {
+            return mk_input_copy_kernel_buffer_request(type, buffer, size);
         }
-        kernel_keyboard_get_available_layouts(buffer, size);
-        return 0;
+        return -1;
     }
     if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
         g_input_service_transport_degraded = 1;
         (void)mk_transfer_destroy(transfer_id);
-        if (type == MK_MSG_INPUT_GET_LAYOUT) {
-            const char *name = kernel_keyboard_get_layout();
-            int length = (int)strlen(name);
-
-            if (size <= length) {
-                return 0;
-            }
-            memcpy(buffer, name, (size_t)length + 1u);
-            return length;
+        if (allow_local_fallback) {
+            return mk_input_copy_kernel_buffer_request(type, buffer, size);
         }
-        kernel_keyboard_get_available_layouts(buffer, size);
-        return 0;
+        return -1;
     }
 
     g_input_service_transport_degraded = 0;

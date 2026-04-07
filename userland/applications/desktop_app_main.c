@@ -2,6 +2,7 @@
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/ui.h>
+#include <userland/modules/include/utils.h>
 
 void kernel_debug_puts(const char *msg) {
     (void)msg;
@@ -62,6 +63,9 @@ static enum app_type desktop_app_type(const char *app_name) {
     if (str_eq(app_name, "imageviewer")) {
         return APP_IMAGEVIEWER;
     }
+    if (str_eq(app_name, "audioplayer")) {
+        return APP_AUDIO_PLAYER;
+    }
     if (str_eq(app_name, "personalize")) {
         return APP_PERSONALIZE;
     }
@@ -107,9 +111,12 @@ int vibe_app_main(int argc, char **argv) {
     const char *app_name = desktop_app_name(argc, argv);
 
     desktop_app_debug_launch(app_name);
-    console_init();
+    sys_write_debug("desktop.app: fs init\n");
     fs_init();
+    sys_write_debug("desktop.app: prepare launch\n");
     desktop_prepare_launch(argc, argv);
+    sys_write_debug("desktop.app: enter desktop_main\n");
     desktop_main();
+    sys_write_debug("desktop.app: desktop_main returned\n");
     return 0;
 }

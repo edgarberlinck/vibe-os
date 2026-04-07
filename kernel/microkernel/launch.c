@@ -30,11 +30,15 @@ int mk_launch_validate_descriptor(const struct mk_launch_descriptor *descriptor)
         return -1;
     }
     if (descriptor->kind != MK_LAUNCH_KIND_DRIVER &&
-        descriptor->kind != MK_LAUNCH_KIND_SERVICE) {
+        descriptor->kind != MK_LAUNCH_KIND_SERVICE &&
+        descriptor->kind != MK_LAUNCH_KIND_USER) {
         return -1;
     }
     if (descriptor->kind == MK_LAUNCH_KIND_SERVICE &&
         descriptor->service_type == MK_SERVICE_NONE) {
+        return -1;
+    }
+    if (descriptor->task_class > MK_TASK_CLASS_VIDEO_CONTROL) {
         return -1;
     }
     if (descriptor->stack_size != 0u && descriptor->stack_size < 1024u) {
@@ -73,8 +77,11 @@ static void mk_launch_fill_context(struct mk_launch_context *context,
     context->kind = descriptor->kind;
     context->service_type = descriptor->service_type;
     context->flags = descriptor->flags;
+    context->task_class = process->task_class;
+    context->argc = descriptor->argc;
     strncpy(context->name, descriptor->name, MK_LAUNCH_NAME_MAX - 1u);
     context->name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
+    memcpy(context->argv_data, descriptor->argv_data, sizeof(context->argv_data));
 
     bootinfo = (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
     if (bootinfo->magic != BOOTINFO_MAGIC || bootinfo->version != BOOTINFO_VERSION) {
@@ -108,6 +115,8 @@ int mk_launch_bootstrap(const struct mk_launch_descriptor *descriptor) {
     process = process_create_with_stack(descriptor->entry,
                                         process_kind,
                                         descriptor->service_type,
+                                        descriptor->flags,
+                                        descriptor->task_class,
                                         descriptor->stack_size == 0u
                                             ? MK_LAUNCH_STACK_SIZE_DEFAULT
                                             : descriptor->stack_size);
@@ -121,10 +130,10 @@ int mk_launch_bootstrap(const struct mk_launch_descriptor *descriptor) {
         return -1;
     }
 
-    scheduler_add_task(process);
     record->pid = process->pid;
     record->process = process;
     mk_launch_fill_context(&record->context, descriptor, process);
+    scheduler_add_task(process);
     return process->pid;
 }
 

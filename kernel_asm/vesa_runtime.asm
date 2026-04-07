@@ -39,6 +39,7 @@ kernel_video_bios_set_mode:
     mov dx, [esp + 4]
     mov [requested_mode], dx
     mov dword [switch_result], 0xFFFFFFFF
+    sidt [saved_idtr]
     pushad
     mov [saved_stack], esp
     mov eax, cr0
@@ -68,6 +69,8 @@ realmode_apply_video_change:
     mov sp, REALMODE_STACK_TOP
     xor ax, ax
     mov es, ax
+    cld
+    lidt [RM_OFF(realmode_idtr)]
 
     mov dx, [RM_OFF(requested_mode)]
     call vesa_set_mode_and_store_bootinfo
@@ -500,6 +503,7 @@ pmode_video_resume:
     mov fs, ax
     mov gs, ax
     mov ss, ax
+    lidt [saved_idtr]
     mov esp, [saved_stack]
     mov eax, [switch_result]
     mov [esp + 28], eax
@@ -512,3 +516,9 @@ align 4
 saved_cr0 dd 0
 saved_stack dd 0
 switch_result dd 0xFFFFFFFF
+saved_idtr:
+    dw 0
+    dd 0
+realmode_idtr:
+    dw 0x03FF
+    dd 0x00000000

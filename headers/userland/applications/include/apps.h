@@ -24,7 +24,7 @@ enum app_type {
     APP_DOOM,
     APP_CRAFT,
     APP_IMAGEVIEWER,
-    APP_BROWSER,
+    APP_AUDIO_PLAYER,
     APP_PERSONALIZE,
     APP_TRASH,
 };
@@ -48,7 +48,7 @@ enum app_type {
 #define MAX_DOOM 1
 #define MAX_CRAFT 1
 #define MAX_IMAGEVIEWERS 1
-#define MAX_BROWSERS 1
+#define MAX_AUDIO_PLAYERS 1
 
 /* generic window descriptor used by desktop_main and task manager */
 struct window {

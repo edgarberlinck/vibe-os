@@ -6,6 +6,7 @@
 #define BLOCK_DEVICE_MBR_PARTITION_OFFSET 446u
 #define BLOCK_DEVICE_MBR_SIGNATURE_OFFSET 510u
 #define BLOCK_DEVICE_STORAGE_PARTITION_INDEX 1u
+#define BLOCK_DEVICE_IO_RETRIES 3u
 
 struct kernel_block_device {
     const char *name;
@@ -161,9 +162,16 @@ int kernel_storage_read_sectors(uint32_t lba, void *dst, uint32_t sector_count) 
     }
 
     for (uint32_t i = 0; i < sector_count; ++i) {
-        if (g_primary_block_device.read_sector(g_primary_block_device.context,
-                                               lba + i,
-                                               out + (i * KERNEL_PERSIST_SECTOR_SIZE)) != 0) {
+        int ok = 0;
+        for (uint32_t attempt = 0; attempt < BLOCK_DEVICE_IO_RETRIES; ++attempt) {
+            if (g_primary_block_device.read_sector(g_primary_block_device.context,
+                                                   lba + i,
+                                                   out + (i * KERNEL_PERSIST_SECTOR_SIZE)) == 0) {
+                ok = 1;
+                break;
+            }
+        }
+        if (!ok) {
             return -1;
         }
     }
@@ -179,9 +187,16 @@ int kernel_storage_write_sectors(uint32_t lba, const void *src, uint32_t sector_
     }
 
     for (uint32_t i = 0; i < sector_count; ++i) {
-        if (g_primary_block_device.write_sector(g_primary_block_device.context,
-                                                lba + i,
-                                                in + (i * KERNEL_PERSIST_SECTOR_SIZE)) != 0) {
+        int ok = 0;
+        for (uint32_t attempt = 0; attempt < BLOCK_DEVICE_IO_RETRIES; ++attempt) {
+            if (g_primary_block_device.write_sector(g_primary_block_device.context,
+                                                    lba + i,
+                                                    in + (i * KERNEL_PERSIST_SECTOR_SIZE)) == 0) {
+                ok = 1;
+                break;
+            }
+        }
+        if (!ok) {
             return -1;
         }
     }

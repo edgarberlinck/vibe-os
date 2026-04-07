@@ -1,0 +1,7 @@
+#!/usr/bin/dh-exec
+usr/bin/links2
+debian/xlinks2 usr/bin
+debian/x-terminal-emulator-which-properly-handles-dash-e usr/share/links2
+debian/links2.desktop usr/share/applications
+links_32x32.xpm => usr/share/pixmaps/links2.xpm
+doc/links_cal/* usr/share/links2

@@ -1,0 +1,12 @@
+%YAML 1.1
+---
+# https://wiki.debian.org/UpstreamMetadata
+Contact: links-list@lists.linuxfromscratch.org
+Security-Contact: Mikulas Patocka <mikulas@twibright.com>
+Name: Links
+Homepage: http://links.twibright.com/
+Bug-Submit: http://links.twibright.com/development.php
+Donation: http://links.twibright.com/development.php
+Funding: http://links.twibright.com/development.php
+Screenshots: http://links.twibright.com/features.php
+Changelog: https://wiki.debian.org/UpstreamMetadata

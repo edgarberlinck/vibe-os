@@ -6,6 +6,9 @@ ORG 0x9000
 %define PMODE_FAULT_STACK_TOP 0x6F000
 %define BACKGROUND_LOAD_SEG 0x8000
 %define BACKGROUND_DRAW_ADDR 0x00080000
+%define BOOT_AUDIO_LOAD_SEG 0x8800
+%define BOOT_AUDIO_LOAD_ADDR 0x00088000
+%define BOOT_AUDIO_BUFFER_CAP 16384
 %define BACKGROUND_SOURCE_WIDTH 192
 %define BACKGROUND_SOURCE_HEIGHT 144
 %define BACKGROUND_DRAW_BYTES (BACKGROUND_SOURCE_WIDTH * BACKGROUND_SOURCE_HEIGHT)
@@ -23,6 +26,9 @@ ORG 0x9000
 %define BOOTINFO_FLAG_BOOT_TO_DESKTOP 0x00010000
 %define BOOTINFO_FLAG_BOOT_SAFE_MODE 0x00020000
 %define BOOTINFO_FLAG_BOOT_RESCUE_SHELL 0x00040000
+%define BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT 0x00100000
+%define BOOTINFO_FLAG_FORCE_LEGACY_VIDEO 0x00200000
+%define BOOTINFO_FLAG_EXPERIMENTAL_SMP 0x00400000
 %define BOOTINFO_FLAG_BOOT_MODE_MASK (BOOTINFO_FLAG_BOOT_TO_DESKTOP | BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)
 %define BOOTINFO_VESA_MODE 16
 %define BOOTINFO_VESA_FB 20
@@ -51,6 +57,14 @@ ORG 0x9000
 %define BOOTINFO_VIDEO_INDEX_NONE 0xFF
 %define ROOT_NAME_LEN 11
 
+%ifndef BOOT_PREFERRED_VIDEO_WIDTH
+%define BOOT_PREFERRED_VIDEO_WIDTH 0
+%endif
+
+%ifndef BOOT_PREFERRED_VIDEO_HEIGHT
+%define BOOT_PREFERRED_VIDEO_HEIGHT 0
+%endif
+
 %define CODE_SEG 0x08
 %define DATA_SEG 0x10
 %define CODE16_SEG 0x18
@@ -58,10 +72,13 @@ ORG 0x9000
 
 %define FAT32_END_OF_CHAIN 0x0FFFFFF8
 %define VBE_LFB_ENABLE 0x4000
-%define MENU_ENTRY_COUNT 3
+%define MENU_ENTRY_COUNT 4
 %define MENU_TIMEOUT_SECONDS 5
 %define PIT_COUNTS_PER_SECOND 1193182
 %define MENU_TIMEOUT_COUNTS (PIT_COUNTS_PER_SECOND * MENU_TIMEOUT_SECONDS)
+%define BOOT_AUDIO_SAMPLE_RATE 4000
+%define BOOT_AUDIO_SAMPLE_COUNTS ((PIT_COUNTS_PER_SECOND + (BOOT_AUDIO_SAMPLE_RATE / 2)) / BOOT_AUDIO_SAMPLE_RATE)
+%define BOOT_AUDIO_PWM_COUNTS (BOOT_AUDIO_SAMPLE_COUNTS - 2)
 %define GRAPHICS_MIN_FB_ADDR 0x00100000
 %define GRAPHICS_MAX_WIDTH 4096
 %define GRAPHICS_MAX_HEIGHT 2160
@@ -127,25 +144,21 @@ stage2_entry:
     mov ss, ax
     mov sp, REALMODE_STACK_TOP
     cld
-    mov ax, 0x0003
-    int 0x10
     call init_bootinfo
     call debug_log_reset
     call a20_debug_reset
 
     DEBUG_BOOT_CHAR '2'
-    call print_char
     mov [boot_drive], dl
     call parse_bpb
 
     DEBUG_BOOT_CHAR 'F'
-    call print_char
     call load_optional_background
+    DEBUG_BOOT_CHAR 'A'
+    call load_optional_boot_audio
     DEBUG_BOOT_CHAR 'V'
-    call print_char
     call detect_vesa_modes
     DEBUG_BOOT_CHAR 'B'
-    call print_char
     call detect_memory
     call populate_legacy_vesa_info
     call enable_a20
@@ -165,8 +178,6 @@ stage2_entry:
 .a20_ready:
 
     DEBUG_CHAR 'P'
-    mov al, 'P'
-    call print_char
     lgdt [gdt_descriptor]
     mov eax, cr0
     or eax, 1
@@ -484,6 +495,29 @@ load_optional_background:
     clc
     ret
 
+load_optional_boot_audio:
+    mov byte [boot_audio_available], 0
+    mov dword [boot_audio_size], 0
+    mov si, boot_audio_name
+    call find_root_entry
+    jc .done
+
+    mov eax, [file_size]
+    cmp eax, 1
+    jb .done
+    cmp eax, BOOT_AUDIO_BUFFER_CAP
+    ja .done
+
+    mov [boot_audio_size], eax
+    mov word [load_segment], BOOT_AUDIO_LOAD_SEG
+    call load_file_to_memory
+    jc .done
+
+    mov byte [boot_audio_available], 1
+.done:
+    clc
+    ret
+
 load_kernel_file:
     mov si, kernel_name
     call find_root_entry
@@ -794,6 +828,41 @@ catalog_find_mode_index_by_mode:
     pop bx
     ret
 
+catalog_find_mode_index_by_dimensions:
+    push bx
+    push cx
+    push di
+
+    xor cx, cx
+    mov cl, [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODE_COUNT]
+    xor bx, bx
+.loop:
+    cmp bx, cx
+    jae .not_found
+    mov di, bx
+    shl di, 3
+    add di, BOOTINFO_ADDR + BOOTINFO_VIDEO_MODES
+    cmp [di + BOOTINFO_VIDEO_MODE_FIELD_WIDTH], ax
+    jne .next
+    cmp [di + BOOTINFO_VIDEO_MODE_FIELD_HEIGHT], dx
+    je .found
+.next:
+    inc bx
+    jmp .loop
+
+.found:
+    mov al, bl
+    jmp .done
+
+.not_found:
+    mov al, BOOTINFO_VIDEO_INDEX_NONE
+
+.done:
+    pop di
+    pop cx
+    pop bx
+    ret
+
 catalog_finalize_selection:
     mov byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_ACTIVE_INDEX], BOOTINFO_VIDEO_INDEX_NONE
     mov byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX], BOOTINFO_VIDEO_INDEX_NONE
@@ -812,12 +881,19 @@ catalog_finalize_selection:
     ret
 
 .select_default:
-    mov al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_FALLBACK_INDEX]
+%if BOOT_PREFERRED_VIDEO_WIDTH > 0
+%if BOOT_PREFERRED_VIDEO_HEIGHT > 0
+    mov ax, BOOT_PREFERRED_VIDEO_WIDTH
+    mov dx, BOOT_PREFERRED_VIDEO_HEIGHT
+    call catalog_find_mode_index_by_dimensions
     cmp al, BOOTINFO_VIDEO_INDEX_NONE
     jne .store_selected
+%endif
+%endif
     cmp byte [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODE_COUNT], 0
     je .done
-    xor al, al
+    mov al, [BOOTINFO_ADDR + BOOTINFO_VIDEO_MODE_COUNT]
+    dec al
 .store_selected:
     mov [BOOTINFO_ADDR + BOOTINFO_VIDEO_SELECTED_INDEX], al
 .done:
@@ -1840,6 +1916,7 @@ realmode_idtr:
 
 kernel_name db 'KERNEL  BIN'
 background_name db 'VIBEBG  BIN'
+boot_audio_name db 'VIBEBOOTRAW'
 disk_error_msg db 'VIBELOADER ERROR ', 0
 a20_error_msg db 'VIBELOADER A20 FAIL', 0
 last_label db 'LAST ', 0
@@ -1866,6 +1943,9 @@ a20_kbc_write_label db ' W', 0
 a20_legend_msg db 'P=PRE B=INT15 C=92 D=8042', 0
 boot_drive db 0
 background_available db 0
+boot_audio_available db 0
+boot_audio_played db 0
+boot_audio_saved_port61 db 0
 debug_last_code db '?'
 debug_trace_len db 0
 debug_trace_buf times DEBUG_TRACE_MAX db 0
@@ -1911,7 +1991,9 @@ load_segment dw KERNEL_LOAD_SEG
 search_name_ptr dw 0
 vesa_mode_list_seg dw 0
 vesa_mode_list_off dw 0
+boot_audio_prev_pit dw 0
 align 4
+boot_audio_size dd 0
 catalog_area_left dd 0
 catalog_area_right dd 0
 
@@ -2178,6 +2260,10 @@ vibeloader_menu:
     mov dword [menu_selection], 0
     mov byte [menu_initialized], 1
     mov byte [menu_force_full_redraw], 1
+    mov byte [menu_dirty], 1
+    call menu_render
+    mov byte [menu_dirty], 0
+    call boot_audio_maybe_play_once
     call menu_restart_timer
     mov byte [menu_dirty], 1
 
@@ -2234,6 +2320,7 @@ vibeloader_menu_maybe_draw:
     call menu_render
     DEBUG_PMODE_CHAR 'r'
     mov byte [menu_dirty], 0
+    call boot_audio_maybe_play_once
     jmp vibeloader_menu_loop
 
 vibeloader_menu_change_video:
@@ -2247,6 +2334,7 @@ vibeloader_menu_boot_now:
 
 vibeloader_menu_default_boot:
     DEBUG_PMODE_CHAR 'D'
+    call boot_audio_maybe_play_once
     call menu_apply_selection
     ret
 
@@ -2506,6 +2594,90 @@ pit_read_counter:
     xchg al, ah
     ret
 
+boot_audio_maybe_play_once:
+    pushad
+
+    cmp byte [boot_audio_available], 1
+    jne .done
+    cmp byte [boot_audio_played], 0
+    jne .done
+    cmp dword [boot_audio_size], 0
+    je .done
+
+    mov byte [boot_audio_played], 1
+    DEBUG_PMODE_CHAR 'S'
+    call boot_audio_speaker_begin
+    call pit_read_counter
+    mov [boot_audio_prev_pit], ax
+    mov edi, BOOT_AUDIO_LOAD_ADDR
+    mov ecx, [boot_audio_size]
+
+.sample_loop:
+    test ecx, ecx
+    jz .finish
+
+.wait_sample:
+    call pit_read_counter
+    movzx ebx, word [boot_audio_prev_pit]
+    movzx edx, ax
+    sub ebx, edx
+    and ebx, 0xFFFF
+    cmp ebx, BOOT_AUDIO_SAMPLE_COUNTS
+    jb .wait_sample
+    mov [boot_audio_prev_pit], ax
+
+    movzx eax, byte [edi]
+    inc edi
+    dec ecx
+    call boot_audio_output_sample
+    jmp .sample_loop
+
+.finish:
+    call boot_audio_speaker_end
+    DEBUG_PMODE_CHAR 's'
+    cmp byte [menu_initialized], 0
+    je .done
+    call menu_restart_timer
+    mov byte [menu_dirty], 1
+
+.done:
+    popad
+    ret
+
+boot_audio_speaker_begin:
+    push eax
+    in al, 0x61
+    mov [boot_audio_saved_port61], al
+    or al, 0x03
+    out 0x61, al
+    pop eax
+    ret
+
+boot_audio_speaker_end:
+    push eax
+    mov al, [boot_audio_saved_port61]
+    out 0x61, al
+    pop eax
+    ret
+
+boot_audio_output_sample:
+    push ebx
+
+    imul eax, eax, BOOT_AUDIO_PWM_COUNTS
+    shr eax, 8
+    add eax, 1
+    mov bx, ax
+
+    mov al, 0xB0
+    out 0x43, al
+    mov al, bl
+    out 0x42, al
+    mov al, bh
+    out 0x42, al
+
+    pop ebx
+    ret
+
 menu_flush_keyboard_buffer:
 .poll:
     in al, 0x64
@@ -2549,10 +2721,16 @@ menu_poll_keyboard:
     cmp bl, 0
     jne .handle_extended
 
-    cmp al, 0x11
-    je .move_up
-    cmp al, 0x1F
-    je .move_down
+	    cmp al, 0x11
+	    je .move_up
+	    cmp al, 0x2F
+	    je .toggle_video_driver
+	    cmp al, 0x17
+	    je .toggle_i915_experiment
+	    cmp al, 0x32
+	    je .toggle_smp_experiment
+	    cmp al, 0x1F
+	    je .move_down
     cmp al, 0x1C
     je .confirm
     jmp .poll
@@ -2621,6 +2799,39 @@ menu_poll_keyboard:
     je .poll
     mov eax, 3
     ret
+
+	.toggle_i915_experiment:
+	    mov al, 'I'
+	    mov [menu_last_action], al
+	    call bootdebug_store_action32
+	    xor eax, eax
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    xor eax, BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT
+	    mov [BOOTINFO_ADDR + BOOTINFO_FLAGS], eax
+	    mov eax, 1
+	    ret
+
+	.toggle_smp_experiment:
+	    mov al, 'M'
+	    mov [menu_last_action], al
+	    call bootdebug_store_action32
+	    xor eax, eax
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    xor eax, BOOTINFO_FLAG_EXPERIMENTAL_SMP
+	    mov [BOOTINFO_ADDR + BOOTINFO_FLAGS], eax
+	    mov eax, 1
+	    ret
+
+	.toggle_video_driver:
+	    mov al, 'V'
+	    mov [menu_last_action], al
+	    call bootdebug_store_action32
+	    xor eax, eax
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    xor eax, BOOTINFO_FLAG_FORCE_LEGACY_VIDEO
+	    mov [BOOTINFO_ADDR + BOOTINFO_FLAGS], eax
+	    mov eax, 1
+	    ret
 
 .confirm:
     mov al, 'B'
@@ -2695,17 +2906,12 @@ menu_select_next_video_mode:
 menu_apply_selection:
     mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
     and eax, ~BOOTINFO_FLAG_BOOT_MODE_MASK
-    cmp dword [menu_selection], 1
-    je .safe_mode
-    cmp dword [menu_selection], 2
-    je .rescue_shell
-    or eax, BOOTINFO_FLAG_BOOT_TO_DESKTOP
-    jmp .store
-.safe_mode:
-    or eax, BOOTINFO_FLAG_BOOT_SAFE_MODE
-    jmp .store
-.rescue_shell:
-    or eax, BOOTINFO_FLAG_BOOT_RESCUE_SHELL
+    and eax, ~BOOTINFO_FLAG_FORCE_LEGACY_VIDEO
+    mov edx, [menu_selection]
+    cmp edx, MENU_ENTRY_COUNT
+    jae .store
+    mov edx, [menu_entry_boot_flags + edx * 4]
+    or eax, edx
 .store:
     mov [BOOTINFO_ADDR + BOOTINFO_FLAGS], eax
     ret
@@ -2730,7 +2936,7 @@ menu_render:
     mov ebx, 104
     add ebx, [menu_base_y]
     mov ecx, 344
-    mov esi, 272
+    mov esi, 308
     mov dl, 1
     call draw_rect
     DEBUG_PMODE_CHAR '4'
@@ -2740,7 +2946,7 @@ menu_render:
     mov ebx, 108
     add ebx, [menu_base_y]
     mov ecx, 336
-    mov esi, 264
+    mov esi, 300
     mov dl, 8
     call draw_rect
     DEBUG_PMODE_CHAR '5'
@@ -2775,8 +2981,8 @@ menu_render:
     DEBUG_PMODE_CHAR 'o'
 .draw_entry_one_call:
     mov eax, 0
-    mov ebx, 188
-    mov esi, menu_entry_vibeos
+    mov ebx, 180
+    mov esi, [menu_entry_labels + (0 * 4)]
     call draw_menu_entry
 
     cmp byte [menu_first_render_done], 0
@@ -2789,8 +2995,8 @@ menu_render:
     DEBUG_PMODE_CHAR 'q'
 .draw_entry_two_call:
     mov eax, 1
-    mov ebx, 226
-    mov esi, menu_entry_safe
+    mov ebx, 214
+    mov esi, [menu_entry_labels + (1 * 4)]
     call draw_menu_entry
 
     cmp byte [menu_first_render_done], 0
@@ -2803,13 +3009,19 @@ menu_render:
     DEBUG_PMODE_CHAR 's'
 .draw_entry_three_call:
     mov eax, 2
-    mov ebx, 264
-    mov esi, menu_entry_rescue
+    mov ebx, 248
+    mov esi, [menu_entry_labels + (2 * 4)]
     call draw_menu_entry
 
     cmp byte [menu_first_render_done], 0
-    jne .countdown_prepare
+    jne .draw_entry_four
     DEBUG_PMODE_CHAR 't'
+
+.draw_entry_four:
+    mov eax, 3
+    mov ebx, 282
+    mov esi, [menu_entry_labels + (3 * 4)]
+    call draw_menu_entry
 
 .countdown_prepare:
     cmp byte [menu_timeout_paused], 0
@@ -2827,7 +3039,7 @@ menu_render:
 .draw_countdown:
     mov eax, 212
     add eax, [menu_base_x]
-    mov ebx, 304
+    mov ebx, 330
     add ebx, [menu_base_y]
     mov ecx, 2
     mov edx, 15
@@ -2837,39 +3049,69 @@ menu_render:
     mov esi, menu_video_text
     mov eax, 208
     add eax, [menu_base_x]
-    mov ebx, 328
+    mov ebx, 354
     add ebx, [menu_base_y]
     mov ecx, 2
     mov edx, 15
     call draw_text
 
+	    call menu_build_i915_text
+    mov esi, menu_i915_text
+    mov eax, 208
+    add eax, [menu_base_x]
+    mov ebx, 366
+    add ebx, [menu_base_y]
+	    mov ecx, 1
+	    mov edx, 15
+		    call draw_text
+
+	    call menu_build_smp_text
+	    mov esi, menu_smp_text
+	    mov eax, 296
+	    add eax, [menu_base_x]
+	    mov ebx, 366
+	    add ebx, [menu_base_y]
+	    mov ecx, 1
+	    mov edx, 15
+	    call draw_text
+
+		    call menu_build_driver_text
+    mov esi, menu_driver_text
+    mov eax, 208
+    add eax, [menu_base_x]
+    mov ebx, 378
+    add ebx, [menu_base_y]
+    mov ecx, 1
+    mov edx, 15
+	    call draw_text
+	
     mov esi, menu_hint_top
     mov eax, 192
     add eax, [menu_base_x]
-    mov ebx, 352
+    mov ebx, 390
     add ebx, [menu_base_y]
     mov ecx, 1
     mov edx, 15
-    call draw_text
-
+	    call draw_text
+	
     mov esi, menu_hint_bottom
     mov eax, 232
     add eax, [menu_base_x]
-    mov ebx, 362
+    mov ebx, 400
     add ebx, [menu_base_y]
     mov ecx, 1
     mov edx, 15
-    call draw_text
-
-    call menu_build_debug_text
+	    call draw_text
+	
+	    call menu_build_debug_text
     mov esi, menu_debug_text
     mov eax, 180
     add eax, [menu_base_x]
-    mov ebx, 388
+    mov ebx, 426
     add ebx, [menu_base_y]
     mov ecx, 1
     mov edx, 15
-    call draw_text
+	    call draw_text
 
     cmp byte [menu_first_render_done], 0
     jne .done
@@ -3211,6 +3453,111 @@ menu_build_video_text:
     pop eax
     ret
 
+menu_build_i915_text:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+
+    mov edi, menu_i915_text
+    mov esi, menu_i915_label
+    call menu_append_cstring
+
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+    test eax, BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT
+    jz .disabled
+    mov esi, menu_i915_on
+    call menu_append_cstring
+    jmp .finish
+
+.disabled:
+    mov esi, menu_i915_off
+    call menu_append_cstring
+
+.finish:
+    mov al, 0
+    stosb
+
+    pop edi
+    pop esi
+    pop edx
+	    pop ecx
+	    pop ebx
+	    pop eax
+	    ret
+
+menu_build_smp_text:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+
+    mov edi, menu_smp_text
+    mov esi, menu_smp_label
+    call menu_append_cstring
+
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+    test eax, BOOTINFO_FLAG_EXPERIMENTAL_SMP
+    jz .disabled
+    mov esi, menu_smp_on
+    call menu_append_cstring
+    jmp .finish
+
+.disabled:
+    mov esi, menu_smp_off
+    call menu_append_cstring
+
+.finish:
+    mov al, 0
+    stosb
+
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+		menu_build_driver_text:
+	    push eax
+	    push ebx
+	    push ecx
+	    push edx
+	    push esi
+	    push edi
+
+	    mov edi, menu_driver_text
+	    mov esi, menu_driver_label
+	    call menu_append_cstring
+
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    test eax, BOOTINFO_FLAG_FORCE_LEGACY_VIDEO
+	    jz .auto
+	    mov esi, menu_driver_legacy
+	    call menu_append_cstring
+	    jmp .finish
+
+	.auto:
+	    mov esi, menu_driver_auto
+	    call menu_append_cstring
+
+	.finish:
+	    mov al, 0
+	    stosb
+
+	    pop edi
+	    pop esi
+	    pop edx
+	    pop ecx
+	    pop ebx
+	    pop eax
+	    ret
+
 menu_build_debug_text:
     push eax
     push ebx
@@ -3252,8 +3599,28 @@ menu_build_debug_text:
     mov al, [menu_last_action]
     call menu_append_debug_char
 
-    mov al, 0
+    mov al, ' '
     stosb
+    mov esi, menu_i915_prefix
+    call menu_append_cstring
+
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    and eax, BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT
+	    shr eax, 20
+	    call menu_append_uint
+
+	    mov al, ' '
+	    stosb
+	    mov esi, menu_smp_prefix
+	    call menu_append_cstring
+
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    and eax, BOOTINFO_FLAG_EXPERIMENTAL_SMP
+	    shr eax, 22
+	    call menu_append_uint
+
+	    mov al, 0
+	    stosb
 
     pop edi
     pop esi
@@ -3760,18 +4127,35 @@ vibeloader_title db 'VIBELOADER', 0
 menu_entry_vibeos db 'VIBEOS', 0
 menu_entry_safe db 'SAFE MODE', 0
 menu_entry_rescue db 'RESCUE SHELL', 0
+menu_entry_legacy_video db 'LEGACY VIDEO', 0
+menu_entry_labels dd menu_entry_vibeos, menu_entry_safe, menu_entry_rescue, menu_entry_legacy_video
+menu_entry_boot_flags dd BOOTINFO_FLAG_BOOT_TO_DESKTOP, BOOTINFO_FLAG_BOOT_SAFE_MODE, BOOTINFO_FLAG_BOOT_RESCUE_SHELL, (BOOTINFO_FLAG_BOOT_TO_DESKTOP | BOOTINFO_FLAG_FORCE_LEGACY_VIDEO)
 countdown_text db 'AUTO BOOT IN 0S', 0
 countdown_paused_text db 'AUTO BOOT PAUSED', 0
 menu_video_prefix db 'VIDEO ', 0
 menu_video_unknown db 'UNKNOWN', 0
 menu_hint_top db 'UP/DOWN SELECT  ENTER BOOT', 0
-menu_hint_bottom db 'LEFT/RIGHT VIDEO', 0
+menu_hint_bottom db 'LEFT/RIGHT VIDEO  V DRIVER  I I915 EXP  M SMP EXP', 0
 menu_video_text times 24 db 0
+menu_i915_label db 'I915 EXP ', 0
+menu_i915_on db 'ON', 0
+menu_i915_off db 'OFF', 0
+menu_i915_text times 16 db 0
+menu_smp_label db 'SMP EXP ', 0
+menu_smp_on db 'ON', 0
+menu_smp_off db 'OFF', 0
+menu_smp_text times 16 db 0
+menu_driver_label db 'DRIVER ', 0
+menu_driver_auto db 'AUTO', 0
+menu_driver_legacy db 'LEGACY', 0
+menu_driver_text times 20 db 0
 menu_debug_prefix db 'DBG ', 0
 menu_key_prefix db 'KEY ', 0
 menu_ext_prefix db 'EXT ', 0
 menu_act_prefix db 'ACT ', 0
-menu_debug_text times 32 db 0
+menu_i915_prefix db 'I915 ', 0
+menu_smp_prefix db 'SMP ', 0
+menu_debug_text times 48 db 0
 menu_number_buffer times 6 db 0
 text_no_vesa_title db 'VIBELOADER DEBUG HALT', 0
 text_last_label db 'LAST ', 0

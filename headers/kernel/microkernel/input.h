@@ -23,7 +23,13 @@ struct mk_input_mouse_reply {
     struct mouse_state state;
 };
 
+struct mk_input_event_reply {
+    int32_t value;
+    struct input_event event;
+};
+
 void mk_input_service_init(void);
+int mk_input_service_next_event(struct input_event *event);
 int mk_input_service_poll_mouse(struct mouse_state *state);
 int mk_input_service_read_key(void);
 int mk_input_service_set_layout(const char *name);

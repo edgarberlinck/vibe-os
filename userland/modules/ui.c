@@ -14,8 +14,8 @@ uint32_t SCREEN_WIDTH = 640;
 uint32_t SCREEN_HEIGHT = 480;
 uint32_t SCREEN_PITCH = 640;
 struct video_mode g_screen_mode = {0};
-static const struct desktop_theme g_classic_theme = {1u, 7u, 3u, 14u, 7u, 3u, 15u, 0u};
-static struct desktop_theme g_theme = {1u, 7u, 3u, 14u, 7u, 3u, 15u, 0u};
+static const struct desktop_theme g_classic_theme = {1u, 7u, 3u, 139u, 7u, 3u, 15u, 0u};
+static struct desktop_theme g_theme = {1u, 7u, 3u, 139u, 7u, 3u, 15u, 0u};
 static int g_ui_loading_settings = 0;
 static struct {
     int active;
@@ -25,6 +25,17 @@ static struct {
     int height;
     uint8_t *pixels;
 } g_wallpaper = {0, -1, 0, 0, 0, 0};
+enum ui_pending_wallpaper_kind {
+    UI_PENDING_WALLPAPER_NONE = 0,
+    UI_PENDING_WALLPAPER_DEFAULT,
+    UI_PENDING_WALLPAPER_PATH
+};
+static int g_ui_defer_wallpaper_load = 0;
+static int g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_NONE;
+static int g_ui_pending_wallpaper_save_settings = 0;
+static char g_ui_pending_wallpaper_path[80];
+static int g_ui_startup_persist_hold_depth = 0;
+static int g_ui_pending_settings_save = 0;
 
 #define TASKBAR_HEIGHT 22
 #define START_MENU_WIDTH 336
@@ -34,9 +45,76 @@ static struct {
 #define START_MENU_ITEM_W 188
 #define START_MENU_ITEM_H 30
 #define START_MENU_ITEM_STEP 34
+#define TASKBAR_APPLET_W 18
+#define TASKBAR_APPLET_H 16
+#define TASKBAR_APPLET_GAP 4
+#define TASKBAR_TRAY_PADDING 6
 #define UI_SETTINGS_PATH "/config/ui.cfg"
 
 static void ui_save_settings(void);
+static void ui_wallpaper_reset(int explicit_none);
+static int ui_wallpaper_set_from_node_internal(int node, int persist);
+static int ui_try_set_default_wallpaper(void);
+
+static int ui_startup_persist_blocked(void) {
+    return g_ui_startup_persist_hold_depth > 0;
+}
+
+static void ui_pending_wallpaper_clear(void) {
+    g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_NONE;
+    g_ui_pending_wallpaper_save_settings = 0;
+    g_ui_pending_wallpaper_path[0] = '\0';
+}
+
+static void ui_pending_wallpaper_schedule_default(int save_settings) {
+    g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_DEFAULT;
+    g_ui_pending_wallpaper_save_settings = save_settings;
+    g_ui_pending_wallpaper_path[0] = '\0';
+}
+
+static void ui_pending_wallpaper_schedule_path(const char *path) {
+    g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_PATH;
+    g_ui_pending_wallpaper_save_settings = 0;
+    str_copy_limited(g_ui_pending_wallpaper_path, path, (int)sizeof(g_ui_pending_wallpaper_path));
+}
+
+static void ui_apply_pending_wallpaper(void) {
+    int save_settings = g_ui_pending_wallpaper_save_settings;
+    int kind = g_ui_pending_wallpaper_kind;
+    char pending_path[80];
+
+    str_copy_limited(pending_path, g_ui_pending_wallpaper_path, (int)sizeof(pending_path));
+
+    ui_pending_wallpaper_clear();
+    if (kind == UI_PENDING_WALLPAPER_NONE || g_wallpaper.explicit_none) {
+        return;
+    }
+
+    if (kind == UI_PENDING_WALLPAPER_PATH) {
+        int node = fs_resolve(pending_path);
+
+        if (node >= 0 && ui_wallpaper_set_from_node_internal(node, 0) == 0) {
+            sys_write_debug("ui: deferred wallpaper ready\n");
+            return;
+        }
+        ui_wallpaper_reset(0);
+        if (ui_try_set_default_wallpaper() == 0) {
+            ui_save_settings();
+            sys_write_debug("ui: deferred wallpaper fallback\n");
+        }
+        return;
+    }
+
+    if (kind == UI_PENDING_WALLPAPER_DEFAULT) {
+        ui_wallpaper_reset(0);
+        if (ui_try_set_default_wallpaper() == 0) {
+            if (save_settings) {
+                ui_save_settings();
+            }
+            sys_write_debug("ui: deferred default wallpaper ready\n");
+        }
+    }
+}
 
 static void ui_wallpaper_release_pixels(void) {
     if (g_wallpaper.pixels) {
@@ -156,6 +234,35 @@ static void ui_append_kv_u32(char *buf, const char *key, uint32_t value, int max
     str_append(buf, "\n", max_len);
 }
 
+static const char *ui_path_basename(const char *path) {
+    const char *base = path;
+
+    if (path == 0) {
+        return "";
+    }
+    for (const char *p = path; *p != '\0'; ++p) {
+        if (*p == '/') {
+            base = p + 1;
+        }
+    }
+    return base;
+}
+
+static int ui_wallpaper_path_needs_default_migration(const char *path) {
+    const char *base = ui_path_basename(path);
+
+    if (path == 0 || path[0] == '\0') {
+        return 1;
+    }
+    if (str_eq(path, "/wallpaper.png")) {
+        return 1;
+    }
+    if (str_eq(base, "bootloader_background.png")) {
+        return 1;
+    }
+    return 0;
+}
+
 static void ui_wallpaper_reset(int explicit_none) {
     ui_wallpaper_release_pixels();
     g_wallpaper.source_node = -1;
@@ -201,6 +308,13 @@ static int ui_wallpaper_set_from_node_internal(int node, int persist) {
     g_wallpaper.explicit_none = 0;
     g_wallpaper.width = width;
     g_wallpaper.height = height;
+    if (persist) {
+        /*
+         * A manual wallpaper choice must win over any deferred startup/default
+         * wallpaper that has not been applied yet.
+         */
+        ui_pending_wallpaper_clear();
+    }
     if (persist && !g_ui_loading_settings) {
         ui_save_settings();
     }
@@ -208,14 +322,23 @@ static int ui_wallpaper_set_from_node_internal(int node, int persist) {
 }
 
 static int ui_try_set_default_wallpaper(void) {
-    int node = fs_resolve("/wallpaper.png");
+    int node = fs_resolve("/assets/wallpaper.png");
+
+    if (node < 0) {
+        node = fs_resolve("/wallpaper.png");
+    }
 
     if (node < 0) {
         sys_write_debug("ui: default wallpaper not found\n");
         ui_wallpaper_reset(0);
         return -1;
     }
-    return ui_wallpaper_set_from_node_internal(node, 0);
+    if (ui_wallpaper_set_from_node_internal(node, 0) == 0) {
+        return 0;
+    }
+    sys_write_debug("ui: default wallpaper load failed\n");
+    ui_wallpaper_reset(0);
+    return -1;
 }
 
 static void ui_reload_wallpaper_for_current_mode(void) {
@@ -236,6 +359,11 @@ static void ui_reload_wallpaper_for_current_mode(void) {
 static void ui_save_settings(void) {
     char text[256];
     char wallpaper[80];
+
+    if (ui_startup_persist_blocked()) {
+        g_ui_pending_settings_save = 1;
+        return;
+    }
 
     if (fs_resolve("/config") < 0) {
         (void)fs_create("/config", 1);
@@ -259,6 +387,7 @@ static void ui_save_settings(void) {
     ui_append_kv_u32(text, "text=", g_theme.text, (int)sizeof(text));
     ui_append_kv_u32(text, "width=", SCREEN_WIDTH, (int)sizeof(text));
     ui_append_kv_u32(text, "height=", SCREEN_HEIGHT, (int)sizeof(text));
+    ui_append_kv_u32(text, "wallpaper_explicit_none=", g_wallpaper.explicit_none ? 1u : 0u, (int)sizeof(text));
     str_append(text, "wallpaper=", (int)sizeof(text));
     str_append(text, wallpaper, (int)sizeof(text));
     str_append(text, "\n", (int)sizeof(text));
@@ -273,7 +402,9 @@ static void ui_load_settings(void) {
     struct desktop_theme loaded = g_theme;
     uint32_t width = SCREEN_WIDTH;
     uint32_t height = SCREEN_HEIGHT;
+    uint32_t wallpaper_explicit_none = 0u;
     int clear_wallpaper = 1;
+    int migrate_to_default = 0;
 
     if (idx < 0 || g_fs_nodes[idx].is_dir || g_fs_nodes[idx].size <= 0) {
         return;
@@ -314,6 +445,8 @@ static void ui_load_settings(void) {
             width = value;
         } else if (ui_starts_with(line, "height=") && ui_parse_uint(line + 7, &value)) {
             height = value;
+        } else if (ui_starts_with(line, "wallpaper_explicit_none=") && ui_parse_uint(line + 24, &value)) {
+            wallpaper_explicit_none = value != 0u;
         } else if (ui_starts_with(line, "wallpaper=")) {
             str_copy_limited(wallpaper, line + 10, (int)sizeof(wallpaper));
             clear_wallpaper = wallpaper[0] == '\0';
@@ -329,17 +462,59 @@ static void ui_load_settings(void) {
     g_theme = loaded;
     if (clear_wallpaper) {
         ui_wallpaper_reset(0);
-        (void)ui_try_set_default_wallpaper();
+        if (g_ui_defer_wallpaper_load) {
+            ui_pending_wallpaper_schedule_default(0);
+        } else {
+            (void)ui_try_set_default_wallpaper();
+            migrate_to_default = 1;
+        }
     } else if (str_eq(wallpaper, "@none")) {
-        ui_wallpaper_reset(1);
-    } else {
-        int node = fs_resolve(wallpaper);
-        if (node >= 0) {
-            (void)ui_wallpaper_set_from_node_internal(node, 0);
+        if (wallpaper_explicit_none != 0u) {
+            ui_pending_wallpaper_clear();
+            ui_wallpaper_reset(1);
         } else {
             ui_wallpaper_reset(0);
-            (void)ui_try_set_default_wallpaper();
+            if (g_ui_defer_wallpaper_load) {
+                ui_pending_wallpaper_schedule_default(0);
+            } else {
+                (void)ui_try_set_default_wallpaper();
+                migrate_to_default = 1;
+            }
         }
+    } else {
+        int node;
+
+        if (ui_wallpaper_path_needs_default_migration(wallpaper)) {
+            ui_wallpaper_reset(0);
+            if (g_ui_defer_wallpaper_load) {
+                ui_pending_wallpaper_schedule_default(0);
+            } else {
+                (void)ui_try_set_default_wallpaper();
+                migrate_to_default = 1;
+            }
+        } else {
+            if (g_ui_defer_wallpaper_load) {
+                ui_wallpaper_reset(0);
+                ui_pending_wallpaper_schedule_path(wallpaper);
+            } else {
+                node = fs_resolve(wallpaper);
+                if (node >= 0) {
+                    if (ui_wallpaper_set_from_node_internal(node, 0) != 0) {
+                        ui_wallpaper_reset(0);
+                        (void)ui_try_set_default_wallpaper();
+                        migrate_to_default = 1;
+                    }
+                } else {
+                    ui_wallpaper_reset(0);
+                    (void)ui_try_set_default_wallpaper();
+                    migrate_to_default = 1;
+                }
+            }
+        }
+    }
+
+    if (migrate_to_default) {
+        ui_save_settings();
     }
 }
 
@@ -354,17 +529,40 @@ void ui_refresh_metrics(void) {
 void ui_init(void) {
     ui_refresh_metrics();
     ui_reset_theme_defaults();
+    ui_pending_wallpaper_clear();
+    g_ui_defer_wallpaper_load = 1;
     g_ui_loading_settings = 1;
     ui_load_settings();
-    if (!g_wallpaper.active && !g_wallpaper.explicit_none) {
-        (void)ui_try_set_default_wallpaper();
-    }
     g_ui_loading_settings = 0;
+    g_ui_defer_wallpaper_load = 0;
+    if (!g_wallpaper.active && !g_wallpaper.explicit_none) {
+        if (g_ui_pending_wallpaper_kind == UI_PENDING_WALLPAPER_NONE) {
+            ui_pending_wallpaper_schedule_default(0);
+        }
+    }
     ui_apply_desktop_palette();
 
     dirty_init();
     clip_init();
     cursor_init();
+}
+
+void ui_complete_startup(void) {
+    ui_apply_pending_wallpaper();
+}
+
+void ui_hold_startup_persist(void) {
+    g_ui_startup_persist_hold_depth += 1;
+}
+
+void ui_release_startup_persist(void) {
+    if (g_ui_startup_persist_hold_depth > 0) {
+        g_ui_startup_persist_hold_depth -= 1;
+    }
+    if (!ui_startup_persist_blocked() && g_ui_pending_settings_save) {
+        g_ui_pending_settings_save = 0;
+        ui_save_settings();
+    }
 }
 
 int ui_set_resolution(uint32_t width, uint32_t height) {
@@ -388,6 +586,7 @@ const struct desktop_theme *ui_theme_get(void) {
 }
 
 void ui_wallpaper_clear(void) {
+    ui_pending_wallpaper_clear();
     ui_wallpaper_reset(1);
     if (!g_ui_loading_settings) {
         ui_save_settings();
@@ -602,6 +801,38 @@ struct rect ui_taskbar_start_button_rect(void) {
     return r;
 }
 
+struct rect ui_taskbar_tray_rect(void) {
+    struct rect r = {
+        (int)SCREEN_WIDTH - (TASKBAR_TRAY_PADDING * 2) - (TASKBAR_APPLET_W * 2) - TASKBAR_APPLET_GAP,
+        (int)SCREEN_HEIGHT - TASKBAR_HEIGHT + 3,
+        (TASKBAR_TRAY_PADDING * 2) + (TASKBAR_APPLET_W * 2) + TASKBAR_APPLET_GAP,
+        TASKBAR_APPLET_H
+    };
+    return r;
+}
+
+struct rect ui_taskbar_network_applet_rect(void) {
+    struct rect tray = ui_taskbar_tray_rect();
+    struct rect r = {
+        tray.x + TASKBAR_TRAY_PADDING,
+        tray.y,
+        TASKBAR_APPLET_W,
+        TASKBAR_APPLET_H
+    };
+    return r;
+}
+
+struct rect ui_taskbar_sound_applet_rect(void) {
+    struct rect tray = ui_taskbar_tray_rect();
+    struct rect r = {
+        tray.x + tray.w - TASKBAR_TRAY_PADDING - TASKBAR_APPLET_W,
+        tray.y,
+        TASKBAR_APPLET_W,
+        TASKBAR_APPLET_H
+    };
+    return r;
+}
+
 struct rect ui_start_menu_rect(void) {
     struct rect r = {2, (int)SCREEN_HEIGHT - TASKBAR_HEIGHT - START_MENU_HEIGHT,
                      START_MENU_WIDTH, START_MENU_HEIGHT};
@@ -624,18 +855,13 @@ struct rect ui_desktop_files_icon_rect(void) {
     return r;
 }
 
-struct rect ui_desktop_browser_icon_rect(void) {
+struct rect ui_desktop_craft_icon_rect(void) {
     struct rect r = {(int)SCREEN_WIDTH - 110, 116, 84, 86};
     return r;
 }
 
-struct rect ui_desktop_craft_icon_rect(void) {
-    struct rect r = {(int)SCREEN_WIDTH - 110, 212, 84, 86};
-    return r;
-}
-
 struct rect ui_desktop_trash_icon_rect(void) {
-    struct rect r = {(int)SCREEN_WIDTH - 110, 308, 84, 86};
+    struct rect r = {(int)SCREEN_WIDTH - 110, 212, 84, 86};
     return r;
 }
 
@@ -765,7 +991,7 @@ static const char *app_caption(enum app_type type) {
     case APP_DOOM: return "DOOM";
     case APP_CRAFT: return "Craft";
     case APP_IMAGEVIEWER: return "Imagens";
-    case APP_BROWSER: return "Browser";
+    case APP_AUDIO_PLAYER: return "Audio";
     case APP_PERSONALIZE: return "Tema";
     case APP_TRASH: return "Lixeira";
     default: return "App";
@@ -796,6 +1022,7 @@ void draw_window_frame(const struct rect *w, const char *title,
 static void draw_taskbar(const struct window *wins, int win_count, int focused, int start_hover) {
     const int taskbar_y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT;
     struct rect start_button = ui_taskbar_start_button_rect();
+    struct rect tray = ui_taskbar_tray_rect();
     int x = 66;
 
     sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 22, g_theme.taskbar);
@@ -817,7 +1044,7 @@ static void draw_taskbar(const struct window *wins, int win_count, int focused, 
         button.y = taskbar_y + 3;
         button.w = 68;
         button.h = 16;
-        if (button.x + button.w > (int)SCREEN_WIDTH - 4) {
+        if (button.x + button.w > tray.x - 4) {
             break;
         }
         ui_draw_button(&button,
@@ -842,31 +1069,22 @@ void draw_desktop(const struct mouse_state *mouse,
     {
         struct rect banner = {18, 18, 154, 20};
         struct rect files_icon = ui_desktop_files_icon_rect();
-        struct rect browser_icon = ui_desktop_browser_icon_rect();
         struct rect craft_icon = ui_desktop_craft_icon_rect();
         struct rect trash_icon = ui_desktop_trash_icon_rect();
         struct rect files_plate = {files_icon.x + 16, files_icon.y + 10, 52, 40};
-        struct rect browser_plate = {browser_icon.x + 16, browser_icon.y + 10, 52, 40};
-        struct rect browser_top = {browser_plate.x + 4, browser_plate.y + 4, browser_plate.w - 8, 6};
-        struct rect browser_view = {browser_plate.x + 4, browser_plate.y + 12, browser_plate.w - 8, browser_plate.h - 16};
         struct rect craft_plate = {craft_icon.x + 16, craft_icon.y + 10, 52, 40};
         struct rect trash_plate = {trash_icon.x + 16, trash_icon.y + 10, 52, 40};
         struct rect trash_lid = {trash_plate.x + 12, trash_plate.y + 6, trash_plate.w - 24, 4};
         struct rect trash_body = {trash_plate.x + 10, trash_plate.y + 12, trash_plate.w - 20, trash_plate.h - 18};
         int files_hover = point_in_rect(&files_icon, mouse->x, mouse->y);
-        int browser_hover = point_in_rect(&browser_icon, mouse->x, mouse->y);
         int craft_hover = point_in_rect(&craft_icon, mouse->x, mouse->y);
         int trash_hover = point_in_rect(&trash_icon, mouse->x, mouse->y);
 
         ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
         ui_draw_button(&files_icon, "", files_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, files_hover);
-        ui_draw_button(&browser_icon, "", browser_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, browser_hover);
         ui_draw_button(&craft_icon, "", craft_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, craft_hover);
         ui_draw_button(&trash_icon, "", trash_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, trash_hover);
         ui_draw_surface(&files_plate, g_theme.window);
-        ui_draw_surface(&browser_plate, g_theme.window_bg);
-        sys_rect(browser_top.x, browser_top.y, browser_top.w, browser_top.h, g_theme.menu_button);
-        sys_rect(browser_view.x, browser_view.y, browser_view.w, browser_view.h, g_theme.window);
         ui_draw_surface(&craft_plate, g_theme.menu_button_inactive);
         ui_draw_surface(&trash_plate, g_theme.window_bg);
         sys_rect(trash_lid.x, trash_lid.y, trash_lid.w, trash_lid.h, g_theme.window);
@@ -875,7 +1093,6 @@ void draw_desktop(const struct mouse_state *mouse,
         sys_rect(trash_body.x + 11, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
         sys_rect(trash_body.x + 17, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
         sys_text(files_icon.x + 24, files_icon.y + 60, g_theme.text, "Arquivos");
-        sys_text(browser_icon.x + 25, browser_icon.y + 60, g_theme.text, "Browser");
         sys_text(craft_icon.x + 30, craft_icon.y + 60, g_theme.text, "Craft");
         sys_text(trash_icon.x + 26, trash_icon.y + 60, g_theme.text, "Lixeira");
     }

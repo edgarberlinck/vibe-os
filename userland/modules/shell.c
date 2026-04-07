@@ -148,10 +148,10 @@ static int read_line(char *buf, int maxlen, const char *prompt) {
     draft[0] = '\0';
 
     for (;;) {
+        fs_tick();
         int c = sys_poll_key();
 
-        if (c == 0) {
-            fs_tick();
+        if (c <= 0) {
             sys_yield();
             continue;
         }
