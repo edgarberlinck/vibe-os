@@ -7489,29 +7489,6 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                          (int)sizeof(summary));
         ui_draw_status(&(struct rect){popup.x + popup.w - 76, popup.y + 10, 58, 16}, summary);
         ui_draw_status(&status, network_applet_status_text());
-        if (g_network_applet_cache.status_valid) {
-            char line[64] = "";
-
-            str_copy_limited(line, "IF ", (int)sizeof(line));
-            str_append(line,
-                       g_network_applet_cache.status.active_if[0] != '\0' ?
-                       g_network_applet_cache.status.active_if : "-",
-                       (int)sizeof(line));
-            str_append(line, "  GW ", (int)sizeof(line));
-            str_append(line,
-                       g_network_applet_cache.status.gateway[0] != '\0' ?
-                       g_network_applet_cache.status.gateway : "-",
-                       (int)sizeof(line));
-            sys_text(popup.x + 16, popup.y + 56, ui_color_muted(), line);
-
-            line[0] = '\0';
-            str_copy_limited(line, "DNS ", (int)sizeof(line));
-            str_append(line,
-                       g_network_applet_cache.status.dns_server[0] != '\0' ?
-                       g_network_applet_cache.status.dns_server : "-",
-                       (int)sizeof(line));
-            sys_text(popup.x + 16, popup.y + 66, ui_color_muted(), line);
-        }
 
         desktop_draw_applet_card(&wifi_card, "Redes Wi-Fi");
         if (g_network_applet_cache.scan_count == 0) {
