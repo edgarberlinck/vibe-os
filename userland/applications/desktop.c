@@ -687,12 +687,21 @@ enum file_dialog_mode {
     FILE_DIALOG_WALLPAPER_PATH,
     FILE_DIALOG_FILE_RENAME
 };
+
+enum wifi_connection_state {
+    WIFI_STATE_DISCONNECTED = 0,
+    WIFI_STATE_CONNECTING,
+    WIFI_STATE_CONNECTED,
+    WIFI_STATE_ERROR
+};
+
 struct app_context_state {
     int open;
     int window;
     enum app_type type;
     struct rect menu;
 };
+
 struct file_dialog_state {
     int active;
     enum file_dialog_mode mode;
@@ -707,6 +716,40 @@ struct file_dialog_state {
     char path[80];
     char status[40];
 };
+
+#define WIFI_PANEL_MAX_APS 8
+
+struct wifi_ap_info {
+    char ssid[33];
+    int rssi;
+    int secured;
+};
+
+struct wifi_panel_state {
+    int open;
+    int scan_count;
+    int connected_index;
+    int backend_online;
+    int backend_wifi_present;
+    int backend_wifi_scan_ready;
+    enum wifi_connection_state connection_state;
+    int show_password_prompt;
+    int password_active;
+    int password_len;
+    char password[65];
+    int show_manual_form;
+    int manual_active_field;
+    int manual_secured;
+    int manual_ssid_len;
+    int manual_pass_len;
+    char manual_ssid[33];
+    char manual_pass[65];
+    char pending_ssid[33];
+    char connected_ssid[33];
+    char chip_name[48];
+    char status[56];
+    struct wifi_ap_info aps[WIFI_PANEL_MAX_APS];
+};
 static int g_clipboard_node = -1;
 static enum app_type g_launch_app_type = APP_NONE;
 static int g_launch_editor_pending = 0;
@@ -720,6 +763,7 @@ struct desktop_restart_smoke_state {
 };
 static struct desktop_restart_smoke_state g_restart_smoke = {0, MK_SERVICE_NONE};
 static int g_fm_context_has_wallpaper_action = 0;
+static struct wifi_panel_state g_wifi = {0};
 struct app_cycle_request {
     int active;
     enum app_type type;
@@ -7110,6 +7154,278 @@ static void draw_sound_applet(const struct mouse_state *mouse) {
     }
 }
 
+static int wifi_signal_level(int rssi);
+static const char *wifi_signal_text(int level);
+static const char *wifi_state_label(enum wifi_connection_state state);
+static uint8_t wifi_state_color(enum wifi_connection_state state);
+static void draw_wifi_panel(const struct mouse_state *mouse);
+static struct rect wifi_panel_rect(void);
+static struct rect wifi_panel_scan_button_rect(void);
+static struct rect wifi_panel_manual_button_rect(void);
+static struct rect wifi_panel_network_row_rect(int index);
+static struct rect wifi_password_input_rect(void);
+static struct rect wifi_password_connect_rect(void);
+static struct rect wifi_password_cancel_rect(void);
+static struct rect wifi_manual_ssid_rect(void);
+static struct rect wifi_manual_pass_rect(void);
+static struct rect wifi_manual_secure_toggle_rect(void);
+static struct rect wifi_manual_connect_rect(void);
+static struct rect wifi_manual_cancel_rect(void);
+
+static int wifi_signal_level(int rssi) {
+    if (rssi >= -55) {
+        return 4;
+    }
+    if (rssi >= -67) {
+        return 3;
+    }
+    if (rssi >= -78) {
+        return 2;
+    }
+    if (rssi >= -90) {
+        return 1;
+    }
+    return 0;
+}
+
+static const char *wifi_signal_text(int level) {
+    switch (level) {
+    case 4: return "||||";
+    case 3: return "|||.";
+    case 2: return "||..";
+    case 1: return "|...";
+    default: return "....";
+    }
+}
+
+static const char *wifi_state_label(enum wifi_connection_state state) {
+    switch (state) {
+    case WIFI_STATE_CONNECTING: return "Conectando";
+    case WIFI_STATE_CONNECTED: return "Conectado";
+    case WIFI_STATE_ERROR: return "Erro";
+    default: return "Desconectado";
+    }
+}
+
+static uint8_t wifi_state_color(enum wifi_connection_state state) {
+    switch (state) {
+    case WIFI_STATE_CONNECTING: return 14;
+    case WIFI_STATE_CONNECTED: return 10;
+    case WIFI_STATE_ERROR: return 12;
+    default: return 8;
+    }
+}
+
+static struct rect wifi_panel_rect(void) {
+    int h = (90 + (g_wifi.scan_count * 22)) * 5 / 2;
+    struct rect r;
+
+    if (g_wifi.show_password_prompt) {
+        h += 68;
+    }
+    if (g_wifi.show_manual_form) {
+        h += 88;
+    }
+
+    if (h < 180) {
+        h = 180;
+    }
+    if (h > (int)SCREEN_HEIGHT - 40) {
+        h = (int)SCREEN_HEIGHT - 40;
+    }
+
+    r.x = (int)SCREEN_WIDTH - 320 - 10;
+    r.y = (int)SCREEN_HEIGHT - h - 50;
+    r.w = 320;
+    r.h = h;
+    return r;
+}
+
+static struct rect wifi_panel_scan_button_rect(void) {
+    struct rect panel = wifi_panel_rect();
+    struct rect r = {panel.x + panel.w - 60, panel.y + panel.h - 32, 52, 14};
+    return r;
+}
+
+static struct rect wifi_panel_manual_button_rect(void) {
+    struct rect panel = wifi_panel_rect();
+    struct rect r = {panel.x + panel.w - 130, panel.y + panel.h - 32, 62, 14};
+    return r;
+}
+
+static struct rect wifi_panel_network_row_rect(int index) {
+    struct rect panel = wifi_panel_rect();
+    struct rect r = {panel.x + 8, panel.y + 155 + (index * 55), panel.w - 16, 18};
+    return r;
+}
+
+static struct rect wifi_password_input_rect(void) {
+    struct rect panel = wifi_panel_rect();
+    int base_y = panel.y + 125 + (g_wifi.scan_count * 55);
+    struct rect r = {panel.x + 8, base_y, panel.w - 16, 16};
+    return r;
+}
+
+static struct rect wifi_password_connect_rect(void) {
+    struct rect input = wifi_password_input_rect();
+    struct rect r = {input.x, input.y + 20, 74, 14};
+    return r;
+}
+
+static struct rect wifi_password_cancel_rect(void) {
+    struct rect input = wifi_password_input_rect();
+    struct rect r = {input.x + input.w - 74, input.y + 20, 74, 14};
+    return r;
+}
+
+static struct rect wifi_manual_ssid_rect(void) {
+    struct rect panel = wifi_panel_rect();
+    int base_y = panel.y + 125 + (g_wifi.scan_count * 55);
+    struct rect r = {panel.x + 8, base_y, panel.w - 16, 16};
+    return r;
+}
+
+static struct rect wifi_manual_pass_rect(void) {
+    struct rect ssid = wifi_manual_ssid_rect();
+    struct rect r = {ssid.x, ssid.y + 20, ssid.w, 16};
+    return r;
+}
+
+static struct rect wifi_manual_secure_toggle_rect(void) {
+    struct rect pass = wifi_manual_pass_rect();
+    struct rect r = {pass.x, pass.y + 20, 74, 14};
+    return r;
+}
+
+static struct rect wifi_manual_connect_rect(void) {
+    struct rect toggle = wifi_manual_secure_toggle_rect();
+    struct rect r = {toggle.x + 84, toggle.y, 74, 14};
+    return r;
+}
+
+static struct rect wifi_manual_cancel_rect(void) {
+    struct rect connect = wifi_manual_connect_rect();
+    struct rect r = {connect.x + connect.w + 8, connect.y, 74, 14};
+    return r;
+}
+
+static void draw_wifi_panel(const struct mouse_state *mouse) {
+    const struct desktop_theme *theme = ui_theme_get();
+    struct rect panel;
+    struct rect scan;
+    struct rect manual;
+    char status_line[96] = "Status: ";
+
+    if (!g_wifi.open) {
+        return;
+    }
+
+    panel = wifi_panel_rect();
+    scan = wifi_panel_scan_button_rect();
+    manual = wifi_panel_manual_button_rect();
+
+    ui_draw_surface(&panel, ui_color_window_bg());
+    sys_text(panel.x + 10, panel.y + 10, theme->text, "Redes Wi-Fi");
+    if (g_wifi.chip_name[0] != '\0') {
+        sys_text(panel.x + 10, panel.y + 22, theme->text, g_wifi.chip_name);
+    }
+    sys_rect(panel.x + 86, panel.y + 12, 6, 6, wifi_state_color(g_wifi.connection_state));
+    str_append(status_line, wifi_state_label(g_wifi.connection_state), (int)sizeof(status_line));
+    if (g_wifi.connection_state == WIFI_STATE_CONNECTED && g_wifi.connected_ssid[0] != '\0') {
+        str_append(status_line, " (", (int)sizeof(status_line));
+        str_append(status_line, g_wifi.connected_ssid, (int)sizeof(status_line));
+        str_append(status_line, ")", (int)sizeof(status_line));
+    }
+    sys_text(panel.x + 98, panel.y + 10, theme->text, status_line);
+
+    ui_draw_button(&manual, "Outra", UI_BUTTON_NORMAL,
+                   point_in_rect(&manual, mouse->x, mouse->y));
+    ui_draw_button(&scan, "Scan", UI_BUTTON_PRIMARY,
+                   point_in_rect(&scan, mouse->x, mouse->y));
+    sys_text(panel.x + 10, panel.y + panel.h - 14, theme->text, g_wifi.status);
+
+    if (g_wifi.scan_count <= 0) {
+        if (g_wifi.backend_online && g_wifi.backend_wifi_present) {
+            if (!g_wifi.backend_wifi_scan_ready) {
+                sys_text(panel.x + 10, panel.y + 38, theme->text, "Scan ainda indisponivel para este driver");
+            } else {
+                sys_text(panel.x + 10, panel.y + 38, theme->text, "Use 'Outra' para SSID manual");
+            }
+        } else {
+            sys_text(panel.x + 10, panel.y + 38, theme->text, "Nenhuma rede encontrada");
+        }
+        return;
+    }
+
+    for (int i = 0; i < g_wifi.scan_count; ++i) {
+        struct rect row = wifi_panel_network_row_rect(i);
+        int hover = point_in_rect(&row, mouse->x, mouse->y);
+        int level = wifi_signal_level(g_wifi.aps[i].rssi);
+        const char *signal = wifi_signal_text(level);
+        const char *secure = g_wifi.aps[i].secured ? "Lock" : "Open";
+
+        if (row.y + row.h > panel.y + panel.h - 18) {
+            break;
+        }
+
+        ui_draw_button(&row,
+                       g_wifi.aps[i].ssid,
+                       g_wifi.connected_index == i ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                       hover);
+        sys_text(row.x + row.w - 62, row.y + 6, theme->text, secure);
+        sys_text(row.x + row.w - 24, row.y + 6, theme->text, signal);
+    }
+
+    if (g_wifi.show_password_prompt) {
+        struct rect input = wifi_password_input_rect();
+        struct rect connect = wifi_password_connect_rect();
+        struct rect cancel = wifi_password_cancel_rect();
+        char pass_hint[72] = "Senha: ";
+
+        str_append(pass_hint, g_wifi.pending_ssid, (int)sizeof(pass_hint));
+        sys_text(input.x, input.y - 10, theme->text, pass_hint);
+        ui_draw_inset(&input, ui_color_window_bg());
+        sys_text(input.x + 4, input.y + 4, theme->text,
+                 g_wifi.password_len > 0 ? "********" : "digite a senha");
+        ui_draw_button(&connect, "Conectar", UI_BUTTON_PRIMARY,
+                       point_in_rect(&connect, mouse->x, mouse->y));
+        ui_draw_button(&cancel, "Cancelar", UI_BUTTON_NORMAL,
+                       point_in_rect(&cancel, mouse->x, mouse->y));
+        if (g_wifi.password_active) {
+            sys_rect(input.x + input.w - 5, input.y + 3, 1, input.h - 6, theme->text);
+        }
+    }
+
+    if (g_wifi.show_manual_form) {
+        struct rect ssid = wifi_manual_ssid_rect();
+        struct rect pass = wifi_manual_pass_rect();
+        struct rect secure = wifi_manual_secure_toggle_rect();
+        struct rect connect = wifi_manual_connect_rect();
+        struct rect cancel = wifi_manual_cancel_rect();
+
+        sys_text(ssid.x, ssid.y - 10, theme->text, "SSID manual");
+        ui_draw_inset(&ssid, ui_color_window_bg());
+        ui_draw_inset(&pass, ui_color_window_bg());
+        sys_text(ssid.x + 4, ssid.y + 4, theme->text,
+                 g_wifi.manual_ssid[0] != '\0' ? g_wifi.manual_ssid : "nome da rede");
+        sys_text(pass.x + 4, pass.y + 4, theme->text,
+                 g_wifi.manual_pass[0] != '\0' ? "********" : "senha");
+        ui_draw_button(&secure,
+                       g_wifi.manual_secured ? "Fechada" : "Aberta",
+                       g_wifi.manual_secured ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                       point_in_rect(&secure, mouse->x, mouse->y));
+        ui_draw_button(&connect, "Conectar", UI_BUTTON_PRIMARY,
+                       point_in_rect(&connect, mouse->x, mouse->y));
+        ui_draw_button(&cancel, "Cancelar", UI_BUTTON_NORMAL,
+                       point_in_rect(&cancel, mouse->x, mouse->y));
+        if (g_wifi.manual_active_field == 0) {
+            sys_rect(ssid.x + ssid.w - 5, ssid.y + 3, 1, ssid.h - 6, theme->text);
+        } else {
+            sys_rect(pass.x + pass.w - 5, pass.y + 3, 1, pass.h - 6, theme->text);
+        }
+    }
+}
+
 static void draw_network_applet(const struct mouse_state *mouse) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect button = ui_taskbar_network_applet_rect();
@@ -9522,6 +9838,10 @@ void desktop_main(void) {
                                          menu_sidebar_personalize_hover,
                                          menu_logout_hover,
                                          menu_scroll_thumb_hover);
+            }
+
+            if (g_wifi.open) {
+                draw_wifi_panel(&mouse);
             }
 
             if (context_open) {
