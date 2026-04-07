@@ -130,6 +130,54 @@ struct mk_network_wifi_scan_result {
 };
 
 struct mk_network_status {
+    uint32_t link_state;
+    uint32_t active_kind;
+    uint32_t wifi_signal;
+    uint32_t visible_network_count;
+    uint32_t open_socket_count;
+    uint32_t listening_socket_count;
+    uint32_t connected_socket_count;
+    uint32_t recv_ready_count;
+    uint32_t accept_ready_count;
+    uint32_t pending_rx_bytes;
+    uint32_t backend_rx_frames;
+    uint32_t backend_tx_frames;
+    char active_if[MK_NETWORK_IF_NAME_MAX];
+    char current_ssid[MK_NETWORK_SSID_MAX + 1];
+    char ip_address[MK_NETWORK_ADDR_MAX];
+    char gateway[MK_NETWORK_ADDR_MAX];
+    char dns_server[MK_NETWORK_ADDR_MAX];
+};
+
+struct mk_network_scan_request {
+    uint32_t index;
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+};
+
+struct mk_network_scan_info {
+    uint32_t index;
+    uint32_t signal_strength;
+    uint32_t security;
+    uint32_t connected;
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char ssid[MK_NETWORK_SSID_MAX + 1];
+};
+
+struct mk_network_connect_request {
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char ssid[MK_NETWORK_SSID_MAX + 1];
+    char psk[MK_NETWORK_PSK_MAX + 1];
+};
+
+struct mk_network_disconnect_request {
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+};
+
+struct mk_network_ethernet_config {
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char ip_address[MK_NETWORK_ADDR_MAX];
+    char gateway[MK_NETWORK_ADDR_MAX];
+    char dns_server[MK_NETWORK_ADDR_MAX];
 };
 
 void mk_network_service_init(void);

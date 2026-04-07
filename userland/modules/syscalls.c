@@ -512,14 +512,6 @@ int sys_transfer_write(uint32_t transfer_id, const void *src, uint32_t size) {
                     0);
 }
 
-int sys_net_get_info(struct mk_network_info *info) {
-    return syscall5(SYSCALL_NET_GETINFO, (int)(uintptr_t)info, 0, 0, 0, 0);
-}
-
-int sys_net_wifi_scan(struct mk_network_wifi_scan_result *result) {
-    return syscall5(SYSCALL_NET_WIFI_SCAN, (int)(uintptr_t)result, 0, 0, 0, 0);
-}
-
 void sys_shutdown(void) {
     (void)syscall5(SYSCALL_SHUTDOWN, 0, 0, 0, 0, 0);
 }
