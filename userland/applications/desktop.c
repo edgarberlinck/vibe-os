@@ -7514,22 +7514,28 @@ static void draw_network_applet(const struct mouse_state *mouse) {
         }
 
         desktop_draw_applet_card(&wifi_card, "Redes Wi-Fi");
-        for (int i = 0; i < g_network_applet_cache.scan_count && i < 3; ++i) {
-            struct rect row = network_row_rect(&popup, i);
-            char label[48] = "";
-            struct network_profile *profile = network_profile_find(g_network_applet_cache.scans[i].ssid);
+        if (g_network_applet_cache.scan_count == 0) {
+            sys_text(wifi_card.x + 8, wifi_card.y + 24, ui_color_muted(), "Nenhuma rede encontrada");
+            sys_text(wifi_card.x + 8, wifi_card.y + 38, ui_color_muted(), "Use os botoes abaixo");
+        } else {
+            for (int i = 0; i < g_network_applet_cache.scan_count && i < 3; ++i) {
+                struct rect row = network_row_rect(&popup, i);
+                char label[40] = "";
+                char signal_bars[8] = "";
+                int rssi_estimate = -70 + (g_network_applet_cache.scans[i].signal_strength * 10);
+                int level = wifi_signal_level(rssi_estimate);
+                const char *lock_icon = g_network_applet_cache.scans[i].security == MK_NETWORK_SECURITY_OPEN ? "[ ]" : "[*]";
 
-            str_copy_limited(label, g_network_applet_cache.scans[i].ssid, (int)sizeof(label));
-            str_append(label,
-                       g_network_applet_cache.scans[i].security == MK_NETWORK_SECURITY_OPEN ? " aberto" : " *",
-                       (int)sizeof(label));
-            if (profile != 0) {
-                str_append(label, " salva", (int)sizeof(label));
+                str_copy_limited(label, g_network_applet_cache.scans[i].ssid, (int)sizeof(label) - 8);
+                str_copy_limited(signal_bars, wifi_signal_text(level), (int)sizeof(signal_bars));
+                
+                ui_draw_button(&row,
+                               label,
+                               i == g_network_applet.selected_network ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                               point_in_rect(&row, mouse->x, mouse->y));
+                sys_text(row.x + row.w - 48, row.y + 5, theme->text, lock_icon);
+                sys_text(row.x + row.w - 26, row.y + 5, theme->text, signal_bars);
             }
-            ui_draw_button(&row,
-                           label,
-                           i == g_network_applet.selected_network ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
-                           point_in_rect(&row, mouse->x, mouse->y));
         }
 
         desktop_draw_applet_card(&saved_card, "Perfis");
@@ -7568,18 +7574,23 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                        selected_profile != 0 ? UI_BUTTON_DANGER : UI_BUTTON_NORMAL,
                        point_in_rect(&forget_button, mouse->x, mouse->y));
 
-        desktop_draw_applet_card(&security_card, "Senha Wi-Fi");
-        ui_draw_inset(&password, ui_color_window_bg());
-        for (int i = 0; i < g_network_applet.password_len && i < 30; ++i) {
-            password_text[i] = '*';
+        if (selected != 0 && selected->security != MK_NETWORK_SECURITY_OPEN) {
+            desktop_draw_applet_card(&security_card, "Senha Wi-Fi");
+            ui_draw_inset(&password, ui_color_window_bg());
+            for (int i = 0; i < g_network_applet.password_len && i < 30; ++i) {
+                password_text[i] = '*';
+            }
+            password_text[g_network_applet.password_len] = '\0';
+            sys_text(password.x + 4, password.y + 5, theme->text,
+                     g_network_applet.password_len > 0 ? password_text :
+                     (selected_profile != 0 ? "senha salva" : "digite a senha"));
+            if (g_network_applet.password_focus) {
+                sys_rect(password.x + password.w - 8, password.y + 4, 2, 10, theme->text);
+            }
+        } else if (selected != 0) {
+            desktop_draw_applet_card(&security_card, "Rede Aberta");
+            sys_text(security_card.x + 8, security_card.y + 18, ui_color_muted(), "Sem senha necessaria");
         }
-        password_text[g_network_applet.password_len] = '\0';
-        sys_text(password.x + 4, password.y + 5, theme->text,
-                 g_network_applet.password_len > 0 ? password_text :
-                 (selected != 0 && selected->security != MK_NETWORK_SECURITY_OPEN ?
-                  (selected_profile != 0 ? "senha salva" : "digite a senha") : "rede aberta"));
-        sys_text(security_card.x + 8, security_card.y + 20, ui_color_muted(),
-                 selected != 0 && selected->security == MK_NETWORK_SECURITY_OPEN ? "sem autenticacao" : "PSK / WPA");
 
         sys_text(popup.x + 16, popup.y + 258, theme->text, "Ethernet");
         ui_draw_button(&ethernet_connect_button,
@@ -7598,9 +7609,6 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                            ? UI_BUTTON_DANGER
                            : UI_BUTTON_NORMAL,
                        point_in_rect(&ethernet_disconnect_button, mouse->x, mouse->y));
-        if (g_network_applet.password_focus) {
-            sys_rect(password.x + password.w - 8, password.y + 4, 2, 10, theme->text);
-        }
         ui_draw_button(&connect_button,
                        "Conectar",
                        UI_BUTTON_PRIMARY,
